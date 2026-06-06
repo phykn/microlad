@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from microlad.data import PatchDataset
+from data import PatchDataset
 
 
 def save_grayscale(path: Path, pixels: np.ndarray) -> None:
