@@ -7,7 +7,7 @@ from torch.utils.data.distributed import DistributedSampler
 from data import SliceConditionDataset
 from models import CustomVAE, DDPM, SliceConditionedTimeUNet, TimeUNet
 from training import Trainer
-from training.loss import SliceConditionedDiffusionLoss
+from loss import SliceConditionedDiffusionLoss
 
 
 def build_dataset(args: argparse.Namespace) -> SliceConditionDataset:
@@ -16,6 +16,9 @@ def build_dataset(args: argparse.Namespace) -> SliceConditionDataset:
         patch_size=args.patch_size,
         axis=args.axis,
         slice_index=args.slice_index,
+        num_conditions=args.num_conditions,
+        condition_axes=args.condition_axes,
+        condition_slice_indices=args.condition_slice_indices,
     )
 
 

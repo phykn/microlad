@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 from data import PatchDataset
 from models import CustomVAE
 from training import Trainer
-from training.loss import VAELoss
+from loss import VAELoss
 
 
 def parse_args_from_list(argv: list[str] | None = None) -> argparse.Namespace:

@@ -36,6 +36,26 @@ def insert_condition_slice(
     return result
 
 
+def insert_condition_slices(
+    volume_z: torch.Tensor,
+    condition_slices: list[dict[str, torch.Tensor | int]],
+    downsample: int = 4,
+) -> torch.Tensor:
+    result = volume_z
+    for item in condition_slices:
+        condition_z = item.get("condition_z")
+        if not isinstance(condition_z, torch.Tensor):
+            raise ValueError("condition_slices item must include tensor condition_z.")
+        result = insert_condition_slice(
+            result,
+            condition_z=condition_z,
+            axis=int(item["axis"]),
+            slice_index=int(item["slice_index"]),
+            downsample=downsample,
+        )
+    return result
+
+
 def _axis_planes(volume_z: torch.Tensor, axis: int) -> torch.Tensor:
     if axis == 0:
         return volume_z.permute(1, 0, 2, 3).contiguous()
@@ -109,3 +129,49 @@ def sample_conditioned_latent_volume(
         )
 
     return insert_condition_slice(volume_z, condition_z, axis, slice_index, downsample=downsample)
+
+
+def sample_conditioned_latent_volume_multi(
+    unet: torch.nn.Module,
+    ddpm,
+    condition_slices: list[dict[str, torch.Tensor | int]],
+    volume_shape: tuple[int, int, int, int] = (4, 16, 16, 16),
+    downsample: int = 4,
+    device: str | torch.device = "cpu",
+) -> torch.Tensor:
+    if not condition_slices:
+        raise ValueError("condition_slices must not be empty.")
+
+    device = torch.device(device)
+    normalized = []
+    for item in condition_slices:
+        condition_z = item.get("condition_z")
+        if not isinstance(condition_z, torch.Tensor):
+            raise ValueError("condition_slices item must include tensor condition_z.")
+        normalized.append(
+            {
+                "condition_z": condition_z.to(device),
+                "axis": int(item["axis"]),
+                "slice_index": int(item["slice_index"]),
+            }
+        )
+
+    volume_z = torch.randn(volume_shape, device=device)
+    volume_z = insert_condition_slices(volume_z, normalized, downsample=downsample)
+
+    for step in reversed(range(ddpm.num_timesteps)):
+        t = torch.tensor([step], dtype=torch.long, device=device)
+        for item in normalized:
+            volume_z = p_sample_conditioned_slice(
+                unet,
+                ddpm,
+                volume_z,
+                t,
+                item["condition_z"],
+                item["axis"],
+                item["slice_index"],
+                downsample=downsample,
+            )
+            volume_z = insert_condition_slices(volume_z, normalized, downsample=downsample)
+
+    return insert_condition_slices(volume_z, normalized, downsample=downsample)

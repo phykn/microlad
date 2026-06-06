@@ -93,6 +93,28 @@ class SliceConditionDatasetTest(unittest.TestCase):
             self.assertEqual(sample["slice_index"], 12)
             self.assertTrue(torch.allclose(sample["condition"], sample["target"]))
 
+    def test_can_return_multiple_training_conditions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image_dir = Path(tmp) / "images"
+            image_dir.mkdir()
+            save_grayscale(image_dir / "sem.png", np.full((96, 96), 128, dtype=np.uint8))
+
+            dataset = SliceConditionDataset(
+                image_dir,
+                patch_size=64,
+                axis="z",
+                slice_index=12,
+                num_conditions=2,
+                condition_axes=["z", "y"],
+                condition_slice_indices=[12, 20],
+                seed=0,
+            )
+
+            sample = dataset[0]
+            self.assertEqual(sample["conditions"].shape, torch.Size([2, 1, 64, 64]))
+            self.assertTrue(torch.equal(sample["axes"], torch.tensor([0, 1])))
+            self.assertTrue(torch.equal(sample["slice_indices"], torch.tensor([12, 20])))
+
 
 if __name__ == "__main__":
     unittest.main()

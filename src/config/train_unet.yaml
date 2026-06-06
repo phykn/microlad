@@ -4,6 +4,9 @@ unet_ckpt: microlad-anode/unet_anode.pth
 output_dir: output/slice_conditioned
 axis: z
 slice_index: 12
+num_conditions: 1
+condition_axes:
+condition_slice_indices:
 patch_size: 64
 latent_ch: 4
 base_ch: 128
