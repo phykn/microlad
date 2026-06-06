@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
+import random
 from pathlib import Path
 
 import numpy as np
@@ -12,12 +10,6 @@ from torch.utils.data import Dataset
 IMAGE_EXTENSIONS = ("png", "jpg", "jpeg", "bmp", "tif", "tiff")
 
 
-@dataclass(frozen=True)
-class PatchSample:
-    source_path: Path
-    xy: tuple[int, int]
-
-
 class PatchDataset(Dataset):
     """Read SEM images and return 2D patches cropped in memory."""
 
@@ -25,65 +17,74 @@ class PatchDataset(Dataset):
         self,
         root_dir: str | Path,
         patch_size: int = 64,
-        stride: int = 64,
-        extensions: tuple[str, ...] = IMAGE_EXTENSIONS,
+        seed: int | None = None,
     ) -> None:
         if patch_size <= 0:
             raise ValueError("patch_size must be positive.")
-        if stride <= 0:
-            raise ValueError("stride must be positive.")
 
         self.root_dir = Path(root_dir)
         self.patch_size = patch_size
-        self.stride = stride
-        self.extensions = tuple(ext.lower().lstrip(".") for ext in extensions)
-        self.image_paths = self._find_images()
-        self.samples = self._index_patches()
+        self.rng = random.Random(seed)
+        self.paths = self._load_paths()
 
-        if not self.samples:
+        if not self.paths:
             raise ValueError(f"No {patch_size}x{patch_size} patches found under {self.root_dir}.")
 
     def __len__(self) -> int:
-        return len(self.samples)
+        return len(self.paths)
 
-    def __getitem__(self, index: int) -> dict[str, object]:
-        sample = self.samples[index]
-        x, y = sample.xy
-        with Image.open(sample.source_path) as image:
+    def __getitem__(self, index: int) -> torch.Tensor:
+        path = self.paths[index]
+        with Image.open(path) as image:
             image = image.convert("L")
+            x = self.rng.randint(0, image.width - self.patch_size)
+            y = self.rng.randint(0, image.height - self.patch_size)
             patch = image.crop((x, y, x + self.patch_size, y + self.patch_size))
 
         array = np.asarray(patch, dtype=np.float32) / 255.0
-        tensor = torch.from_numpy(array).unsqueeze(0)
-        return {
-            "image": tensor,
-            "source_path": str(sample.source_path),
-            "xy": sample.xy,
-        }
+        return torch.from_numpy(array).unsqueeze(0)
 
-    def _find_images(self) -> list[Path]:
+    def _load_paths(self) -> list[Path]:
         if not self.root_dir.exists():
             raise FileNotFoundError(self.root_dir)
 
         paths: list[Path] = []
-        for path in self.root_dir.rglob("*"):
-            if path.is_file() and path.suffix.lower().lstrip(".") in self.extensions:
-                paths.append(path)
-        return sorted(paths)
-
-    def _index_patches(self) -> list[PatchSample]:
-        samples: list[PatchSample] = []
-        for path in self.image_paths:
-            with Image.open(path) as image:
-                width, height = image.size
-
-            max_x = width - self.patch_size
-            max_y = height - self.patch_size
-            if max_x < 0 or max_y < 0:
+        for path in sorted(self.root_dir.rglob("*")):
+            if not path.is_file() or path.suffix.lower().lstrip(".") not in IMAGE_EXTENSIONS:
                 continue
+            with Image.open(path) as image:
+                if image.width >= self.patch_size and image.height >= self.patch_size:
+                    paths.append(path)
+        return paths
 
-            for y in range(0, max_y + 1, self.stride):
-                for x in range(0, max_x + 1, self.stride):
-                    samples.append(PatchSample(source_path=path, xy=(x, y)))
 
-        return samples
+AXIS_TO_INDEX = {"z": 0, "y": 1, "x": 2}
+
+
+class SliceConditionDataset(PatchDataset):
+    """Return a full 2D condition slice and its 3D slice position."""
+
+    def __init__(
+        self,
+        root_dir: str | Path,
+        patch_size: int = 64,
+        axis: str = "z",
+        slice_index: int = 0,
+        seed: int | None = None,
+    ) -> None:
+        if axis not in AXIS_TO_INDEX:
+            raise ValueError("axis must be one of: x, y, z.")
+        if slice_index < 0:
+            raise ValueError("slice_index must be non-negative.")
+        self.axis = AXIS_TO_INDEX[axis]
+        self.slice_index = slice_index
+        super().__init__(root_dir=root_dir, patch_size=patch_size, seed=seed)
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        target = super().__getitem__(index)
+        return {
+            "target": target,
+            "condition": target.clone(),
+            "axis": self.axis,
+            "slice_index": self.slice_index,
+        }

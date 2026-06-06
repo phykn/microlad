@@ -54,3 +54,12 @@ The project goal lives in `docs/project/goal.md`.
 Keep this separate from the paper graph. The paper graph explains MicroLad as written. The project goal describes the extension this repository is trying to build on top of MicroLad.
 
 The project aims to implement MicroLad and add conditioning on actual observations. This includes one or more observed 2D slices at specified internal positions, scale-up from a provided 3D structure or external slice set, and large 2D crop conditioning such as using a 512x512 crop to generate a matching 512x512x512 candidate. The generated 3D candidate should satisfy those observation conditions while remaining realistic.
+
+## Notebooks
+
+Do not use markdown cells in notebooks.
+
+Put every import in the first code cell.
+
+Keep notebooks focused on the minimum check needed for the current feature.
+Avoid broad or repetitive tests in notebooks; put durable checks in tests instead.

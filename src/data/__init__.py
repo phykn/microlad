@@ -1,3 +1,3 @@
-from data.patches import PatchDataset
+from data.patches import PatchDataset, SliceConditionDataset
 
-__all__ = ["PatchDataset"]
+__all__ = ["PatchDataset", "SliceConditionDataset"]

@@ -1,0 +1,14 @@
+data_dir: data/images
+output_dir: output/vae
+patch_size: 64
+latent_ch: 4
+steps: 1000
+val_freq: 500
+save_freq: 1000
+batch_size: 8
+lr: 1.0e-4
+min_lr: 1.0e-6
+kl_weight: 1.0e-6
+max_grad_norm: 1.0
+accum_steps: 1
+num_workers: 4
