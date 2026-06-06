@@ -1,0 +1,8 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+docs/
+microlad-anode/
+output/
+reference/
