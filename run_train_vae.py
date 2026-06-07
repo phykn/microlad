@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 
 from data import PatchDataset
 from models import CustomVAE
-from training import Trainer
+from trainer import Trainer
 from loss import VAELoss
 
 

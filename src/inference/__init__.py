@@ -1,5 +1,5 @@
+from .conditions import ConditionSpec
 from .predict import (
-    ConditionSpec,
     PredictConfig,
     ScaleUpConfig,
     predict,
@@ -9,7 +9,7 @@ from .predict import (
     predict_scale_up_with_config,
     predict_with_config,
 )
-from .slice_conditioned import (
+from .conditioned_sampling import (
     insert_condition_slice,
     insert_condition_slices,
     p_sample_conditioned_slice,
@@ -17,7 +17,8 @@ from .slice_conditioned import (
     sample_conditioned_latent_volume_multi,
     voxel_to_latent_index,
 )
-from .volume import multi_axis_decode, sds_refine_slice, sds_refine_volume, three_axis_refinement
+from .decoding import multi_axis_decode, three_axis_refinement
+from .sds import sds_refine_slice, sds_refine_volume
 
 __all__ = [
     "insert_condition_slice",

@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset, Sampler
 
-from training.trainer import Trainer
+from trainer import Trainer
 
 
 class DummyDataset(Dataset):

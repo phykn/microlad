@@ -6,7 +6,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from data import SliceConditionDataset
 from models import CustomVAE, DDPM, SliceConditionedTimeUNet, TimeUNet
-from training import Trainer
+from trainer import Trainer
 from loss import SliceConditionedDiffusionLoss
 
 
