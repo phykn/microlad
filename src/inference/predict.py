@@ -1,29 +1,24 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import torch
 
-from loss import build_grayscale_tpc_target
 from .conditions import (
-    ConditionSpec,
-    condition_error_from_volume,
-    condition_specs_to_dicts,
-    encode_condition,
+    ConditionLock,
+    EncodedConditions,
+    FixedSlice,
+    ParsedConditionImage,
     encode_condition_items,
-    scale_up_volume_shape,
+    encode_tiled_condition_items,
+    parse_condition_options,
 )
-from .conditioned_sampling import (
-    sample_conditioned_latent_volume,
-    sample_conditioned_latent_volume_multi,
-    voxel_to_latent_index,
-)
+from .condition_stats import build_condition_stats
+from .locked_sampling import sample_locked_latent_volume
 from .decoding import multi_axis_decode, three_axis_refinement
 from .sds import sds_refine_volume
 
 
 @dataclass
-class PredictConfig:
-    conditions: list[ConditionSpec]
-    condition_is_latent: bool = False
+class GenerationOptions:
     volume_shape: tuple[int, int, int, int] = (4, 16, 16, 16)
     refinement_steps: int = 0
     sds_steps: int = 0
@@ -31,335 +26,212 @@ class PredictConfig:
     sds_lr: float = 1e-2
     t_min: int = 50
     t_max: int = 950
-    use_condition_tpc: bool = False
-    condition_tpc_weight: float = 0.0
     lock_condition_slice: bool = True
-    device: str | torch.device = "cpu"
-    metadata: dict[str, object] = field(default_factory=dict)
+    lock_strength: float = 1.0
 
 
-@dataclass
-class ScaleUpConfig:
-    conditions: list[ConditionSpec]
-    output_size: int | None = None
-    latent_ch: int = 4
-    downsample: int = 4
-    refinement_steps: int = 0
-    sds_steps: int = 0
-    sds_unet: torch.nn.Module | None = None
-    sds_lr: float = 1e-2
-    t_min: int = 50
-    t_max: int = 950
-    use_condition_tpc: bool = False
-    condition_tpc_weight: float = 0.0
-    lock_condition_slice: bool = True
-    device: str | torch.device = "cpu"
+class MicroLadPredictor:
+    def __init__(
+        self,
+        vae: torch.nn.Module,
+        unet: torch.nn.Module,
+        ddpm,
+        options: GenerationOptions | None = None,
+        device: str | torch.device = "cpu",
+    ) -> None:
+        self.vae = vae
+        self.unet = unet
+        self.ddpm = ddpm
+        self.options = options or GenerationOptions()
+        self.device = torch.device(device)
 
+    def _default_size(self, downsample: int = 4) -> int:
+        return int(self.options.volume_shape[1]) * downsample
 
-def _refine_decoded_volume(
-    volume: torch.Tensor,
-    vae: torch.nn.Module,
-    unet: torch.nn.Module,
-    ddpm,
-    refinement_steps: int,
-    sds_steps: int,
-    sds_unet: torch.nn.Module | None,
-    sds_lr: float,
-    t_min: int,
-    t_max: int,
-    use_condition_tpc: bool,
-    condition_tpc_weight: float,
-    condition_image: torch.Tensor | None,
-    fixed_slices: list[dict[str, torch.Tensor | int]] | None,
-) -> tuple[torch.Tensor, list[dict[str, float]]]:
-    if refinement_steps > 0:
-        volume = three_axis_refinement(volume, vae, refinement_steps=refinement_steps)
-
-    if not fixed_slices:
-        fixed_slices = None
-
-    if sds_steps <= 0:
-        if fixed_slices:
-            volume, _ = sds_refine_volume(
-                volume=volume,
-                vae=vae,
-                unet=unet,
-                ddpm=ddpm,
-                steps=0,
-                lr=sds_lr,
-                t_min=t_min,
-                t_max=t_max,
-                fixed_slices=fixed_slices,
+    def _encode_conditions(
+        self,
+        conditions: list[ParsedConditionImage],
+        size: int,
+        downsample: int,
+    ) -> tuple[EncodedConditions, int | None, int]:
+        options = self.options
+        if size <= 64:
+            return (
+                encode_condition_items(
+                    vae=self.vae,
+                    conditions=conditions,
+                    lock_condition_slice=options.lock_condition_slice,
+                    device=self.device,
+                    image_size=size,
+                ),
+                None,
+                0,
             )
-        return volume, []
 
-    grayscale_tpc_target = None
-    grayscale_tpc_bin_mat = None
-    grayscale_tpc_bin_counts = None
-    if use_condition_tpc:
-        if condition_image is None:
-            raise ValueError("use_condition_tpc requires image-space condition input.")
-        grayscale_tpc_target, grayscale_tpc_bin_mat, grayscale_tpc_bin_counts = build_grayscale_tpc_target(
-            condition_image
+        if not conditions:
+            return (
+                EncodedConditions(locks=[], fixed_slices=[], condition_slices=[], condition_images=[]),
+                64 // downsample,
+                16 // downsample,
+            )
+
+        return (
+            encode_tiled_condition_items(
+                vae=self.vae,
+                conditions=conditions,
+                tile_size=64,
+                tile_overlap=16,
+                downsample=downsample,
+                lock_condition_slice=options.lock_condition_slice,
+                device=self.device,
+                image_size=size,
+            ),
+            64 // downsample,
+            16 // downsample,
         )
 
-    denoise_unet = sds_unet if sds_unet is not None else unet
-    return sds_refine_volume(
-        volume=volume,
-        vae=vae,
-        unet=denoise_unet,
-        ddpm=ddpm,
-        steps=sds_steps,
-        lr=sds_lr,
-        t_min=t_min,
-        t_max=t_max,
-        refinement_steps=refinement_steps,
-        grayscale_tpc_target=grayscale_tpc_target,
-        grayscale_tpc_bin_mat=grayscale_tpc_bin_mat,
-        grayscale_tpc_bin_counts=grayscale_tpc_bin_counts,
-        grayscale_tpc_weight=condition_tpc_weight,
-        fixed_slices=fixed_slices,
-    )
+    def _refine_decoded_volume(
+        self,
+        volume: torch.Tensor,
+        condition_images: list[torch.Tensor] | None,
+        condition_slices: list[FixedSlice] | None,
+        condition_weight: float,
+        stats_weight: float,
+        fixed_slices: list[FixedSlice] | None,
+    ) -> tuple[torch.Tensor, list[dict[str, float]]]:
+        options = self.options
+        if options.refinement_steps > 0:
+            volume = three_axis_refinement(volume, self.vae, refinement_steps=options.refinement_steps)
 
+        if not fixed_slices:
+            fixed_slices = None
 
-@torch.no_grad()
-def predict(
-    vae: torch.nn.Module,
-    unet: torch.nn.Module,
-    ddpm,
-    condition: torch.Tensor,
-    axis: int,
-    slice_index: int,
-    condition_is_latent: bool = False,
-    volume_shape: tuple[int, int, int, int] = (4, 16, 16, 16),
-    refinement_steps: int = 0,
-    sds_steps: int = 0,
-    sds_unet: torch.nn.Module | None = None,
-    sds_lr: float = 1e-2,
-    t_min: int = 50,
-    t_max: int = 950,
-    use_condition_tpc: bool = False,
-    condition_tpc_weight: float = 0.0,
-    lock_condition_slice: bool = True,
-    device: str | torch.device = "cpu",
-) -> dict[str, object]:
-    device = torch.device(device)
-    unet.eval()
+        if options.sds_steps <= 0:
+            if condition_weight > 0 or stats_weight > 0:
+                raise ValueError("condition_weight and stats_weight require sds_steps > 0.")
+            if fixed_slices:
+                volume, _ = sds_refine_volume(
+                    volume=volume,
+                    vae=self.vae,
+                    unet=self.unet,
+                    ddpm=self.ddpm,
+                    steps=0,
+                    lr=options.sds_lr,
+                    t_min=options.t_min,
+                    t_max=options.t_max,
+                    fixed_slices=fixed_slices,
+                )
+            return volume, []
 
-    if condition_is_latent:
-        condition_z, condition_image = encode_condition(vae, condition, condition_is_latent=True, device=device)
-    else:
-        vae.eval()
-        condition_z, condition_image = encode_condition(vae, condition, condition_is_latent=False, device=device)
+        phases = [0, 1]
+        stats = build_condition_stats(
+            condition_images=condition_images,
+            stats_weight=stats_weight,
+            phases=phases,
+            device=self.device,
+        )
 
-    volume_z = sample_conditioned_latent_volume(
-        unet=unet,
-        ddpm=ddpm,
-        condition_z=condition_z,
-        axis=axis,
-        slice_index=slice_index,
-        volume_shape=volume_shape,
-        device=device,
-    )
-    vae.eval()
-    volume = multi_axis_decode(vae, volume_z)
-    fixed_slices = None
-    if lock_condition_slice and condition_image is not None:
-        fixed_slices = [{"axis": axis, "index": slice_index, "image": condition_image.squeeze(0)}]
-    volume, sds_history = _refine_decoded_volume(
-        volume=volume,
-        vae=vae,
-        unet=unet,
-        ddpm=ddpm,
-        refinement_steps=refinement_steps,
-        sds_steps=sds_steps,
-        sds_unet=sds_unet,
-        sds_lr=sds_lr,
-        t_min=t_min,
-        t_max=t_max,
-        use_condition_tpc=use_condition_tpc,
-        condition_tpc_weight=condition_tpc_weight,
-        condition_image=condition_image,
-        fixed_slices=fixed_slices,
-    )
+        denoise_unet = options.sds_unet if options.sds_unet is not None else self.unet
+        return sds_refine_volume(
+            volume=volume,
+            vae=self.vae,
+            unet=denoise_unet,
+            ddpm=self.ddpm,
+            steps=options.sds_steps,
+            lr=options.sds_lr,
+            t_min=options.t_min,
+            t_max=options.t_max,
+            refinement_steps=options.refinement_steps,
+            phases=phases,
+            vf_moments=stats.vf_moments,
+            vf_weight=stats_weight,
+            grayscale_tpc_target=stats.grayscale_tpc_target,
+            grayscale_tpc_bin_mat=stats.grayscale_tpc_bin_mat,
+            grayscale_tpc_bin_counts=stats.grayscale_tpc_bin_counts,
+            grayscale_tpc_weight=stats_weight,
+            sa_targets=stats.sa_targets,
+            sa_weight=stats_weight,
+            condition_slices=condition_slices,
+            condition_weight=condition_weight,
+            fixed_slices=fixed_slices,
+        )
 
-    latent_index = voxel_to_latent_index(slice_index)
-    condition_error = condition_error_from_volume(volume_z, condition_z, axis, slice_index)
-    return {
-        "volume_z": volume_z,
-        "volume": volume,
-        "condition_z": condition_z,
-        "latent_index": latent_index,
-        "condition_error": condition_error,
-        "sds_history": sds_history,
-    }
+    def _sample_and_refine(
+        self,
+        locks: list[ConditionLock],
+        volume_shape: tuple[int, int, int, int],
+        condition_images: list[torch.Tensor] | None,
+        condition_slices: list[FixedSlice] | None,
+        condition_weight: float,
+        stats_weight: float,
+        fixed_slices: list[FixedSlice] | None,
+        tile_size: int | None = None,
+        tile_overlap: int = 0,
+        downsample: int = 4,
+    ) -> tuple[torch.Tensor, list[dict[str, float]]]:
+        options = self.options
+        self.vae.eval()
+        self.unet.eval()
+        volume_z = sample_locked_latent_volume(
+            unet=self.unet,
+            ddpm=self.ddpm,
+            locks=locks,
+            volume_shape=volume_shape,
+            tile_size=tile_size,
+            tile_overlap=tile_overlap,
+            lock_strength=options.lock_strength,
+            downsample=downsample,
+            device=self.device,
+        )
+        volume = multi_axis_decode(self.vae, volume_z, downsample=downsample)
+        volume, sds_history = self._refine_decoded_volume(
+            volume=volume,
+            condition_images=condition_images,
+            condition_slices=condition_slices,
+            condition_weight=condition_weight,
+            stats_weight=stats_weight,
+            fixed_slices=fixed_slices,
+        )
+        return volume, sds_history
 
+    @torch.no_grad()
+    def predict(
+        self,
+        condition: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        options = self.options
+        downsample = 4
+        parsed = parse_condition_options(
+            condition=condition,
+            default_size=self._default_size(downsample=downsample),
+            downsample=downsample,
+        )
+        volume_shape = (
+            options.volume_shape[0],
+            parsed.size // downsample,
+            parsed.size // downsample,
+            parsed.size // downsample,
+        )
+        encoded, tile_size, tile_overlap = self._encode_conditions(
+            conditions=parsed.images,
+            size=parsed.size,
+            downsample=downsample,
+        )
 
-predict_conditioned_volume = predict
+        volume, sds_history = self._sample_and_refine(
+            locks=encoded.locks,
+            volume_shape=volume_shape,
+            condition_images=encoded.condition_images,
+            condition_slices=encoded.condition_slices,
+            condition_weight=parsed.condition_weight,
+            stats_weight=parsed.stats_weight,
+            fixed_slices=encoded.fixed_slices,
+            tile_size=tile_size,
+            tile_overlap=tile_overlap,
+            downsample=downsample,
+        )
 
-
-@torch.no_grad()
-def predict_many(
-    vae: torch.nn.Module,
-    unet: torch.nn.Module,
-    ddpm,
-    conditions: list[dict[str, torch.Tensor | int]],
-    condition_is_latent: bool = False,
-    volume_shape: tuple[int, int, int, int] = (4, 16, 16, 16),
-    refinement_steps: int = 0,
-    sds_steps: int = 0,
-    sds_unet: torch.nn.Module | None = None,
-    sds_lr: float = 1e-2,
-    t_min: int = 50,
-    t_max: int = 950,
-    use_condition_tpc: bool = False,
-    condition_tpc_weight: float = 0.0,
-    lock_condition_slice: bool = True,
-    device: str | torch.device = "cpu",
-) -> dict[str, object]:
-    device = torch.device(device)
-    vae.eval()
-    unet.eval()
-    encoded = encode_condition_items(
-        vae=vae,
-        conditions=conditions,
-        condition_is_latent=condition_is_latent,
-        lock_condition_slice=lock_condition_slice,
-        device=device,
-    )
-
-    volume_z = sample_conditioned_latent_volume_multi(
-        unet=unet,
-        ddpm=ddpm,
-        condition_slices=encoded.condition_slices,
-        volume_shape=volume_shape,
-        device=device,
-    )
-    volume = multi_axis_decode(vae, volume_z)
-    volume, sds_history = _refine_decoded_volume(
-        volume=volume,
-        vae=vae,
-        unet=unet,
-        ddpm=ddpm,
-        refinement_steps=refinement_steps,
-        sds_steps=sds_steps,
-        sds_unet=sds_unet,
-        sds_lr=sds_lr,
-        t_min=t_min,
-        t_max=t_max,
-        use_condition_tpc=use_condition_tpc,
-        condition_tpc_weight=condition_tpc_weight,
-        condition_image=encoded.first_condition_image,
-        fixed_slices=encoded.fixed_slices,
-    )
-
-    condition_errors = []
-    for item in encoded.condition_slices:
-        axis = int(item["axis"])
-        slice_index = int(item["slice_index"])
-        condition_errors.append(condition_error_from_volume(volume_z, item["condition_z"], axis, slice_index))
-
-    return {
-        "volume_z": volume_z,
-        "volume": volume,
-        "condition_slices": encoded.condition_slices,
-        "condition_errors": condition_errors,
-        "sds_history": sds_history,
-    }
-
-
-def predict_with_config(
-    vae: torch.nn.Module,
-    unet: torch.nn.Module,
-    ddpm,
-    config: PredictConfig,
-) -> dict[str, object]:
-    return predict_many(
-        vae=vae,
-        unet=unet,
-        ddpm=ddpm,
-        conditions=condition_specs_to_dicts(config.conditions),
-        condition_is_latent=config.condition_is_latent,
-        volume_shape=config.volume_shape,
-        refinement_steps=config.refinement_steps,
-        sds_steps=config.sds_steps,
-        sds_unet=config.sds_unet,
-        sds_lr=config.sds_lr,
-        t_min=config.t_min,
-        t_max=config.t_max,
-        use_condition_tpc=config.use_condition_tpc,
-        condition_tpc_weight=config.condition_tpc_weight,
-        lock_condition_slice=config.lock_condition_slice,
-        device=config.device,
-    )
-
-def predict_scale_up(
-    vae: torch.nn.Module,
-    unet: torch.nn.Module,
-    ddpm,
-    conditions: list[ConditionSpec],
-    output_size: int | None = None,
-    latent_ch: int = 4,
-    downsample: int = 4,
-    refinement_steps: int = 0,
-    sds_steps: int = 0,
-    sds_unet: torch.nn.Module | None = None,
-    sds_lr: float = 1e-2,
-    t_min: int = 50,
-    t_max: int = 950,
-    use_condition_tpc: bool = False,
-    condition_tpc_weight: float = 0.0,
-    lock_condition_slice: bool = True,
-    device: str | torch.device = "cpu",
-) -> dict[str, object]:
-    volume_shape = scale_up_volume_shape(
-        conditions=conditions,
-        output_size=output_size,
-        latent_ch=latent_ch,
-        downsample=downsample,
-    )
-    return predict_many(
-        vae=vae,
-        unet=unet,
-        ddpm=ddpm,
-        conditions=condition_specs_to_dicts(conditions),
-        condition_is_latent=False,
-        volume_shape=volume_shape,
-        refinement_steps=refinement_steps,
-        sds_steps=sds_steps,
-        sds_unet=sds_unet,
-        sds_lr=sds_lr,
-        t_min=t_min,
-        t_max=t_max,
-        use_condition_tpc=use_condition_tpc,
-        condition_tpc_weight=condition_tpc_weight,
-        lock_condition_slice=lock_condition_slice,
-        device=device,
-    )
-
-
-def predict_scale_up_with_config(
-    vae: torch.nn.Module,
-    unet: torch.nn.Module,
-    ddpm,
-    config: ScaleUpConfig,
-) -> dict[str, object]:
-    return predict_scale_up(
-        vae=vae,
-        unet=unet,
-        ddpm=ddpm,
-        conditions=config.conditions,
-        output_size=config.output_size,
-        latent_ch=config.latent_ch,
-        downsample=config.downsample,
-        refinement_steps=config.refinement_steps,
-        sds_steps=config.sds_steps,
-        sds_unet=config.sds_unet,
-        sds_lr=config.sds_lr,
-        t_min=config.t_min,
-        t_max=config.t_max,
-        use_condition_tpc=config.use_condition_tpc,
-        condition_tpc_weight=config.condition_tpc_weight,
-        lock_condition_slice=config.lock_condition_slice,
-        device=config.device,
-    )
+        return {
+            "volume": volume,
+            "sds_history": sds_history,
+        }

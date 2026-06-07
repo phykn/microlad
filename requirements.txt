@@ -1,0 +1,13 @@
+torch
+numpy
+pillow
+pyyaml
+tensorboard
+matplotlib
+tifffile
+tqdm
+ipywidgets
+nbconvert
+nbclient
+jupyter
+pytorch-msssim

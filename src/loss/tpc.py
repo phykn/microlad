@@ -83,6 +83,27 @@ def build_grayscale_tpc_target(
     return target, bin_mat, bin_counts
 
 
+def build_grayscale_tpc_targets(
+    conditions: list[torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    if not conditions:
+        raise ValueError("conditions must not be empty.")
+
+    first_image = _as_grayscale_image(conditions[0]).float()
+    bin_mat, bin_counts = setup_tpc_bins(
+        first_image.shape[-2],
+        first_image.shape[-1],
+        device=first_image.device,
+    )
+    targets = [compute_tpc_torch(first_image, bin_mat, bin_counts).detach()]
+    for condition in conditions[1:]:
+        image = _as_grayscale_image(condition).float().to(first_image.device)
+        if image.shape != first_image.shape:
+            raise ValueError("all grayscale TPC conditions must have the same image shape.")
+        targets.append(compute_tpc_torch(image, bin_mat, bin_counts).detach())
+    return torch.stack(targets).mean(dim=0), bin_mat, bin_counts
+
+
 def compute_grayscale_tpc_loss(
     image: torch.Tensor,
     target: torch.Tensor,

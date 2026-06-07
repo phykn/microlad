@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 
 
-def make_gaussian_kernel(
+def _make_gaussian_kernel(
     kernel_size: int,
     sigma: float,
     device: torch.device,
@@ -30,7 +30,7 @@ def compute_relative_surface_area(
     dist = torch.abs(x - levels.view(1, phase_count, 1, 1))
     masks = F.softmax(-beta * dist.view(batch, phase_count, -1), dim=1).view(batch, phase_count, height, width)
 
-    kernel = make_gaussian_kernel(kernel_size, sigma, device).repeat(phase_count, 1, 1, 1)
+    kernel = _make_gaussian_kernel(kernel_size, sigma, device).repeat(phase_count, 1, 1, 1)
     smooth = F.conv2d(masks, weight=kernel, padding=kernel_size // 2, groups=phase_count)
 
     tv_h = torch.abs(smooth[:, :, 1:, :] - smooth[:, :, :-1, :]).sum(dim=(2, 3))

@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from data import PatchDataset, SliceConditionDataset
+from src.dataset import PatchDataset
 
 
 def save_grayscale(path: Path, pixels: np.ndarray) -> None:
@@ -70,50 +70,6 @@ class PatchDatasetTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "No 64x64 patches"):
                 PatchDataset(image_dir, patch_size=64)
-
-
-class SliceConditionDatasetTest(unittest.TestCase):
-    def test_returns_full_condition_slice_and_3d_position(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            image_dir = Path(tmp) / "images"
-            image_dir.mkdir()
-            pixels = np.arange(96 * 96, dtype=np.uint16).reshape(96, 96) % 256
-            save_grayscale(image_dir / "sem.png", pixels.astype(np.uint8))
-
-            dataset = SliceConditionDataset(image_dir, patch_size=64, axis="z", slice_index=12, seed=0)
-
-            self.assertEqual(len(dataset), 1)
-            sample = dataset[0]
-            self.assertEqual(set(sample), {"target", "condition", "axis", "slice_index"})
-            self.assertEqual(sample["target"].shape, torch.Size([1, 64, 64]))
-            self.assertEqual(sample["condition"].shape, torch.Size([1, 64, 64]))
-            self.assertEqual(sample["target"].dtype, torch.float32)
-            self.assertEqual(sample["condition"].dtype, torch.float32)
-            self.assertEqual(sample["axis"], 0)
-            self.assertEqual(sample["slice_index"], 12)
-            self.assertTrue(torch.allclose(sample["condition"], sample["target"]))
-
-    def test_can_return_multiple_training_conditions(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            image_dir = Path(tmp) / "images"
-            image_dir.mkdir()
-            save_grayscale(image_dir / "sem.png", np.full((96, 96), 128, dtype=np.uint8))
-
-            dataset = SliceConditionDataset(
-                image_dir,
-                patch_size=64,
-                axis="z",
-                slice_index=12,
-                num_conditions=2,
-                condition_axes=["z", "y"],
-                condition_slice_indices=[12, 20],
-                seed=0,
-            )
-
-            sample = dataset[0]
-            self.assertEqual(sample["conditions"].shape, torch.Size([2, 1, 64, 64]))
-            self.assertTrue(torch.equal(sample["axes"], torch.tensor([0, 1])))
-            self.assertTrue(torch.equal(sample["slice_indices"], torch.tensor([12, 20])))
 
 
 if __name__ == "__main__":

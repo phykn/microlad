@@ -1,24 +1,26 @@
 import argparse
-from pathlib import Path
+import os
 
-import torch
-import yaml
-from torch.utils.data import DataLoader
-
-from data import PatchDataset
-from models import CustomVAE
-from trainer import Trainer
-from loss import VAELoss
+from src.build import (
+    build_dataset,
+    build_loader,
+    build_optimizer,
+    build_scheduler,
+    build_train_vae,
+    build_vae_trainer,
+    cleanup_distributed,
+    ensure_output_dir,
+    load_config_defaults,
+    setup_device,
+    wrap_distributed,
+)
 
 
 def parse_args_from_list(argv: list[str] | None = None) -> argparse.Namespace:
     config_parser = argparse.ArgumentParser(add_help=False)
     config_parser.add_argument("--config", default=None)
     config_args, _ = config_parser.parse_known_args(argv)
-    defaults = {}
-    if config_args.config:
-        with open(config_args.config, "r", encoding="utf-8") as f:
-            defaults = yaml.safe_load(f) or {}
+    defaults = load_config_defaults(config_args.config)
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=config_args.config)
@@ -33,6 +35,7 @@ def parse_args_from_list(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--min-lr", type=float, default=1e-6)
     parser.add_argument("--kl-weight", type=float, default=1e-6)
+    parser.add_argument("--ssim-weight", type=float, default=0.1)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--accum-steps", type=int, default=1)
     parser.add_argument("--num-workers", type=int, default=4)
@@ -49,39 +52,31 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dataset = PatchDataset(args.data_dir, patch_size=args.patch_size)
-    loader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=device.type == "cuda",
-    )
+    device, local_rank, distributed = setup_device()
+    rank = int(os.environ.get("RANK", "0"))
+    dataset = build_dataset(args)
+    loader = build_loader(dataset, args, device=device, distributed=distributed)
+    vae = wrap_distributed(build_train_vae(args, device), local_rank=local_rank, distributed=distributed)
+    optimizer = build_optimizer(vae, args)
+    scheduler = build_scheduler(optimizer, args)
+    output_dir = ensure_output_dir(args.output_dir)
 
-    vae = CustomVAE(latent_ch=args.latent_ch).to(device)
-    optimizer = torch.optim.AdamW(vae.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=args.steps,
-        eta_min=args.min_lr,
-    )
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    trainer = Trainer(
-        model=vae,
-        train_loader=loader,
-        valid_loader=None,
-        criterion=VAELoss(kl_weight=args.kl_weight),
+    trainer = build_vae_trainer(
+        vae=vae,
+        loader=loader,
         optimizer=optimizer,
         scheduler=scheduler,
         save_dir=output_dir,
+        kl_weight=args.kl_weight,
+        ssim_weight=args.ssim_weight,
         max_grad_norm=args.max_grad_norm,
         accum_steps=args.accum_steps,
+        rank=rank,
     )
-    print(f"Training VAE steps={args.steps} save_dir={output_dir}")
+    if rank == 0:
+        print(f"Training VAE steps={args.steps} save_dir={output_dir}")
     trainer.train(steps=args.steps, val_freq=args.val_freq, save_freq=args.save_freq)
+    cleanup_distributed(distributed)
 
 
 if __name__ == "__main__":

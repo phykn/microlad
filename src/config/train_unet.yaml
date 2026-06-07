@@ -1,17 +1,11 @@
-data_dir: data/images
+data_dir: data
 vae_ckpt: microlad-anode/vae_anode.pth
 unet_ckpt: microlad-anode/unet_anode.pth
-output_dir: output/slice_conditioned
-axis: z
-slice_index: 12
-num_conditions: 1
-condition_axes:
-condition_slice_indices:
+output_dir: output/unet
 patch_size: 64
 latent_ch: 4
 base_ch: 128
 time_dim: 64
-max_slices: 64
 timesteps: 1000
 steps: 1000
 val_freq: 500
@@ -21,5 +15,4 @@ lr: 1.0e-4
 min_lr: 1.0e-6
 max_grad_norm: 1.0
 accum_steps: 1
-condition_dropout: 0.1
 num_workers: 4

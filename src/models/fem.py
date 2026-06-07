@@ -32,7 +32,7 @@ class TorchFEMMesh(nn.Module):
                 elems.append((n1, n3, n2))
 
         elems = np.array(elems, dtype=np.int64)
-        self.register_buffer("elems", torch.from_numpy(elems))
+        self.register_buffer("elems", torch.from_numpy(elems).to(self.device))
 
         rows, cols, base_data = [], [], []
         elem_idx = []
@@ -58,12 +58,12 @@ class TorchFEMMesh(nn.Module):
             grad_t_list.append(grad_t)
             area_list.append(area)
 
-        self.register_buffer("rows", torch.LongTensor(rows))
-        self.register_buffer("cols", torch.LongTensor(cols))
-        self.register_buffer("base_data", torch.tensor(base_data, dtype=torch.float32))
-        self.register_buffer("elem_idx", torch.LongTensor(elem_idx))
-        self.register_buffer("elem_grad_t", torch.tensor(np.stack(grad_t_list), dtype=torch.float32))
-        self.register_buffer("elem_area", torch.tensor(area_list, dtype=torch.float32))
+        self.register_buffer("rows", torch.tensor(rows, dtype=torch.long, device=self.device))
+        self.register_buffer("cols", torch.tensor(cols, dtype=torch.long, device=self.device))
+        self.register_buffer("base_data", torch.tensor(base_data, dtype=torch.float32, device=self.device))
+        self.register_buffer("elem_idx", torch.tensor(elem_idx, dtype=torch.long, device=self.device))
+        self.register_buffer("elem_grad_t", torch.tensor(np.stack(grad_t_list), dtype=torch.float32, device=self.device))
+        self.register_buffer("elem_area", torch.tensor(area_list, dtype=torch.float32, device=self.device))
 
         bc = []
         for j in range(self.ny):
@@ -72,14 +72,14 @@ class TorchFEMMesh(nn.Module):
 
         bc_idx = np.unique(bc)
         fc_idx = np.setdiff1d(np.arange(self.nn), bc_idx)
-        self.register_buffer("bc_idx", torch.LongTensor(bc_idx))
-        self.register_buffer("fc_idx", torch.LongTensor(fc_idx))
+        self.register_buffer("bc_idx", torch.tensor(bc_idx, dtype=torch.long, device=self.device))
+        self.register_buffer("fc_idx", torch.tensor(fc_idx, dtype=torch.long, device=self.device))
 
         u_c = np.zeros(len(bc_idx), dtype=np.float32)
         coords = np.stack([bc_idx % self.nx, bc_idx // self.nx], -1)
         u_c[coords[:, 0] == 0] = 1.0
         u_c[coords[:, 0] == self.nx - 1] = 0.0
-        self.register_buffer("u_c", torch.tensor(u_c))
+        self.register_buffer("u_c", torch.tensor(u_c, device=self.device))
 
     def forward(self, mask: torch.Tensor) -> torch.Tensor:
         if mask.shape != torch.Size([self.height, self.width]):

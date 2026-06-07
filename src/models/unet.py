@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class TimeEmbedding(nn.Module):
+class _TimeEmbedding(nn.Module):
     def __init__(self, dim: int) -> None:
         super().__init__()
         self.dim = dim
@@ -56,12 +56,10 @@ class SelfAttention(nn.Module):
         return x + self.proj(out).view(b, c, h, w)
 
 
-class ConditionalTimeUNet(nn.Module):
-    """Time-conditioned UNet with separate input and output channels."""
-
+class _TimeUNetBackbone(nn.Module):
     def __init__(self, in_ch: int, out_ch: int, base_ch: int = 128, time_dim: int = 64) -> None:
         super().__init__()
-        self.time_emb = TimeEmbedding(time_dim)
+        self.time_emb = _TimeEmbedding(time_dim)
         self.enc1 = ResidualBlockUNet(in_ch, base_ch, time_dim)
         self.attn16 = SelfAttention(base_ch)
         self.pool1 = nn.MaxPool2d(2)
@@ -76,10 +74,8 @@ class ConditionalTimeUNet(nn.Module):
         self.dec1 = ResidualBlockUNet(base_ch * 2, base_ch, time_dim)
         self.out = nn.Conv2d(base_ch, out_ch, 1)
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor, extra_emb: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         te = self.time_emb(t)
-        if extra_emb is not None:
-            te = te + extra_emb
         e1 = self.attn16(self.enc1(x, te))
         e2 = self.attn8(self.enc2(self.pool1(e1), te))
         b = self.attn4(self.bottleneck(self.pool2(e2), te))
@@ -88,43 +84,8 @@ class ConditionalTimeUNet(nn.Module):
         return self.out(d1)
 
 
-class TimeUNet(ConditionalTimeUNet):
+class TimeUNet(_TimeUNetBackbone):
     """Time-conditioned UNet for latent-space noise prediction."""
 
     def __init__(self, latent_ch: int, base_ch: int = 128, time_dim: int = 64) -> None:
         super().__init__(in_ch=latent_ch, out_ch=latent_ch, base_ch=base_ch, time_dim=time_dim)
-
-
-class SliceConditionedTimeUNet(nn.Module):
-    """UNet conditioned on a full 2D slice and its 3D axis/index position."""
-
-    def __init__(
-        self,
-        latent_ch: int,
-        base_ch: int = 128,
-        time_dim: int = 64,
-        max_slices: int = 64,
-    ) -> None:
-        super().__init__()
-        self.null_axis = 3
-        self.null_slice = max_slices
-        self.unet = ConditionalTimeUNet(
-            in_ch=latent_ch * 2,
-            out_ch=latent_ch,
-            base_ch=base_ch,
-            time_dim=time_dim,
-        )
-        self.axis_emb = nn.Embedding(4, time_dim * 4)
-        self.slice_emb = nn.Embedding(max_slices + 1, time_dim * 4)
-
-    def forward(
-        self,
-        z_t: torch.Tensor,
-        t: torch.Tensor,
-        condition_z: torch.Tensor,
-        axis: torch.Tensor,
-        slice_index: torch.Tensor,
-    ) -> torch.Tensor:
-        x = torch.cat([z_t, condition_z], dim=1)
-        extra_emb = self.axis_emb(axis) + self.slice_emb(slice_index)
-        return self.unet(x, t, extra_emb=extra_emb)

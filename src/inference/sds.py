@@ -1,8 +1,16 @@
 import torch
 import torch.nn.functional as F
 
-from loss import compute_diffusivity_loss, compute_grayscale_tpc_loss, compute_sa_loss, compute_tpc_loss_ste, compute_vf_loss
+from src.loss import (
+    compute_diffusivity_loss,
+    compute_grayscale_tpc_loss,
+    compute_sa_loss,
+    compute_tpc_loss_ste,
+    compute_vf_loss,
+    compute_vf_moment_loss,
+)
 
+from .conditions import FixedSlice
 from .decoding import three_axis_refinement
 
 
@@ -31,27 +39,48 @@ def _replace_volume_slice(volume: torch.Tensor, axis: int, index: int, image: to
 
 def _insert_fixed_slices(
     volume: torch.Tensor,
-    fixed_slices: list[dict[str, torch.Tensor | int]] | None,
+    fixed_slices: list[FixedSlice] | None,
 ) -> torch.Tensor:
     if not fixed_slices:
         return volume
 
     result = volume
     for item in fixed_slices:
-        axis = int(item["axis"])
-        index = int(item["index"])
-        image = item["image"]
-        if not isinstance(image, torch.Tensor):
+        if not isinstance(item.image, torch.Tensor):
             raise ValueError("fixed slice image must be a tensor.")
-        image = image.to(device=volume.device, dtype=volume.dtype)
+        image = item.image.to(device=volume.device, dtype=volume.dtype)
         if image.ndim == 3:
             if image.shape[0] != 1:
                 raise ValueError("fixed slice image must have shape [H, W] or [1, H, W].")
             image = image[0]
         if image.ndim != 2:
             raise ValueError("fixed slice image must have shape [H, W] or [1, H, W].")
-        result = _replace_volume_slice(result, axis, index, image)
+        result = _replace_volume_slice(result, item.axis, item.index, image)
     return result
+
+
+def _fixed_slice_image(image: torch.Tensor, volume: torch.Tensor) -> torch.Tensor:
+    image = image.to(device=volume.device, dtype=volume.dtype)
+    if image.ndim == 2:
+        image = image.unsqueeze(0).unsqueeze(0)
+    elif image.ndim == 3:
+        image = image.unsqueeze(0)
+    if image.ndim != 4 or image.shape[0] != 1 or image.shape[1] != 1:
+        raise ValueError("condition slice image must have shape [H, W], [1, H, W], or [1, 1, H, W].")
+    return image
+
+
+def _condition_slice_for(
+    condition_slices: list[FixedSlice] | None,
+    axis: int,
+    index: int,
+) -> FixedSlice | None:
+    if not condition_slices:
+        return None
+    for item in condition_slices:
+        if item.axis == axis and item.index == index:
+            return item
+    return None
 
 
 def _soft_phase_masks(decoded: torch.Tensor, phases: list[int], beta: float = 30.0) -> torch.Tensor:
@@ -74,6 +103,7 @@ def sds_refine_slice(
     t_max: int,
     phases: list[int] | None = None,
     vf_targets: tuple[float, float, float] | None = None,
+    vf_moments: tuple[float, float] | None = None,
     vf_weight: float = 0.0,
     tpc_targets: dict[int, torch.Tensor] | None = None,
     bin_mat: torch.Tensor | None = None,
@@ -88,6 +118,8 @@ def sds_refine_slice(
     rd_weight: float = 0.0,
     sa_targets: dict[int, float] | None = None,
     sa_weight: float = 0.0,
+    condition_image: torch.Tensor | None = None,
+    condition_weight: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if volume.ndim != 4:
         raise ValueError("volume must have shape [D, C, H, W].")
@@ -112,17 +144,19 @@ def sds_refine_slice(
         loss_sds = (sigma.pow(2) * (latent * target)).mean()
         decoded = vae.decode(latent).clamp(0, 1)
 
-        if vf_weight > 0 and vf_targets is not None:
-            loss_vf_m1, loss_vf_m2, _ = compute_vf_loss(
+        if vf_weight > 0 and vf_moments is not None:
+            loss_vf = compute_vf_moment_loss(
+                decoded,
+                target_mean=vf_moments[0],
+                target_sqmean=vf_moments[1],
+            )
+        elif vf_weight > 0 and vf_targets is not None:
+            loss_vf = compute_vf_loss(
                 decoded,
                 vf0=vf_targets[0],
                 vf05=vf_targets[1],
                 vf1=vf_targets[2],
-                w_m1=vf_weight,
-                w_m2=vf_weight,
-                device=device,
             )
-            loss_vf = loss_vf_m1 + loss_vf_m2
         else:
             loss_vf = torch.tensor(0.0, device=device)
 
@@ -157,6 +191,12 @@ def sds_refine_slice(
         else:
             loss_sa = torch.tensor(0.0, device=device)
 
+        if condition_weight > 0 and condition_image is not None:
+            condition_target = _fixed_slice_image(condition_image, volume)
+            loss_condition = F.mse_loss(decoded, condition_target)
+        else:
+            loss_condition = torch.tensor(0.0, device=device)
+
         total = (
             loss_sds
             + vf_weight * loss_vf
@@ -164,6 +204,7 @@ def sds_refine_slice(
             + grayscale_tpc_weight * loss_grayscale_tpc
             + rd_weight * loss_rd
             + sa_weight * loss_sa
+            + condition_weight * loss_condition
         )
         optimizer.zero_grad()
         total.backward()
@@ -181,6 +222,7 @@ def sds_refine_slice(
         "grayscale_tpc": loss_grayscale_tpc.detach(),
         "rd": loss_rd.detach(),
         "sa": loss_sa.detach(),
+        "condition": loss_condition.detach(),
     }
 
 
@@ -196,6 +238,7 @@ def sds_refine_volume(
     refinement_steps: int = 0,
     phases: list[int] | None = None,
     vf_targets: tuple[float, float, float] | None = None,
+    vf_moments: tuple[float, float] | None = None,
     vf_weight: float = 0.0,
     tpc_targets: dict[int, torch.Tensor] | None = None,
     bin_mat: torch.Tensor | None = None,
@@ -210,7 +253,9 @@ def sds_refine_volume(
     rd_weight: float = 0.0,
     sa_targets: dict[int, float] | None = None,
     sa_weight: float = 0.0,
-    fixed_slices: list[dict[str, torch.Tensor | int]] | None = None,
+    condition_slices: list[FixedSlice] | None = None,
+    condition_weight: float = 0.0,
+    fixed_slices: list[FixedSlice] | None = None,
     generator: torch.Generator | None = None,
 ) -> tuple[torch.Tensor, list[dict[str, float]]]:
     if steps < 0:
@@ -223,9 +268,16 @@ def sds_refine_volume(
     axis_sizes = (depth, height, width)
     history = []
 
-    for _ in range(steps):
-        axis = int(torch.randint(0, 3, (1,), generator=generator).item())
-        index = int(torch.randint(0, axis_sizes[axis], (1,), generator=generator).item())
+    for step in range(steps):
+        condition_slice = None
+        if condition_weight > 0 and condition_slices:
+            condition_slice = condition_slices[step % len(condition_slices)]
+            axis = int(condition_slice.axis)
+            index = int(condition_slice.index)
+        else:
+            axis = int(torch.randint(0, 3, (1,), generator=generator).item())
+            index = int(torch.randint(0, axis_sizes[axis], (1,), generator=generator).item())
+            condition_slice = _condition_slice_for(condition_slices, axis, index)
         result, losses = sds_refine_slice(
             volume=result,
             vae=vae,
@@ -238,6 +290,7 @@ def sds_refine_volume(
             t_max=t_max,
             phases=phases,
             vf_targets=vf_targets,
+            vf_moments=vf_moments,
             vf_weight=vf_weight,
             tpc_targets=tpc_targets,
             bin_mat=bin_mat,
@@ -252,6 +305,8 @@ def sds_refine_volume(
             rd_weight=rd_weight,
             sa_targets=sa_targets,
             sa_weight=sa_weight,
+            condition_image=condition_slice.image if condition_slice is not None else None,
+            condition_weight=condition_weight,
         )
         result = _insert_fixed_slices(result, fixed_slices)
         history.append({name: float(value) for name, value in losses.items()})

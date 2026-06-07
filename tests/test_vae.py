@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from models import CustomVAE, reparameterize
+from src.models import CustomVAE, reparameterize
 
 
 class CustomVAETest(unittest.TestCase):

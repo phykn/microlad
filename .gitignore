@@ -3,6 +3,7 @@ venv/
 __pycache__/
 *.pyc
 .obsidian/
+AGENTS.md
 docs/
 microlad-anode/
 output/
