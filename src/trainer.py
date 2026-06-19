@@ -12,7 +12,6 @@ class Trainer:
         self,
         model: nn.Module,
         train_loader: DataLoader,
-        valid_loader: DataLoader | None,
         criterion: nn.Module,
         optimizer: torch.optim.Optimizer,
         scheduler,
@@ -21,9 +20,13 @@ class Trainer:
         accum_steps: int = 1,
         rank: int = 0,
     ) -> None:
+        if accum_steps < 1:
+            raise ValueError("accum_steps must be at least 1")
+        if max_grad_norm <= 0:
+            raise ValueError("max_grad_norm must be positive")
+
         self.model = model
         self.train_loader = train_loader
-        self.valid_loader = valid_loader
         self.criterion = criterion
         self.optimizer = optimizer
         self.scheduler = scheduler
@@ -71,11 +74,18 @@ class Trainer:
         accum: dict[str, float] = {}
         for _ in range(self.accum_steps):
             batch = self.get_batch()
-            with torch.amp.autocast(self.device.type, dtype=self.amp_dtype, enabled=self.use_amp):
-                loss_dict, loss = self.criterion(self.model, batch)
+            with torch.amp.autocast(
+                self.device.type, dtype=self.amp_dtype, enabled=self.use_amp
+            ):
+                loss, metrics = self.criterion(self.model, batch)
             self.scaler.scale(loss / self.accum_steps).backward()
-            for key, value in loss_dict.items():
-                accum[key] = accum.get(key, 0.0) + float(value.detach()) / self.accum_steps
+            accum["loss"] = (
+                accum.get("loss", 0.0) + float(loss.detach()) / self.accum_steps
+            )
+            for key, value in metrics.items():
+                accum[key] = (
+                    accum.get(key, 0.0) + float(value.detach()) / self.accum_steps
+                )
 
         self.scaler.unscale_(self.optimizer)
         nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
@@ -86,29 +96,14 @@ class Trainer:
 
         return accum
 
-    @torch.no_grad()
-    def validate(self) -> dict[str, float]:
-        if self.valid_loader is None:
-            return {}
-        self.model.eval()
-        totals: dict[str, float] = {}
-        count = 0
-        for batch in self.valid_loader:
-            with torch.amp.autocast(self.device.type, dtype=self.amp_dtype, enabled=self.use_amp):
-                loss_dict, _ = self.criterion(self.model, batch)
-            for key, value in loss_dict.items():
-                totals[key] = totals.get(key, 0.0) + float(value.detach())
-            count += 1
-        if count == 0:
-            return {}
-        return {key: value / count for key, value in totals.items()}
-
     def _state_dict(self) -> dict:
         model = self.model.module if hasattr(self.model, "module") else self.model
         return {
             "model": model.state_dict(),
             "optimizer": self.optimizer.state_dict(),
-            "scheduler": self.scheduler.state_dict() if self.scheduler is not None else None,
+            "scheduler": self.scheduler.state_dict()
+            if self.scheduler is not None
+            else None,
         }
 
     def save(self, name: str = "last.pth") -> None:
@@ -124,24 +119,30 @@ class Trainer:
         for key, value in metrics.items():
             self._writer.add_scalar(f"{split}/{key}", value, step)
 
-    def train(self, steps: int, val_freq: int = 500, save_freq: int = 1000) -> None:
+    def train(self, steps: int, save_freq: int = 1000) -> None:
+        if steps < 0:
+            raise ValueError("steps must be at least 0")
+        if save_freq < 1:
+            raise ValueError("save_freq must be at least 1")
+
         if self.rank == 0:
             self._writer = SummaryWriter(log_dir=os.path.join(self.save_dir, "logs"))
 
-        for global_step in range(1, steps + 1):
-            losses = self.step()
-            self._write_scalars("train", global_step, losses)
-            if self.rank == 0 and self._writer is not None:
-                self._writer.add_scalar("lr/lr", self.optimizer.param_groups[0]["lr"], global_step)
+        try:
+            for global_step in range(1, steps + 1):
+                losses = self.step()
+                self._write_scalars("train", global_step, losses)
+                if self.rank == 0 and self._writer is not None:
+                    self._writer.add_scalar(
+                        "lr/lr", self.optimizer.param_groups[0]["lr"], global_step
+                    )
 
-            if self.valid_loader is not None and global_step % val_freq == 0:
-                self._write_scalars("valid", global_step, self.validate())
+                if global_step % save_freq == 0:
+                    self.save()
 
-            if global_step % save_freq == 0:
-                self.save()
-
-        self.save()
-        if self._writer is not None:
-            self._writer.flush()
-            self._writer.close()
-            self._writer = None
+            self.save()
+        finally:
+            if self._writer is not None:
+                self._writer.flush()
+                self._writer.close()
+                self._writer = None

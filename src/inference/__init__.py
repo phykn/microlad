@@ -1,6 +1,2 @@
+from .diffusivity import DiffusivitySolver
 from .predict import GenerationOptions, MicroLadPredictor
-
-__all__ = [
-    "GenerationOptions",
-    "MicroLadPredictor",
-]

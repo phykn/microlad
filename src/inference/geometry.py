@@ -1,6 +1,8 @@
 def voxel_to_latent_index(slice_index: int, downsample: int = 4) -> int:
     if slice_index < 0:
         raise ValueError("slice_index must be non-negative.")
+    if downsample <= 0:
+        raise ValueError("downsample must be positive.")
     return slice_index // downsample
 
 

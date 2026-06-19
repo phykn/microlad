@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 
 
-class TorchFEMMesh(nn.Module):
+class DiffusivitySolver(nn.Module):
     def __init__(
         self,
         height: int,
@@ -12,6 +12,13 @@ class TorchFEMMesh(nn.Module):
         device: str | torch.device = "cpu",
     ) -> None:
         super().__init__()
+        if height <= 0:
+            raise ValueError("height must be positive.")
+        if width <= 0:
+            raise ValueError("width must be positive.")
+        if low_cond < 0.0 or low_cond > 1.0:
+            raise ValueError("low_cond must be between 0 and 1.")
+
         self.height = height
         self.width = width
         self.nx = width + 1
@@ -39,7 +46,9 @@ class TorchFEMMesh(nn.Module):
         grad_t_list = []
         area_list = []
         for idx, elem in enumerate(elems):
-            pts = np.array([[elem[k] % self.nx, elem[k] // self.nx] for k in range(3)], float)
+            pts = np.array(
+                [[elem[k] % self.nx, elem[k] // self.nx] for k in range(3)], float
+            )
             jacobian = np.vstack((pts[1] - pts[0], pts[2] - pts[0])).T
             det_j = np.linalg.det(jacobian)
             inv_j_t = np.linalg.inv(jacobian).T
@@ -58,12 +67,29 @@ class TorchFEMMesh(nn.Module):
             grad_t_list.append(grad_t)
             area_list.append(area)
 
-        self.register_buffer("rows", torch.tensor(rows, dtype=torch.long, device=self.device))
-        self.register_buffer("cols", torch.tensor(cols, dtype=torch.long, device=self.device))
-        self.register_buffer("base_data", torch.tensor(base_data, dtype=torch.float32, device=self.device))
-        self.register_buffer("elem_idx", torch.tensor(elem_idx, dtype=torch.long, device=self.device))
-        self.register_buffer("elem_grad_t", torch.tensor(np.stack(grad_t_list), dtype=torch.float32, device=self.device))
-        self.register_buffer("elem_area", torch.tensor(area_list, dtype=torch.float32, device=self.device))
+        self.register_buffer(
+            "rows", torch.tensor(rows, dtype=torch.long, device=self.device)
+        )
+        self.register_buffer(
+            "cols", torch.tensor(cols, dtype=torch.long, device=self.device)
+        )
+        self.register_buffer(
+            "base_data",
+            torch.tensor(base_data, dtype=torch.float32, device=self.device),
+        )
+        self.register_buffer(
+            "elem_idx", torch.tensor(elem_idx, dtype=torch.long, device=self.device)
+        )
+        self.register_buffer(
+            "elem_grad_t",
+            torch.tensor(
+                np.stack(grad_t_list), dtype=torch.float32, device=self.device
+            ),
+        )
+        self.register_buffer(
+            "elem_area",
+            torch.tensor(area_list, dtype=torch.float32, device=self.device),
+        )
 
         bc = []
         for j in range(self.ny):
@@ -72,8 +98,12 @@ class TorchFEMMesh(nn.Module):
 
         bc_idx = np.unique(bc)
         fc_idx = np.setdiff1d(np.arange(self.nn), bc_idx)
-        self.register_buffer("bc_idx", torch.tensor(bc_idx, dtype=torch.long, device=self.device))
-        self.register_buffer("fc_idx", torch.tensor(fc_idx, dtype=torch.long, device=self.device))
+        self.register_buffer(
+            "bc_idx", torch.tensor(bc_idx, dtype=torch.long, device=self.device)
+        )
+        self.register_buffer(
+            "fc_idx", torch.tensor(fc_idx, dtype=torch.long, device=self.device)
+        )
 
         u_c = np.zeros(len(bc_idx), dtype=np.float32)
         coords = np.stack([bc_idx % self.nx, bc_idx // self.nx], -1)
@@ -86,9 +116,13 @@ class TorchFEMMesh(nn.Module):
             raise ValueError(f"mask must have shape [{self.height}, {self.width}].")
 
         mask = mask.to(self.base_data.device)
-        sigma_e = self.low_cond + (1.0 - self.low_cond) * mask.reshape(-1).repeat_interleave(2)
+        sigma_e = self.low_cond + (1.0 - self.low_cond) * mask.reshape(
+            -1
+        ).repeat_interleave(2)
         data = self.base_data * sigma_e[self.elem_idx]
-        stiffness = torch.zeros((self.nn, self.nn), device=self.base_data.device, dtype=data.dtype)
+        stiffness = torch.zeros(
+            (self.nn, self.nn), device=self.base_data.device, dtype=data.dtype
+        )
         stiffness.index_put_((self.rows, self.cols), data, accumulate=True)
 
         bc, fc = self.bc_idx, self.fc_idx

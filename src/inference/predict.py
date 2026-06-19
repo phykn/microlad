@@ -11,7 +11,6 @@ from .conditions import (
     encode_tiled_condition_items,
     parse_condition_options,
 )
-from .condition_stats import build_condition_stats
 from .locked_sampling import sample_locked_latent_volume
 from .decoding import multi_axis_decode, three_axis_refinement
 from .sds import sds_refine_volume
@@ -28,6 +27,20 @@ class GenerationOptions:
     t_max: int = 950
     lock_condition_slice: bool = True
     lock_strength: float = 1.0
+
+    def __post_init__(self) -> None:
+        if len(self.volume_shape) != 4 or any(dim <= 0 for dim in self.volume_shape):
+            raise ValueError("volume_shape must contain four positive dimensions.")
+        if self.refinement_steps < 0:
+            raise ValueError("refinement_steps must be non-negative.")
+        if self.sds_steps < 0:
+            raise ValueError("sds_steps must be non-negative.")
+        if self.sds_lr <= 0:
+            raise ValueError("sds_lr must be positive.")
+        if self.t_min < 0 or self.t_min >= self.t_max:
+            raise ValueError("t_min must be non-negative and smaller than t_max.")
+        if self.lock_strength < 0:
+            raise ValueError("lock_strength must be non-negative.")
 
 
 class MicroLadPredictor:
@@ -70,7 +83,9 @@ class MicroLadPredictor:
 
         if not conditions:
             return (
-                EncodedConditions(locks=[], fixed_slices=[], condition_slices=[], condition_images=[]),
+                EncodedConditions(
+                    locks=[], fixed_slices=[], condition_slices=[], condition_images=[]
+                ),
                 64 // downsample,
                 16 // downsample,
             )
@@ -97,18 +112,23 @@ class MicroLadPredictor:
         condition_slices: list[FixedSlice] | None,
         condition_weight: float,
         stats_weight: float,
+        diffusivity_weight: float,
+        diffusivity_size: int,
         fixed_slices: list[FixedSlice] | None,
     ) -> tuple[torch.Tensor, list[dict[str, float]]]:
         options = self.options
-        if options.refinement_steps > 0:
-            volume = three_axis_refinement(volume, self.vae, refinement_steps=options.refinement_steps)
-
         if not fixed_slices:
             fixed_slices = None
 
         if options.sds_steps <= 0:
-            if condition_weight > 0 or stats_weight > 0:
-                raise ValueError("condition_weight and stats_weight require sds_steps > 0.")
+            if options.refinement_steps > 0:
+                volume = three_axis_refinement(
+                    volume, self.vae, refinement_steps=options.refinement_steps
+                )
+            if condition_weight > 0 or stats_weight > 0 or diffusivity_weight > 0:
+                raise ValueError(
+                    "condition_weight, stats_weight, and diffusivity_weight require sds_steps > 0."
+                )
             if fixed_slices:
                 volume, _ = sds_refine_volume(
                     volume=volume,
@@ -123,14 +143,6 @@ class MicroLadPredictor:
                 )
             return volume, []
 
-        phases = [0, 1]
-        stats = build_condition_stats(
-            condition_images=condition_images,
-            stats_weight=stats_weight,
-            phases=phases,
-            device=self.device,
-        )
-
         denoise_unet = options.sds_unet if options.sds_unet is not None else self.unet
         return sds_refine_volume(
             volume=volume,
@@ -142,15 +154,10 @@ class MicroLadPredictor:
             t_min=options.t_min,
             t_max=options.t_max,
             refinement_steps=options.refinement_steps,
-            phases=phases,
-            vf_moments=stats.vf_moments,
-            vf_weight=stats_weight,
-            grayscale_tpc_target=stats.grayscale_tpc_target,
-            grayscale_tpc_bin_mat=stats.grayscale_tpc_bin_mat,
-            grayscale_tpc_bin_counts=stats.grayscale_tpc_bin_counts,
-            grayscale_tpc_weight=stats_weight,
-            sa_targets=stats.sa_targets,
-            sa_weight=stats_weight,
+            condition_images=condition_images,
+            stats_weight=stats_weight,
+            diffusivity_weight=diffusivity_weight,
+            diffusivity_size=diffusivity_size,
             condition_slices=condition_slices,
             condition_weight=condition_weight,
             fixed_slices=fixed_slices,
@@ -164,6 +171,8 @@ class MicroLadPredictor:
         condition_slices: list[FixedSlice] | None,
         condition_weight: float,
         stats_weight: float,
+        diffusivity_weight: float,
+        diffusivity_size: int,
         fixed_slices: list[FixedSlice] | None,
         tile_size: int | None = None,
         tile_overlap: int = 0,
@@ -190,6 +199,8 @@ class MicroLadPredictor:
             condition_slices=condition_slices,
             condition_weight=condition_weight,
             stats_weight=stats_weight,
+            diffusivity_weight=diffusivity_weight,
+            diffusivity_size=diffusivity_size,
             fixed_slices=fixed_slices,
         )
         return volume, sds_history
@@ -225,6 +236,8 @@ class MicroLadPredictor:
             condition_slices=encoded.condition_slices,
             condition_weight=parsed.condition_weight,
             stats_weight=parsed.stats_weight,
+            diffusivity_weight=parsed.diffusivity_weight,
+            diffusivity_size=parsed.diffusivity_size,
             fixed_slices=encoded.fixed_slices,
             tile_size=tile_size,
             tile_overlap=tile_overlap,

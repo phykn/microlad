@@ -32,8 +32,7 @@ class AttentionBlock(nn.Module):
         q = q.view(b, c, -1).permute(0, 2, 1)
         k = k.view(b, c, -1)
         v = v.view(b, c, -1).permute(0, 2, 1)
-        scale = torch.sqrt(torch.tensor(c, dtype=torch.float32, device=x.device))
-        attn = torch.softmax(torch.bmm(q, k) / scale, dim=-1)
+        attn = torch.softmax(torch.bmm(q, k) * (c**-0.5), dim=-1)
         out = torch.bmm(attn, v)
         out = out.permute(0, 2, 1).view(b, c, h, w)
         return x + self.proj_out(out)
@@ -69,11 +68,15 @@ class UpBlock(nn.Module):
         return self.act(self.gn(self.up(x)))
 
 
-class CustomVAE(nn.Module):
+class PatchVAE(nn.Module):
     """VAE for 64x64 grayscale microstructure patches."""
 
     def __init__(self, latent_ch: int = 4) -> None:
+        if latent_ch <= 0:
+            raise ValueError("latent_ch must be positive.")
+
         super().__init__()
+        self.latent_ch = latent_ch
         self.conv_in = nn.Conv2d(1, 128, kernel_size=3, padding=1)
         self.down1 = DownBlock(128, 128)
         self.down2 = DownBlock(128, 256)
@@ -93,6 +96,13 @@ class CustomVAE(nn.Module):
         self.act_out = nn.Sigmoid()
 
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if x.ndim != 4 or x.shape[1] != 1:
+            raise ValueError(
+                "input must be a gray image batch with shape [B, 1, H, W]."
+            )
+        if x.shape[-2] % 4 != 0 or x.shape[-1] % 4 != 0:
+            raise ValueError("input height and width must be divisible by 4.")
+
         h = self.conv_in(x)
         h = self.down1(h)
         h = self.down2(h)
@@ -102,6 +112,11 @@ class CustomVAE(nn.Module):
         return self.to_mu(h), self.to_logvar(h)
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
+        if z.ndim != 4 or z.shape[1] != self.latent_ch:
+            raise ValueError(
+                f"latent batch must have shape [B, {self.latent_ch}, H, W]."
+            )
+
         h = self.conv_z(z)
         h = self.res3(h)
         h = self.attn2(h)
@@ -110,7 +125,9 @@ class CustomVAE(nn.Module):
         h = self.up2(h)
         return self.act_out(self.conv_out(h))
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         mu, logvar = self.encode(x)
         z = reparameterize(mu, logvar)
         return self.decode(z), mu, logvar

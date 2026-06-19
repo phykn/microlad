@@ -1,0 +1,25 @@
+data:
+  data_dir: data
+  patch_size: 64
+  batch_size: 8
+  num_workers: 4
+
+model:
+  latent_ch: 4
+
+loss:
+  kl_weight: 1.0e-6
+  ssim_weight: 0.1
+
+optimization:
+  lr: 1.0e-4
+  min_lr: 1.0e-6
+  max_grad_norm: 1.0
+  accum_steps: 1
+
+training:
+  steps: 1000
+  save_freq: 1000
+
+output:
+  output_dir: output/vae

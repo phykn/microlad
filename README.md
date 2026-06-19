@@ -1,59 +1,43 @@
 # Conditioned MicroLad
 
-Conditioned MicroLad is an experimental extension of the original MicroLad pipeline for generating 3D microstructure candidates from 2D SEM image patches. It adds observation conditioning so one or more real 2D slices can be fixed at specified internal positions during generation.
+MicroLad-style 2D-to-3D microstructure generation.
 
-The core flow is:
+This repo trains on 2D grayscale image patches, then generates a 3D candidate. During inference, one or more observed 2D slices can be fixed inside the generated volume.
 
-1. Put source SEM images in the image directory used by the training config.
-2. The dataset reads the original images and randomly crops 64x64 patches in memory.
-3. The VAE encodes each 2D patch into a latent representation.
-4. The UNet/DDPM learns to predict noise in the 2D latent space.
-5. Inference builds a random 3D latent candidate and can lock observed slices at specified axes and indices.
-
-## Installation
+## Install
 
 ```sh
 python -m pip install -r requirements.txt
 ```
 
-## Training
+## Config
 
-Train the VAE:
+- VAE config: `config/train_vae.yaml`
+- UNet config: `config/train_unet.yaml`
+- Put training images in `data.data_dir`.
+- Train VAE first, then train UNet.
+- `checkpoints.vae_ckpt` is required for UNet training.
+- `checkpoints.unet_ckpt` is only for resuming a UNet.
 
-```sh
-python run_train_vae.py --config src/config/train_vae.yaml
-```
-
-Train the UNet:
-
-```sh
-python run_train_unet.py --config src/config/train_unet.yaml
-```
-
-The UNet learns noise prediction on 2D latents produced by the VAE. Observation images and their positions are not part of the training loop; they are applied during inference.
-
-For distributed training, use `torchrun` on a GPU server:
+## Train
 
 ```sh
-torchrun --nproc_per_node 4 run_train_vae.py --config src/config/train_vae.yaml
-torchrun --nproc_per_node 4 run_train_unet.py --config src/config/train_unet.yaml
+python run_train_vae.py
+python run_train_unet.py
 ```
 
-The same trained VAE and UNet are used for larger generated candidates. Pass `condition={"size": 512}` to `MicroLadPredictor.predict()` to generate a 512x512x512 candidate without observation slices. Add `images` to lock one or more observed slices. Large condition images are internally split into 64x64 latent tiles.
+DDP:
 
-## Prediction
+```sh
+torchrun --nproc_per_node 4 run_train_vae.py
+torchrun --nproc_per_node 4 run_train_unet.py
+```
 
-Use `MicroLadPredictor.predict()`. It returns a dictionary with `volume` and `sds_history`. The example below assumes that trained `vae`, `unet`, and `device` objects are already available.
+## Predict
 
 ```python
-import numpy as np
-from PIL import Image
-
 from src.inference import MicroLadPredictor
 from src.models import DDPM
-
-image = Image.open("data/sample_01.png").convert("L").resize((64, 64))
-condition_image = np.asarray(image, dtype=np.float32)
 
 predictor = MicroLadPredictor(
     vae=vae,
@@ -61,38 +45,29 @@ predictor = MicroLadPredictor(
     ddpm=DDPM(timesteps=1000, device=device),
     device=device,
 )
-result = predictor.predict({
-    "size": 64,
-    "images": [{"image": condition_image, "axis": 0, "index": 12}],
-})
 
-volume = result["volume"]
-```
-
-Generate without observation conditions:
-
-```python
 volume = predictor.predict()["volume"]
 ```
 
-Set the output size with `size`. For example, `{"size": 512}` creates a 512x512x512 candidate. When `images` is provided, each item fixes one slice at the given `axis` and `index`. Condition images are resized to the requested `size` when needed.
+With an observed slice:
 
-Use `GenerationOptions(sds_steps=...)` only when SDS refinement is needed. In that case, `condition_weight` makes the result follow the fixed condition slices more directly, and `stats_weight` automatically computes VF/TPC/SA statistics from the condition images and matches them during refinement.
+```python
+volume = predictor.predict({
+    "size": 64,
+    "images": [{"image": condition_image, "axis": 0, "index": 12}],
+})["volume"]
+```
 
-## Notebooks
+`condition_image` can be a numpy array or torch tensor. It is converted to grayscale and normalized before entering the model.
 
-Useful notebooks:
+## Data Shape
 
-- `notebooks/00_patch_dataset.ipynb`: checks random crops from source images
-- `notebooks/02_ldm_forward.ipynb`: checks the 2D latent diffusion forward path
-- `notebooks/07_generate_pipeline.ipynb`: checks generation with loaded weights
-- `notebooks/09_scale_up_smoke.ipynb`: smoke test for large candidate generation
-- `notebooks/10_reference_generate_smoke.ipynb`: smoke test with reference weights
-- `notebooks/11_microstructure_viewer.ipynb`: slice viewer for generated TIFF volumes
-
-Notebooks are kept short and focused on feature checks.
+- 2D images: `H x W`
+- 3D TIFF stack: `D x H x W`
+- Dataset output: `[1, H, W]`, float, `0..1`
+- Generated volume: `[D, 1, H, W]`
 
 ## Reference
 
 - Original GitHub: [KangHyunL/microlad](https://github.com/KangHyunL/microlad)
-- Paper: [MicroLad: 2D-to-3D Microstructure Reconstruction and Generation via Latent Diffusion and Score Distillation](https://arxiv.org/abs/2508.20138)
+- Paper: [MicroLad](https://arxiv.org/abs/2508.20138)

@@ -11,6 +11,15 @@ class DDPM:
         beta_end: float = 2e-2,
         device: str | torch.device = "cpu",
     ) -> None:
+        if timesteps <= 0:
+            raise ValueError("timesteps must be positive.")
+        if beta_start <= 0.0:
+            raise ValueError("beta_start must be positive.")
+        if beta_end >= 1.0:
+            raise ValueError("beta_end must be smaller than 1.")
+        if beta_start >= beta_end:
+            raise ValueError("beta_start must be smaller than beta_end.")
+
         self.device = torch.device(device)
         self.num_timesteps = timesteps
 
@@ -20,8 +29,31 @@ class DDPM:
         self.sqrt_acp = torch.sqrt(self.alphas_cumprod)
         self.sqrt_om_acp = torch.sqrt(1.0 - self.alphas_cumprod)
 
-        prev = torch.cat([torch.ones(1, device=self.device), self.alphas_cumprod[:-1]], dim=0)
-        self.posterior_variance = self.betas * (1.0 - prev) / (1.0 - self.alphas_cumprod)
+        prev = torch.cat(
+            [torch.ones(1, device=self.device), self.alphas_cumprod[:-1]], dim=0
+        )
+        self.posterior_variance = (
+            self.betas * (1.0 - prev) / (1.0 - self.alphas_cumprod)
+        )
+
+    def _match_device(self, device: torch.device) -> None:
+        if self.device == device:
+            return
+        self.device = device
+        self.betas = self.betas.to(device)
+        self.alphas = self.alphas.to(device)
+        self.alphas_cumprod = self.alphas_cumprod.to(device)
+        self.sqrt_acp = self.sqrt_acp.to(device)
+        self.sqrt_om_acp = self.sqrt_om_acp.to(device)
+        self.posterior_variance = self.posterior_variance.to(device)
+
+    def _validate_timesteps(self, t: torch.Tensor, batch_size: int) -> None:
+        if t.ndim != 1 or t.shape[0] != batch_size:
+            raise ValueError("timesteps must have shape [B].")
+        if t.dtype != torch.long:
+            raise ValueError("timesteps must be integer tensors.")
+        if t.min().item() < 0 or t.max().item() >= self.num_timesteps:
+            raise ValueError("timestep values must be within the DDPM schedule.")
 
     def q_sample(
         self,
@@ -29,15 +61,23 @@ class DDPM:
         t: torch.Tensor,
         noise: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        self._match_device(x_start.device)
+        self._validate_timesteps(t, x_start.shape[0])
         if noise is None:
             noise = torch.randn_like(x_start)
+        if noise.shape != x_start.shape:
+            raise ValueError("noise must have the same shape as x_start.")
         b = t.shape[0]
         return (
             self.sqrt_acp[t].view(b, 1, 1, 1) * x_start
             + self.sqrt_om_acp[t].view(b, 1, 1, 1) * noise
         )
 
-    def p_sample(self, model: torch.nn.Module, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def p_sample(
+        self, model: torch.nn.Module, x_t: torch.Tensor, t: torch.Tensor
+    ) -> torch.Tensor:
+        self._match_device(x_t.device)
+        self._validate_timesteps(t, x_t.shape[0])
         b = t.shape[0]
         coef1 = 1.0 / torch.sqrt(self.alphas[t]).view(b, 1, 1, 1)
         coef2 = self.betas[t].view(b, 1, 1, 1) / self.sqrt_om_acp[t].view(b, 1, 1, 1)

@@ -6,7 +6,6 @@ from src.build import (
     build_loader,
     build_optimizer,
     build_scheduler,
-    build_train_vae,
     build_vae_trainer,
     cleanup_distributed,
     ensure_output_dir,
@@ -14,35 +13,18 @@ from src.build import (
     setup_device,
     wrap_distributed,
 )
+from src.models import PatchVAE
+
+
+DEFAULT_CONFIG = "config/train_vae.yaml"
 
 
 def parse_args_from_list(argv: list[str] | None = None) -> argparse.Namespace:
-    config_parser = argparse.ArgumentParser(add_help=False)
-    config_parser.add_argument("--config", default=None)
-    config_args, _ = config_parser.parse_known_args(argv)
-    defaults = load_config_defaults(config_args.config)
-
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default=config_args.config)
-    parser.add_argument("--data-dir", default=None)
-    parser.add_argument("--output-dir", default="output/vae")
-    parser.add_argument("--patch-size", type=int, default=64)
-    parser.add_argument("--latent-ch", type=int, default=4)
-    parser.add_argument("--steps", type=int, default=1000)
-    parser.add_argument("--val-freq", type=int, default=500)
-    parser.add_argument("--save-freq", type=int, default=1000)
-    parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--min-lr", type=float, default=1e-6)
-    parser.add_argument("--kl-weight", type=float, default=1e-6)
-    parser.add_argument("--ssim-weight", type=float, default=0.1)
-    parser.add_argument("--max-grad-norm", type=float, default=1.0)
-    parser.add_argument("--accum-steps", type=int, default=1)
-    parser.add_argument("--num-workers", type=int, default=4)
-    parser.set_defaults(**defaults)
-    args = parser.parse_args(argv)
-    if args.data_dir is None:
-        parser.error("--data-dir is required unless provided by --config")
+    parser.parse_args(argv)
+    args = argparse.Namespace(**load_config_defaults(DEFAULT_CONFIG))
+    if getattr(args, "data_dir", None) is None:
+        parser.error("data.data_dir is required in the config file")
     return args
 
 
@@ -53,30 +35,36 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     device, local_rank, distributed = setup_device()
-    rank = int(os.environ.get("RANK", "0"))
-    dataset = build_dataset(args)
-    loader = build_loader(dataset, args, device=device, distributed=distributed)
-    vae = wrap_distributed(build_train_vae(args, device), local_rank=local_rank, distributed=distributed)
-    optimizer = build_optimizer(vae, args)
-    scheduler = build_scheduler(optimizer, args)
-    output_dir = ensure_output_dir(args.output_dir)
+    try:
+        rank = int(os.environ.get("RANK", "0"))
+        dataset = build_dataset(args)
+        loader = build_loader(dataset, args, device=device, distributed=distributed)
+        vae = wrap_distributed(
+            PatchVAE(latent_ch=args.latent_ch).to(device),
+            local_rank=local_rank,
+            distributed=distributed,
+        )
+        optimizer = build_optimizer(vae, args)
+        scheduler = build_scheduler(optimizer, args)
+        output_dir = ensure_output_dir(args.output_dir)
 
-    trainer = build_vae_trainer(
-        vae=vae,
-        loader=loader,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        save_dir=output_dir,
-        kl_weight=args.kl_weight,
-        ssim_weight=args.ssim_weight,
-        max_grad_norm=args.max_grad_norm,
-        accum_steps=args.accum_steps,
-        rank=rank,
-    )
-    if rank == 0:
-        print(f"Training VAE steps={args.steps} save_dir={output_dir}")
-    trainer.train(steps=args.steps, val_freq=args.val_freq, save_freq=args.save_freq)
-    cleanup_distributed(distributed)
+        trainer = build_vae_trainer(
+            vae=vae,
+            loader=loader,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            save_dir=output_dir,
+            kl_weight=args.kl_weight,
+            ssim_weight=args.ssim_weight,
+            max_grad_norm=args.max_grad_norm,
+            accum_steps=args.accum_steps,
+            rank=rank,
+        )
+        if rank == 0:
+            print(f"Training VAE steps={args.steps} save_dir={output_dir}")
+        trainer.train(steps=args.steps, save_freq=args.save_freq)
+    finally:
+        cleanup_distributed(distributed)
 
 
 if __name__ == "__main__":
