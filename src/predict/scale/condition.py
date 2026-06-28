@@ -3,6 +3,7 @@ from collections.abc import Sequence
 import torch
 
 from src.predict.anchor import prepare_anchor_image, validate_anchors
+from src.predict.scale.tiles import tile_grid
 from src.predict.types import AnchorSlice
 
 
@@ -32,6 +33,7 @@ def prepare_scale_anchor_latents(
     num_phases: int,
     segment: bool,
     device: torch.device,
+    tile_overlap: int = 0,
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
     if not anchors:
         return None, None
@@ -43,6 +45,7 @@ def prepare_scale_anchor_latents(
     latent_size = int(volume_size) // factor
     base_latent_size = int(vae.latent_size)
     start = center_start(volume_size=latent_size, base_size=base_latent_size)
+    image_size = int(vae.image_size)
 
     latent = torch.zeros(
         (int(vae.latent_ch), latent_size, latent_size, latent_size),
@@ -51,9 +54,40 @@ def prepare_scale_anchor_latents(
     mask = torch.zeros_like(latent)
 
     for anchor in anchors:
-        encoded = _encode_anchor(vae, anchor, num_phases=num_phases, segment=segment, device=device)
-        index = start + int(anchor.index) // factor
-        _write_anchor_plane(latent, mask, encoded, axis=int(anchor.axis), index=index, start=start)
+        anchor_size = int(anchor.image.shape[0])
+        if anchor_size == image_size:
+            encoded = _encode_anchor(
+                vae,
+                anchor,
+                num_phases=num_phases,
+                segment=segment,
+                device=device,
+            )
+            index = start + int(anchor.index) // factor
+            plane_start = start
+        elif anchor_size == int(volume_size):
+            encoded = _encode_large_anchor(
+                vae,
+                anchor,
+                volume_size=int(volume_size),
+                num_phases=num_phases,
+                segment=segment,
+                device=device,
+                tile_overlap=tile_overlap,
+            )
+            index = int(anchor.index) // factor
+            plane_start = 0
+        else:
+            raise ValueError("anchor image size must match vae.image_size or volume_size.")
+
+        _write_anchor_plane(
+            latent,
+            mask,
+            encoded,
+            axis=int(anchor.axis),
+            index=index,
+            start=plane_start,
+        )
 
     return latent, mask
 
@@ -125,6 +159,73 @@ def _encode_anchor(
     if mu.shape != expected:
         raise ValueError(f"encoded anchor latent must have shape {tuple(expected)}.")
     return mu[0].detach()
+
+
+def _encode_large_anchor(
+    vae: torch.nn.Module,
+    anchor: AnchorSlice,
+    *,
+    volume_size: int,
+    num_phases: int,
+    segment: bool,
+    device: torch.device,
+    tile_overlap: int,
+) -> torch.Tensor:
+    factor = _downsample_factor(vae)
+    image_size = int(vae.image_size)
+    latent_tile_size = int(vae.latent_size)
+    latent_size = int(volume_size) // factor
+    image_overlap = int(tile_overlap) * factor
+
+    image = prepare_anchor_image(
+        anchor.image,
+        num_phases=num_phases,
+        segment=segment,
+    )[0, 0].to(device=device)
+
+    latent = torch.zeros(
+        (int(vae.latent_ch), latent_size, latent_size),
+        device=device,
+        dtype=torch.float32,
+    )
+    count = torch.zeros((latent_size, latent_size), device=device, dtype=torch.float32)
+
+    vae.eval()
+    with torch.no_grad():
+        for row, col in tile_grid(
+            volume_size,
+            volume_size,
+            tile_size=image_size,
+            overlap=image_overlap,
+        ):
+            patch = image[row : row + image_size, col : col + image_size].reshape(
+                1,
+                1,
+                image_size,
+                image_size,
+            )
+            mu, _ = vae.encode(patch)
+            expected = torch.Size(
+                [1, int(vae.latent_ch), latent_tile_size, latent_tile_size]
+            )
+            if mu.shape != expected:
+                raise ValueError(
+                    f"encoded anchor latent must have shape {tuple(expected)}."
+                )
+
+            latent_row = row // factor
+            latent_col = col // factor
+            latent[
+                :,
+                latent_row : latent_row + latent_tile_size,
+                latent_col : latent_col + latent_tile_size,
+            ] += mu[0].detach()
+            count[
+                latent_row : latent_row + latent_tile_size,
+                latent_col : latent_col + latent_tile_size,
+            ] += 1
+
+    return latent / count.clamp_min(1)
 
 
 def _write_anchor_plane(

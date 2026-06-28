@@ -24,5 +24,5 @@ training:
   save_every: 1000
 
 output:
-  vae_run_dir: run/20260628-083823-107259
+  vae_run_dir:
   run_root: run

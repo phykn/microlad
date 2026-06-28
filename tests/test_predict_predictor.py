@@ -113,12 +113,57 @@ class PredictorTest(unittest.TestCase):
         self.assertTrue(torch.equal(volume[0], torch.zeros(2, 2, dtype=torch.uint8)))
         self.assertIsInstance(stats, dict)
 
+    def test_predict_lmpdd_anchor_axis_is_stable_for_short_schedules(self):
+        predictor = Predictor(
+            IdentityVAE(),
+            ZeroDenoiser(),
+            IdentityDDPM(timesteps=2),
+            device="cpu",
+        )
+        anchor = AnchorSlice(
+            image=np.ones((2, 2), dtype=np.uint8),
+            axis=0,
+            index=1,
+        )
+
+        with patch("torch.randn", return_value=torch.zeros(2, 1, 2, 2)):
+            volume, _ = predictor.predict(
+                anchors=[anchor],
+                options=PredictOptions(num_phases=2),
+            )
+
+        self.assertTrue(torch.equal(volume[1], torch.ones(2, 2, dtype=torch.uint8)))
+        self.assertTrue(torch.equal(volume[0], torch.zeros(2, 2, dtype=torch.uint8)))
+
     def test_predict_rejects_target_loss_without_target_images(self):
         predictor = Predictor(IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu")
         options = PredictOptions(num_phases=2, sds_steps=1, vf_weight=1.0)
 
         with self.assertRaisesRegex(ValueError, "target_images"):
             predictor.predict(options)
+
+    def test_predict_accepts_exclusive_sds_t_max_equal_to_num_timesteps(self):
+        predictor = Predictor(
+            IdentityVAE(),
+            ZeroDenoiser(),
+            IdentityDDPM(timesteps=4),
+            device="cpu",
+        )
+
+        with patch("torch.randn", return_value=torch.zeros(2, 1, 2, 2)):
+            volume, stats = predictor.predict(
+                PredictOptions(
+                    num_phases=2,
+                    sds_steps=1,
+                    sds_slice_steps=1,
+                    sds_t_min=1,
+                    sds_t_max=4,
+                    sds_weight=0.0,
+                ),
+            )
+
+        self.assertEqual(volume.shape, torch.Size([2, 2, 2]))
+        self.assertIn("steps", stats)
 
     def test_predict_uses_volume_size_for_large_volume(self):
         predictor = Predictor(
@@ -138,7 +183,7 @@ class PredictorTest(unittest.TestCase):
         self.assertEqual(volume.dtype, torch.uint8)
         self.assertIsInstance(stats, dict)
 
-    def test_predict_uses_anchor_size_without_overwriting_large_volume(self):
+    def test_predict_uses_full_size_anchor_for_large_volume_conditioning(self):
         predictor = Predictor(
             IdentityVAE(),
             ZeroDenoiser(),
@@ -158,6 +203,8 @@ class PredictorTest(unittest.TestCase):
             )
 
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
+        self.assertTrue(torch.equal(volume[1], torch.ones(4, 4, dtype=torch.uint8)))
+        self.assertTrue(torch.equal(volume[0], torch.zeros(4, 4, dtype=torch.uint8)))
 
     def test_predict_scale_up_accepts_vae_size_anchor_and_larger_volume(self):
         predictor = Predictor(

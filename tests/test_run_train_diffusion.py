@@ -83,6 +83,13 @@ def write_vae_run(run_dir: Path) -> None:
 
 
 class RunTrainDiffusionTest(unittest.TestCase):
+    def test_committed_diffusion_config_does_not_reference_local_run_output(self):
+        script = load_script()
+
+        args = script.load_config_defaults(script.DEFAULT_CONFIG)
+
+        self.assertIsNone(args.get("vae_run_dir"))
+
     def test_parse_args_loads_diffusion_config(self):
         script = load_script()
         with tempfile.TemporaryDirectory() as tmp:

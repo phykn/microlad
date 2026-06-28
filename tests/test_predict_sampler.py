@@ -63,7 +63,7 @@ class PredictSamplerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "shape"):
             sampler.sample((1, 4, 4))
 
-    def test_sample_lmpdd_rotates_latent_axes_between_reverse_steps(self):
+    def test_sample_lmpdd_returns_canonical_axis_order_after_rotating_between_steps(self):
         base = torch.arange(8, dtype=torch.float32).view(2, 1, 2, 2)
         ddpm = IdentityDDPM(timesteps=3)
         sampler = DiffusionSampler(RecordingDenoiser(), ddpm, device="cpu")
@@ -71,10 +71,7 @@ class PredictSamplerTest(unittest.TestCase):
         with patch("torch.randn", return_value=base.clone()):
             latent = sampler.sample_lmpdd((2, 1, 2, 2))
 
-        expected = base
-        for _ in range(2):
-            expected = expected.transpose(0, 2).transpose(3, 0).contiguous()
-        self.assertTrue(torch.equal(latent, expected))
+        self.assertTrue(torch.equal(latent, base))
         self.assertEqual(ddpm.steps, [2, 1, 0])
 
     def test_sample_lmpdd_blends_anchor_latent(self):

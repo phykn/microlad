@@ -60,6 +60,7 @@ class DiffusionSampler:
         self.model.eval()
         x = torch.randn(shape, device=self.device)
         batch_size = shape[0]
+        rotations = 0
         for step in range(self.ddpm.num_timesteps - 1, -1, -1):
             t = torch.full((batch_size,), step, dtype=torch.long, device=self.device)
             x = self.ddpm.p_sample(self.model, x, t)
@@ -67,9 +68,12 @@ class DiffusionSampler:
                 x = self._blend_anchor(x, anchor_latent, anchor_mask, step)
             if step > 0:
                 x = self._rotate_lmpdd(x)
+                rotations += 1
                 if anchor_latent is not None and anchor_mask is not None:
                     anchor_latent = self._rotate_lmpdd(anchor_latent)
                     anchor_mask = self._rotate_lmpdd(anchor_mask)
+        for _ in range((3 - rotations % 3) % 3):
+            x = self._rotate_lmpdd(x)
         return x
 
     def _validate_shape(self, shape: Sequence[int]) -> tuple[int, int, int, int]:

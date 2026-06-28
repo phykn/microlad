@@ -30,6 +30,10 @@ class PatchVAETest(unittest.TestCase):
         self.assertEqual(model.downsample_factor, 4)
         self.assertEqual(model.downsample_steps, 2)
 
+    def test_rejects_non_positive_latent_size_with_value_error(self):
+        with self.assertRaisesRegex(ValueError, "latent_size"):
+            PatchVAE(image_size=64, latent_size=0, base_ch=8, max_ch=32)
+
     def test_forward_preserves_input_shape_for_supported_image_sizes(self):
         for image_size in (64, 128, 256):
             with self.subTest(image_size=image_size):

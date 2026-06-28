@@ -95,8 +95,8 @@ class PatchVAE(nn.Module):
         self.image_size = image_size
         self.latent_size = latent_size
         self.latent_ch = latent_ch
-        self.downsample_factor = image_size // latent_size
         self.downsample_steps = downsample_steps(image_size, latent_size)
+        self.downsample_factor = image_size // latent_size
 
         channels = [base_ch]
         for step in range(self.downsample_steps):

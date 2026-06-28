@@ -124,6 +124,7 @@ class Predictor:
             anchors,
             options=options,
             volume_size=volume_size,
+            tile_overlap=overlap,
         )
 
         latent = sample_large_lmpdd(
@@ -379,8 +380,10 @@ class Predictor:
         *,
         options: PredictOptions,
         volume_size: int,
+        tile_overlap: int,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        if not anchors or self._anchor_volume_size(anchors) != self._image_size():
+        anchor_size = self._anchor_volume_size(anchors)
+        if not anchors or anchor_size not in (self._image_size(), int(volume_size)):
             return None, None
         return prepare_scale_anchor_latents(
             self.vae,
@@ -389,6 +392,7 @@ class Predictor:
             num_phases=options.num_phases,
             segment=options.anchor_segment,
             device=self.device,
+            tile_overlap=tile_overlap,
         )
 
     def _uses_scale_anchor(
@@ -505,14 +509,14 @@ class Predictor:
 
     def _sds_t_max(self, options: PredictOptions) -> int:
         t_max = (
-            int(self.ddpm.num_timesteps) - 1
+            int(self.ddpm.num_timesteps)
             if options.sds_t_max is None
             else int(options.sds_t_max)
         )
         if t_max <= options.sds_t_min:
             raise ValueError("sds_t_max must be greater than sds_t_min.")
-        if t_max >= int(self.ddpm.num_timesteps):
-            raise ValueError("sds_t_max must be inside the DDPM schedule.")
+        if t_max > int(self.ddpm.num_timesteps):
+            raise ValueError("sds_t_max must be at most the DDPM schedule length.")
         return t_max
 
     def _uses_targets(self, options: PredictOptions) -> bool:
