@@ -1,14 +1,10 @@
 torch
 numpy
 pillow
+tifffile
 scikit-image
 pyyaml
 tensorboard
-matplotlib
-tifffile
 tqdm
-ipywidgets
-nbconvert
-nbclient
-jupyter
+matplotlib
 pytorch-msssim
