@@ -6,5 +6,4 @@ scikit-image
 pyyaml
 tensorboard
 tqdm
-matplotlib
 pytorch-msssim

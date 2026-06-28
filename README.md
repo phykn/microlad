@@ -5,7 +5,8 @@ MicroLad-style 2D-to-3D microstructure generation.
 This repo trains on 2D grayscale or phase image patches, then generates a 3D candidate. During inference, observed 2D slices can be fixed at specified positions, and target statistics from a slice bundle can guide SDS refinement.
 
 The active implementation is in `src`. Legacy reference folders and old notebooks are not part of the maintained workflow.
-Training data and model checkpoints are not checked in.
+A small sample image is checked in under `data/` so the default config can be smoke-tested.
+Real training datasets and model checkpoints are not checked in.
 
 ## Install
 
@@ -21,7 +22,8 @@ such as `from src.build import load_predictor` resolve.
 
 - VAE config: `config/vae.yaml`
 - Diffusion config: `config/diffusion.yaml`
-- Put training images outside the repo or in a local folder, then set `data.data_dir` in the config.
+- The default `data.data_dir` points at the checked-in sample image.
+- For real training, put images outside the repo or in a folder ignored by your local git exclude, then set `data.data_dir` in the config.
 - Train VAE first, then train diffusion.
 - For local diffusion training, set `output.vae_run_dir` in `config/diffusion.yaml` to the VAE run folder before launching `run_train_diffusion.py`.
 
