@@ -79,7 +79,12 @@ class DiffusionSampler:
     def _validate_shape(self, shape: Sequence[int]) -> tuple[int, int, int, int]:
         if len(shape) != 4:
             raise ValueError("shape must be [B, C, H, W].")
-        shape = tuple(int(value) for value in shape)
+        if any(
+            not isinstance(value, int) or isinstance(value, bool)
+            for value in shape
+        ):
+            raise ValueError("shape values must be integers.")
+        shape = tuple(shape)
         if any(value <= 0 for value in shape):
             raise ValueError("shape values must be positive.")
         return shape

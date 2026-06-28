@@ -63,6 +63,11 @@ class PredictSamplerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "shape"):
             sampler.sample((1, 4, 4))
 
+        for shape in ((1.9, 1, 4, 4), ("2", 1, 4, 4), (True, 1, 4, 4)):
+            with self.subTest(shape=shape):
+                with self.assertRaisesRegex(ValueError, "shape"):
+                    sampler.sample(shape)
+
     def test_sample_lmpdd_returns_canonical_axis_order_after_rotating_between_steps(self):
         base = torch.arange(8, dtype=torch.float32).view(2, 1, 2, 2)
         ddpm = IdentityDDPM(timesteps=3)

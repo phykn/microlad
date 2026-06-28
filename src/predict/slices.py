@@ -3,7 +3,13 @@ from collections.abc import Sequence
 import torch
 
 
+def _validate_axis(axis: int) -> None:
+    if axis not in (0, 1, 2):
+        raise ValueError("axis must be 0, 1, or 2.")
+
+
 def extract_slice(volume: torch.Tensor, axis: int, index: int) -> torch.Tensor:
+    _validate_axis(axis)
     if axis == 0:
         return volume[index, :, :]
     if axis == 1:
@@ -17,6 +23,7 @@ def replace_slice(
     index: int,
     image: torch.Tensor,
 ) -> None:
+    _validate_axis(axis)
     if axis == 0:
         volume[index, :, :] = image
     elif axis == 1:

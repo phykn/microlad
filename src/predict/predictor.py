@@ -443,10 +443,14 @@ class Predictor:
         target_images: Sequence[np.ndarray] | None,
         volume_size: int,
     ) -> int | None:
-        if volume_size == self._image_size() or not self._uses_targets(options):
+        if not self._uses_targets(options):
             return None
 
         target_size = self._target_image_size(target_images)
+        if volume_size == self._image_size():
+            if target_size != self._image_size():
+                raise ValueError("target images must match vae.image_size.")
+            return None
         if target_size == self._image_size():
             return target_size
         if target_size == volume_size:

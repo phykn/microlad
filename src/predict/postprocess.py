@@ -5,12 +5,16 @@ from src.predict.types import MAX_UINT8_PHASES
 
 
 def quantize_phase(values: torch.Tensor, num_phases: int) -> torch.Tensor:
+    if not isinstance(num_phases, int) or isinstance(num_phases, bool):
+        raise ValueError("num_phases must be an integer.")
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
     if num_phases > MAX_UINT8_PHASES:
         raise ValueError(
             f"num_phases must be at most {MAX_UINT8_PHASES} for uint8 output."
         )
+    if not torch.isfinite(values).all():
+        raise ValueError("values must be finite.")
 
     scaled = (values.clamp(-1.0, 1.0) + 1.0) * 0.5 * (num_phases - 1)
     return scaled.round().to(torch.uint8)

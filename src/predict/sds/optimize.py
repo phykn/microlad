@@ -50,6 +50,22 @@ def optimize_volume(
         anchors=anchors,
         anchor_weight=anchor_weight,
     )
+    _validate_optimization_contract(
+        lr=lr,
+        sds_weight=sds_weight,
+        anchor_weight=anchor_weight,
+        anchor_target=None,
+        require_anchor_target=False,
+        vf_weight=vf_weight,
+        vf_targets=vf_targets,
+        tpc_weight=tpc_weight,
+        tpc_targets=tpc_targets,
+        sa_weight=sa_weight,
+        sa_targets=sa_targets,
+        diffusivity_weight=diffusivity_weight,
+        diffusivity_targets=diffusivity_targets,
+        diffusivity_solver=diffusivity_solver,
+    )
     anchor_targets = prepare_anchor_targets(
         anchors,
         volume_shape=volume.shape,
@@ -315,6 +331,46 @@ def _validate_inputs(
         raise ValueError("index must be inside the selected axis.")
     if steps < 0:
         raise ValueError("steps must be non-negative.")
+    _validate_optimization_contract(
+        lr=lr,
+        sds_weight=sds_weight,
+        anchor_weight=anchor_weight,
+        anchor_target=anchor_target,
+        vf_weight=vf_weight,
+        vf_targets=vf_targets,
+        tpc_weight=tpc_weight,
+        tpc_targets=tpc_targets,
+        sa_weight=sa_weight,
+        sa_targets=sa_targets,
+        diffusivity_weight=diffusivity_weight,
+        diffusivity_targets=diffusivity_targets,
+        diffusivity_solver=diffusivity_solver,
+    )
+
+    image_size = int(vae.image_size)
+    if extract_slice(volume, axis, index).shape != torch.Size(
+        [image_size, image_size]
+    ):
+        raise ValueError("selected slice shape must match vae.image_size.")
+
+
+def _validate_optimization_contract(
+    *,
+    lr: float,
+    sds_weight: float,
+    anchor_weight: float,
+    anchor_target: torch.Tensor | None,
+    require_anchor_target: bool = True,
+    vf_weight: float,
+    vf_targets: Mapping[int, float] | torch.Tensor | None,
+    tpc_weight: float,
+    tpc_targets: Mapping[int, torch.Tensor] | torch.Tensor | None,
+    sa_weight: float,
+    sa_targets: Mapping[int, float] | torch.Tensor | None,
+    diffusivity_weight: float,
+    diffusivity_targets: Mapping[int, float] | torch.Tensor | None,
+    diffusivity_solver: DiffusivitySolver | None,
+) -> None:
     if lr <= 0.0:
         raise ValueError("lr must be positive.")
     for name, weight in (
@@ -327,7 +383,7 @@ def _validate_inputs(
     ):
         if weight < 0.0:
             raise ValueError(f"{name} must be non-negative.")
-    if anchor_weight > 0.0 and anchor_target is None:
+    if require_anchor_target and anchor_weight > 0.0 and anchor_target is None:
         raise ValueError("anchor_target is required when anchor_weight is positive.")
     if vf_weight > 0.0 and vf_targets is None:
         raise ValueError("vf_targets is required when vf_weight is positive.")
@@ -342,10 +398,6 @@ def _validate_inputs(
     if diffusivity_weight > 0.0:
         if diffusivity_solver is None:
             raise ValueError("diffusivity_solver is required for diffusivity loss.")
-
-    image_size = int(vae.image_size)
-    if extract_slice(volume, axis, index).shape != torch.Size([image_size, image_size]):
-        raise ValueError("selected slice shape must match vae.image_size.")
 
 
 def _validate_volume_inputs(

@@ -39,6 +39,11 @@ class PredictOptions:
     refine_steps: int = 0
 
     def __post_init__(self) -> None:
+        if (
+            not isinstance(self.num_phases, int)
+            or isinstance(self.num_phases, bool)
+        ):
+            raise ValueError("num_phases must be an integer.")
         if self.num_phases < 2:
             raise ValueError("num_phases must be at least 2.")
         if self.num_phases > MAX_UINT8_PHASES:

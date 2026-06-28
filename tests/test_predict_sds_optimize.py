@@ -141,6 +141,29 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
                 num_phases=2,
             )
 
+    def test_optimize_volume_validates_optimizer_contract_when_steps_zero(self):
+        volume = torch.zeros(4, 4, 4)
+        common = dict(
+            volume=volume,
+            vae=IdentityVAE(),
+            diffusion_model=ZeroNoiseModel(),
+            ddpm=DDPM(timesteps=4),
+            steps=0,
+            slice_steps=0,
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+        )
+
+        with self.assertRaisesRegex(ValueError, "lr"):
+            optimize_volume(**common, lr=-1.0)
+
+        with self.assertRaisesRegex(ValueError, "sds_weight"):
+            optimize_volume(**common, lr=0.1, sds_weight=-1.0)
+
+        with self.assertRaisesRegex(ValueError, "vf_targets"):
+            optimize_volume(**common, lr=0.1, vf_weight=1.0)
+
     def test_optimize_volume_runs_scheduled_slices(self):
         volume = torch.zeros(4, 4, 4)
         vae = IdentityVAE()

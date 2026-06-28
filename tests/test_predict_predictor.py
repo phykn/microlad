@@ -41,6 +41,10 @@ class IdentityVAE(torch.nn.Module):
 
 
 class PredictOptionsTest(unittest.TestCase):
+    def test_predict_options_rejects_non_integer_num_phases(self):
+        with self.assertRaisesRegex(ValueError, "num_phases"):
+            PredictOptions(num_phases=2.5)
+
     def test_predict_options_rejects_num_phases_that_exceed_uint8_range(self):
         with self.assertRaisesRegex(ValueError, "num_phases"):
             PredictOptions(num_phases=257)
@@ -145,6 +149,19 @@ class PredictorTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "target_images"):
             predictor.predict(options)
+
+    def test_predict_rejects_small_volume_target_images_with_wrong_size(self):
+        predictor = Predictor(IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu")
+        options = PredictOptions(
+            num_phases=2,
+            sds_steps=1,
+            sds_weight=0.0,
+            sa_weight=1.0,
+        )
+        target_images = [np.zeros((4, 4), dtype=np.uint8)]
+
+        with self.assertRaisesRegex(ValueError, "target images"):
+            predictor.predict(options, target_images=target_images)
 
     def test_predict_accepts_exclusive_sds_t_max_equal_to_num_timesteps(self):
         predictor = Predictor(
