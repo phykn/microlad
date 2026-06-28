@@ -66,15 +66,44 @@ def _load_frozen_checkpoint(
     checkpoint_path: str | Path,
     device: torch.device,
     *state_dict_keys: str,
+    label: str = "model checkpoint",
 ) -> ModelT:
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    _load_model_checkpoint(model, checkpoint, *state_dict_keys)
+    checkpoint_path = _require_file(checkpoint_path, label)
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        _load_model_checkpoint(model, checkpoint, *state_dict_keys)
+    except Exception as exc:
+        raise ValueError(
+            f"{label} could not be loaded for model: {checkpoint_path}"
+        ) from exc
     freeze_module(model)
     return model
 
 
 def _last_model_path(run_dir: str | Path, component: str) -> Path:
     return Path(run_dir) / "weight" / component / "last" / "model.pt"
+
+
+def _require_file(path: str | Path, label: str) -> Path:
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"{label} is required: {path}")
+    return path
+
+
+def _require_config_value(config: dict, label: str, *names: str):
+    for name in names:
+        if name in config:
+            return config[name]
+    raise ValueError(f"{label} is missing required value: {' or '.join(names)}")
+
+
+def _require_config_values(config: dict, label: str, *names: str) -> None:
+    missing = [name for name in names if name not in config]
+    if missing:
+        raise ValueError(
+            f"{label} is missing required value: {', '.join(missing)}"
+        )
 
 
 def _get_arg(args: argparse.Namespace, *names: str, default=_MISSING):
@@ -108,13 +137,20 @@ def _yaml_safe_value(value):
     return value
 
 
-def load_config_defaults(config_path: str | Path | None) -> dict:
+def load_config_defaults(
+    config_path: str | Path | None,
+    *,
+    label: str = "config file",
+) -> dict:
     if not config_path:
         return {}
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f) or {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{label} is malformed: {config_path}") from exc
     if not isinstance(config, dict):
-        raise ValueError("config file must contain a mapping.")
+        raise ValueError(f"{label} must contain a mapping.")
     return _flatten_config(config)
 
 
@@ -146,18 +182,22 @@ def fill_diffusion_defaults_from_run(args: argparse.Namespace) -> argparse.Names
     if run_dir is None:
         return args
 
-    vae_config = load_config_defaults(Path(run_dir) / "vae.yaml")
-    if "image_size" in vae_config:
-        vae_size = vae_config["image_size"]
-    elif "size" in vae_config:
-        vae_size = vae_config["size"]
-    else:
-        raise KeyError("image_size or size")
+    vae_config = load_config_defaults(
+        _require_file(Path(run_dir) / "vae.yaml", "vae config"),
+        label="vae config",
+    )
+    vae_size = _require_config_value(vae_config, "vae config", "image_size", "size")
 
     for arg_name, value in (
         ("size", vae_size),
-        ("num_phases", vae_config["num_phases"]),
-        ("latent_ch", vae_config["latent_ch"]),
+        (
+            "num_phases",
+            _require_config_value(vae_config, "vae config", "num_phases"),
+        ),
+        (
+            "latent_ch",
+            _require_config_value(vae_config, "vae config", "latent_ch"),
+        ),
     ):
         existing = getattr(args, arg_name, None)
         if existing is not None and existing != value:
@@ -206,7 +246,14 @@ def load_frozen_vae(args: argparse.Namespace, device: torch.device) -> PatchVAE:
     if getattr(args, "vae_ckpt", None) is None:
         raise ValueError("vae_ckpt is required.")
     vae = _vae_model_from_args(args).to(device)
-    return _load_frozen_checkpoint(vae, args.vae_ckpt, device, "model", "vae")
+    return _load_frozen_checkpoint(
+        vae,
+        args.vae_ckpt,
+        device,
+        "model",
+        "vae",
+        label="vae checkpoint",
+    )
 
 
 def load_frozen_vae_from_run(
@@ -214,7 +261,13 @@ def load_frozen_vae_from_run(
     device: torch.device,
 ) -> PatchVAE:
     run_dir = Path(run_dir)
-    args = argparse.Namespace(**load_config_defaults(run_dir / "vae.yaml"))
+    vae_config = load_config_defaults(
+        _require_file(run_dir / "vae.yaml", "vae config"),
+        label="vae config",
+    )
+    _require_config_value(vae_config, "vae config", "image_size", "size")
+    _require_config_value(vae_config, "vae config", "latent_ch")
+    args = argparse.Namespace(**vae_config)
     args.vae_ckpt = _last_model_path(run_dir, "vae")
     return load_frozen_vae(args, device=device)
 
@@ -233,6 +286,7 @@ def load_frozen_diffusion_model(
         "model",
         "diffusion",
         "unet",
+        label="diffusion checkpoint",
     )
 
 
@@ -293,7 +347,20 @@ def build_predictor_from_run(
     device: torch.device,
 ) -> Predictor:
     run_dir = Path(run_dir)
-    args = argparse.Namespace(**load_config_defaults(run_dir / "diffusion.yaml"))
+    diffusion_config = load_config_defaults(
+        _require_file(run_dir / "diffusion.yaml", "diffusion config"),
+        label="diffusion config",
+    )
+    _require_config_values(
+        diffusion_config,
+        "diffusion config",
+        "base_ch",
+        "time_dim",
+        "timesteps",
+        "beta_start",
+        "beta_end",
+    )
+    args = argparse.Namespace(**diffusion_config)
     args.vae_run_dir = run_dir
     fill_diffusion_defaults_from_run(args)
     args.diffusion_ckpt = _last_model_path(run_dir, "diffusion")

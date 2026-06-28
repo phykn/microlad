@@ -33,12 +33,64 @@ from src.build import (
 )
 from src.data import PatchDataset
 from src.models import DDPM, PatchVAE, TimeUNet
-from src.predict import Predictor
+from src.predict import PredictOptions, Predictor
 from src.train import DiffusionTrainer, VAETrainer
 
 
 def save_image(path: Path, pixels: np.ndarray) -> None:
     Image.fromarray(pixels.astype(np.uint8)).save(path)
+
+
+def write_predictor_run(
+    run_dir: Path,
+    *,
+    image_size: int = 8,
+    latent_size: int = 4,
+    latent_ch: int = 2,
+    write_vae_checkpoint: bool = True,
+    write_diffusion_checkpoint: bool = True,
+    checkpoint_vae_latent_ch: int | None = None,
+) -> None:
+    vae_args = argparse.Namespace(
+        image_size=image_size,
+        latent_size=latent_size,
+        latent_ch=latent_ch,
+        base_ch=4,
+        max_ch=8,
+        num_phases=2,
+    )
+    diffusion_args = argparse.Namespace(
+        base_ch=4,
+        time_dim=8,
+        timesteps=4,
+        beta_start=0.01,
+        beta_end=0.02,
+    )
+
+    if write_vae_checkpoint:
+        checkpoint_vae_args = argparse.Namespace(
+            image_size=image_size,
+            latent_size=latent_size,
+            latent_ch=checkpoint_vae_latent_ch or latent_ch,
+            base_ch=4,
+            max_ch=8,
+            num_phases=2,
+        )
+        source_vae = build_vae(checkpoint_vae_args)
+        vae_ckpt = run_dir / "weight" / "vae" / "last" / "model.pt"
+        vae_ckpt.parent.mkdir(parents=True)
+        torch.save({"model": source_vae.state_dict()}, vae_ckpt)
+
+    if write_diffusion_checkpoint:
+        source_diffusion = build_diffusion_model(
+            argparse.Namespace(latent_ch=latent_ch, base_ch=4, time_dim=8)
+        )
+        diffusion_ckpt = run_dir / "weight" / "diffusion" / "last" / "model.pt"
+        diffusion_ckpt.parent.mkdir(parents=True)
+        torch.save({"model": source_diffusion.state_dict()}, diffusion_ckpt)
+
+    save_run_config(run_dir, vae_args, name="vae")
+    save_run_config(run_dir, diffusion_args, name="diffusion")
 
 
 class BuildTest(unittest.TestCase):
@@ -252,39 +304,113 @@ class BuildTest(unittest.TestCase):
     def test_load_predictor_uses_run_dir_for_notebook_use(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run"
-            vae_args = argparse.Namespace(
-                image_size=64,
-                latent_size=16,
-                latent_ch=2,
-                base_ch=8,
-                max_ch=16,
-                num_phases=2,
-            )
-            diffusion_args = argparse.Namespace(
-                base_ch=8,
-                time_dim=16,
-                timesteps=8,
-                beta_start=0.01,
-                beta_end=0.02,
-            )
-            source_vae = build_vae(vae_args)
-            source_diffusion = build_diffusion_model(
-                argparse.Namespace(latent_ch=2, base_ch=8, time_dim=16)
-            )
-            vae_ckpt = run_dir / "weight" / "vae" / "last" / "model.pt"
-            diffusion_ckpt = run_dir / "weight" / "diffusion" / "last" / "model.pt"
-            vae_ckpt.parent.mkdir(parents=True)
-            diffusion_ckpt.parent.mkdir(parents=True)
-            torch.save({"model": source_vae.state_dict()}, vae_ckpt)
-            torch.save({"model": source_diffusion.state_dict()}, diffusion_ckpt)
-            save_run_config(run_dir, vae_args, name="vae")
-            save_run_config(run_dir, diffusion_args, name="diffusion")
+            write_predictor_run(run_dir)
 
             predictor = load_predictor(run_dir, device="cpu")
+            volume, stats = predictor.predict(PredictOptions(num_phases=2))
 
         self.assertIsInstance(predictor, Predictor)
         self.assertEqual(predictor.device, torch.device("cpu"))
-        self.assertEqual(predictor.ddpm.num_timesteps, 8)
+        self.assertEqual(predictor.ddpm.num_timesteps, 4)
+        self.assertEqual(volume.shape, torch.Size([8, 8, 8]))
+        self.assertEqual(volume.dtype, torch.uint8)
+        self.assertIsInstance(stats, dict)
+
+    def test_load_predictor_reports_missing_diffusion_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+
+            with self.assertRaisesRegex(FileNotFoundError, "diffusion config"):
+                load_predictor(run_dir, device="cpu")
+
+    def test_load_predictor_reports_missing_diffusion_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            write_predictor_run(run_dir, write_diffusion_checkpoint=False)
+
+            with self.assertRaisesRegex(FileNotFoundError, "diffusion checkpoint"):
+                load_predictor(run_dir, device="cpu")
+
+    def test_load_predictor_reports_incompatible_vae_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            write_predictor_run(run_dir, checkpoint_vae_latent_ch=3)
+
+            with self.assertRaisesRegex(ValueError, "vae checkpoint"):
+                load_predictor(run_dir, device="cpu")
+
+    def test_load_predictor_reports_incomplete_vae_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            write_predictor_run(run_dir)
+            (run_dir / "vae.yaml").write_text(
+                "\n".join(
+                    [
+                        "image_size: 8",
+                        "latent_size: 4",
+                        "latent_ch: 2",
+                        "base_ch: 4",
+                        "max_ch: 8",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "vae config.*num_phases"):
+                load_predictor(run_dir, device="cpu")
+
+    def test_load_predictor_reports_incomplete_diffusion_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            write_predictor_run(run_dir)
+            (run_dir / "diffusion.yaml").write_text(
+                "\n".join(
+                    [
+                        "base_ch: 4",
+                        "time_dim: 8",
+                        "timesteps: 4",
+                        "beta_end: 0.02",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "diffusion config.*beta_start"):
+                load_predictor(run_dir, device="cpu")
+
+    def test_load_predictor_reports_malformed_vae_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            write_predictor_run(run_dir)
+            (run_dir / "vae.yaml").write_text("vae: [\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "vae config.*malformed"):
+                load_predictor(run_dir, device="cpu")
+
+    def test_load_predictor_reports_malformed_diffusion_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            write_predictor_run(run_dir)
+            (run_dir / "diffusion.yaml").write_text(
+                "diffusion: [\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "diffusion config.*malformed"):
+                load_predictor(run_dir, device="cpu")
+
+    def test_load_predictor_reports_corrupt_diffusion_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            write_predictor_run(run_dir)
+            (run_dir / "weight" / "diffusion" / "last" / "model.pt").write_text(
+                "not a checkpoint",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "diffusion checkpoint"):
+                load_predictor(run_dir, device="cpu")
 
     def test_fill_diffusion_defaults_from_run_uses_vae_config(self):
         with tempfile.TemporaryDirectory() as tmp:

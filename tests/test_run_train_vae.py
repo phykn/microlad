@@ -7,6 +7,9 @@ from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
+import torch
+
+from src.build import load_frozen_vae_from_run
 
 
 def load_script():
@@ -106,6 +109,45 @@ class RunTrainVAETest(unittest.TestCase):
         self.assertEqual(args.run_root, run_root.as_posix())
         self.assertEqual(args.size, 64)
         self.assertEqual(args.num_phases, 2)
+
+    def test_main_trains_one_step_and_writes_checkpoint(self):
+        script = load_script()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_dir = root / "data"
+            data_dir.mkdir()
+            write_image(data_dir / "phase.png")
+            run_root = root / "run"
+            config = root / "vae.yaml"
+            write_config(config, data_dir, run_root)
+
+            old_config = script.DEFAULT_CONFIG
+            script.DEFAULT_CONFIG = str(config)
+            self.addCleanup(setattr, script, "DEFAULT_CONFIG", old_config)
+            with patch.object(sys, "argv", ["run_train_vae.py"]):
+                script.main()
+
+            run_dirs = list(run_root.iterdir())
+            self.assertEqual(len(run_dirs), 1)
+            run_dir = run_dirs[0]
+            self.assertTrue((run_dir / "vae.yaml").is_file())
+            self.assertTrue((run_dir / "log" / "vae").is_dir())
+            self.assertTrue(
+                list((run_dir / "log" / "vae").glob("events.out.tfevents.*"))
+            )
+            self.assertTrue((run_dir / "weight" / "vae" / "1" / "model.pt").is_file())
+            checkpoint_path = run_dir / "weight" / "vae" / "last" / "model.pt"
+            self.assertTrue(checkpoint_path.is_file())
+            checkpoint = torch.load(checkpoint_path, map_location="cpu")
+            self.assertEqual(checkpoint["step"], 1)
+            self.assertIn("model", checkpoint)
+            self.assertIn("optimizer", checkpoint)
+            vae = load_frozen_vae_from_run(run_dir, torch.device("cpu"))
+
+        self.assertFalse(vae.training)
+        self.assertTrue(
+            all(not parameter.requires_grad for parameter in vae.parameters())
+        )
 
     def test_main_closes_trainer_when_training_raises(self):
         script = load_script()
