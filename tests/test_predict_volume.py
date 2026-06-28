@@ -9,7 +9,7 @@ class FakeSampler:
     def __init__(self) -> None:
         self.calls: list[tuple[int, int, int, int]] = []
 
-    def sample_lmpdd(self, shape):
+    def sample_lmpdd(self, shape, **kwargs):
         shape = tuple(shape)
         self.calls.append(shape)
         return torch.zeros(shape)

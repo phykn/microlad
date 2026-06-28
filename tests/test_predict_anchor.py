@@ -5,6 +5,17 @@ import torch
 
 from src.predict import AnchorSlice
 from src.predict.anchor import prepare_anchor_image, validate_anchor, validate_anchors
+from src.predict.anchor.latent import prepare_anchor_latents
+
+
+class IdentityVAE(torch.nn.Module):
+    image_size = 2
+    latent_size = 2
+    latent_ch = 1
+    downsample_factor = 1
+
+    def encode(self, image: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        return image.clone(), torch.zeros_like(image)
 
 
 class PredictAnchorTest(unittest.TestCase):
@@ -58,6 +69,51 @@ class PredictAnchorTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "Duplicate"):
             validate_anchors(anchors, volume_shape=(4, 5, 6))
+
+    def test_prepare_anchor_latents_maps_axis_zero(self):
+        anchor = AnchorSlice(image=np.ones((2, 2), dtype=np.uint8), axis=0, index=1)
+
+        latent, mask = prepare_anchor_latents(
+            IdentityVAE(),
+            [anchor],
+            num_phases=2,
+            segment=False,
+            device=torch.device("cpu"),
+        )
+
+        self.assertTrue(torch.equal(latent[1], torch.ones(1, 2, 2)))
+        self.assertTrue(torch.equal(mask[1], torch.ones(1, 2, 2)))
+        self.assertTrue(torch.equal(mask[0], torch.zeros(1, 2, 2)))
+
+    def test_prepare_anchor_latents_maps_axis_one(self):
+        anchor = AnchorSlice(image=np.ones((2, 2), dtype=np.uint8), axis=1, index=1)
+
+        latent, mask = prepare_anchor_latents(
+            IdentityVAE(),
+            [anchor],
+            num_phases=2,
+            segment=False,
+            device=torch.device("cpu"),
+        )
+
+        self.assertTrue(torch.equal(latent[:, :, 1, :], torch.ones(2, 1, 2)))
+        self.assertTrue(torch.equal(mask[:, :, 1, :], torch.ones(2, 1, 2)))
+        self.assertTrue(torch.equal(mask[:, :, 0, :], torch.zeros(2, 1, 2)))
+
+    def test_prepare_anchor_latents_maps_axis_two(self):
+        anchor = AnchorSlice(image=np.ones((2, 2), dtype=np.uint8), axis=2, index=1)
+
+        latent, mask = prepare_anchor_latents(
+            IdentityVAE(),
+            [anchor],
+            num_phases=2,
+            segment=False,
+            device=torch.device("cpu"),
+        )
+
+        self.assertTrue(torch.equal(latent[:, :, :, 1], torch.ones(2, 1, 2)))
+        self.assertTrue(torch.equal(mask[:, :, :, 1], torch.ones(2, 1, 2)))
+        self.assertTrue(torch.equal(mask[:, :, :, 0], torch.zeros(2, 1, 2)))
 
 
 if __name__ == "__main__":

@@ -42,9 +42,20 @@ class DiffusionSampler:
         return x
 
     @torch.no_grad()
-    def sample_lmpdd(self, shape: Sequence[int]) -> torch.Tensor:
+    def sample_lmpdd(
+        self,
+        shape: Sequence[int],
+        *,
+        anchor_latent: torch.Tensor | None = None,
+        anchor_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         shape = self._validate_shape(shape)
         self._validate_lmpdd_shape(shape)
+        anchor_latent, anchor_mask = self._prepare_anchor(
+            shape,
+            anchor_latent=anchor_latent,
+            anchor_mask=anchor_mask,
+        )
 
         self.model.eval()
         x = torch.randn(shape, device=self.device)
@@ -52,8 +63,13 @@ class DiffusionSampler:
         for step in range(self.ddpm.num_timesteps - 1, -1, -1):
             t = torch.full((batch_size,), step, dtype=torch.long, device=self.device)
             x = self.ddpm.p_sample(self.model, x, t)
+            if anchor_latent is not None and anchor_mask is not None:
+                x = self._blend_anchor(x, anchor_latent, anchor_mask, step)
             if step > 0:
-                x = x.transpose(0, 2).transpose(3, 0).contiguous()
+                x = self._rotate_lmpdd(x)
+                if anchor_latent is not None and anchor_mask is not None:
+                    anchor_latent = self._rotate_lmpdd(anchor_latent)
+                    anchor_mask = self._rotate_lmpdd(anchor_mask)
         return x
 
     def _validate_shape(self, shape: Sequence[int]) -> tuple[int, int, int, int]:
@@ -114,3 +130,6 @@ class DiffusionSampler:
             )
             anchor = self.ddpm.q_sample(anchor_latent, t)
         return x * (1.0 - anchor_mask) + anchor * anchor_mask
+
+    def _rotate_lmpdd(self, x: torch.Tensor) -> torch.Tensor:
+        return x.transpose(0, 2).transpose(3, 0).contiguous()

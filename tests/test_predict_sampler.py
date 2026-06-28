@@ -77,6 +77,27 @@ class PredictSamplerTest(unittest.TestCase):
         self.assertTrue(torch.equal(latent, expected))
         self.assertEqual(ddpm.steps, [2, 1, 0])
 
+    def test_sample_lmpdd_blends_anchor_latent(self):
+        sampler = DiffusionSampler(
+            RecordingDenoiser(),
+            IdentityDDPM(timesteps=1),
+            device="cpu",
+        )
+        anchor_latent = torch.zeros(2, 1, 2, 2)
+        anchor_latent[1] = 1.0
+        anchor_mask = torch.zeros(2, 1, 2, 2)
+        anchor_mask[1] = 1.0
+
+        with patch("torch.randn", return_value=torch.zeros(2, 1, 2, 2)):
+            latent = sampler.sample_lmpdd(
+                (2, 1, 2, 2),
+                anchor_latent=anchor_latent,
+                anchor_mask=anchor_mask,
+            )
+
+        self.assertTrue(torch.equal(latent[1], torch.ones(1, 2, 2)))
+        self.assertTrue(torch.equal(latent[0], torch.zeros(1, 2, 2)))
+
     def test_sample_lmpdd_rejects_non_cubic_latent_shape(self):
         sampler = DiffusionSampler(RecordingDenoiser(), DDPM(timesteps=2), device="cpu")
 

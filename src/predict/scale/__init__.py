@@ -1,4 +1,3 @@
-from src.predict.scale.anchor import apply_anchor_slices
 from src.predict.scale.decode import decode_large_latent_volume
 from src.predict.scale.denoise import denoise_tiled_plane
 from src.predict.scale.refine import refine_large_volume

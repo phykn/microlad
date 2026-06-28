@@ -7,6 +7,8 @@ def generate_initial_volume(
     vae: torch.nn.Module,
     *,
     size: int | None = None,
+    anchor_latent: torch.Tensor | None = None,
+    anchor_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     if size is None:
         size = int(vae.image_size)
@@ -18,7 +20,9 @@ def generate_initial_volume(
     vae.eval()
 
     latent_batch = sampler.sample_lmpdd(
-        (latent_size, latent_ch, latent_size, latent_size)
+        (latent_size, latent_ch, latent_size, latent_size),
+        anchor_latent=anchor_latent,
+        anchor_mask=anchor_mask,
     )
     latent = latent_batch.permute(1, 0, 2, 3).contiguous()
     return decode_latent_volume(vae, latent)

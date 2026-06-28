@@ -16,6 +16,9 @@ class IdentityDDPM:
         self.steps.append(int(t[0].item()))
         return x
 
+    def q_sample(self, x_start: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return x_start
+
 
 class ZeroDenoiser(torch.nn.Module):
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
@@ -92,12 +95,12 @@ class PredictorTest(unittest.TestCase):
         self.assertIn("vf", stats)
         self.assertIn("loss", stats)
 
-    def test_predict_applies_anchor_without_sds_steps(self):
+    def test_predict_blends_anchor_latent_without_forced_overwrite(self):
         predictor = Predictor(IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu")
         anchor = AnchorSlice(
             image=np.ones((2, 2), dtype=np.uint8),
             axis=0,
-            index=0,
+            index=1,
         )
 
         with patch("torch.randn", return_value=torch.zeros(2, 1, 2, 2)):
@@ -106,7 +109,8 @@ class PredictorTest(unittest.TestCase):
                 options=PredictOptions(num_phases=2),
             )
 
-        self.assertTrue(torch.equal(volume[0], torch.ones(2, 2, dtype=torch.uint8)))
+        self.assertTrue(torch.equal(volume[1], torch.ones(2, 2, dtype=torch.uint8)))
+        self.assertTrue(torch.equal(volume[0], torch.zeros(2, 2, dtype=torch.uint8)))
         self.assertIsInstance(stats, dict)
 
     def test_predict_rejects_target_loss_without_target_images(self):
@@ -134,7 +138,7 @@ class PredictorTest(unittest.TestCase):
         self.assertEqual(volume.dtype, torch.uint8)
         self.assertIsInstance(stats, dict)
 
-    def test_predict_uses_anchor_size_for_large_volume(self):
+    def test_predict_uses_anchor_size_without_overwriting_large_volume(self):
         predictor = Predictor(
             IdentityVAE(),
             ZeroDenoiser(),
@@ -153,7 +157,7 @@ class PredictorTest(unittest.TestCase):
                 anchors=[anchor],
             )
 
-        self.assertTrue(torch.equal(volume[1], torch.ones(4, 4, dtype=torch.uint8)))
+        self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
 
     def test_predict_refines_large_volume_when_enabled(self):
         predictor = Predictor(
@@ -197,7 +201,7 @@ class PredictorTest(unittest.TestCase):
                 anchors=[anchor],
             )
 
-        self.assertTrue(torch.equal(volume[1], torch.ones(4, 4, dtype=torch.uint8)))
+        self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
         self.assertIn("steps", stats)
 
     def test_predict_runs_scale_sds_with_large_target_images(self):

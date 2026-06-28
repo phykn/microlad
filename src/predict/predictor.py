@@ -6,8 +6,9 @@ import torch
 from src.predict.postprocess import quantize_phase
 from src.predict.refine import three_axis_refinement
 from src.predict.sampler import DiffusionSampler
+from src.predict.anchor import validate_anchors
+from src.predict.anchor.latent import prepare_anchor_latents
 from src.predict.scale import (
-    apply_anchor_slices,
     decode_large_latent_volume,
     refine_large_volume,
     optimize_large_volume,
@@ -46,9 +47,14 @@ class Predictor:
             anchors=anchors,
             volume_size=volume_size,
         )
+        self._validate_anchors(anchors, volume_size)
         self._validate_predict_inputs(options, target_images=target_images)
 
-        volume, stats = self._generate_volume(volume_size)
+        volume, stats = self._generate_volume(
+            volume_size,
+            options=options,
+            anchors=anchors,
+        )
 
         if options.sds_steps > 0:
             volume, stats = self._run_sds(
@@ -61,22 +67,29 @@ class Predictor:
         if options.refine_steps > 0:
             volume = self._refine_volume(volume, options.refine_steps)
 
-        if anchors:
-            volume = apply_anchor_slices(
-                volume,
+        return quantize_phase(volume, options.num_phases), stats
+
+    def _generate_volume(
+        self,
+        volume_size: int,
+        *,
+        options: PredictOptions,
+        anchors: Sequence[AnchorSlice] | None,
+    ) -> tuple[torch.Tensor, dict]:
+        if volume_size == self._image_size():
+            anchor_latent, anchor_mask = prepare_anchor_latents(
+                self.vae,
                 anchors,
                 num_phases=options.num_phases,
                 segment=options.anchor_segment,
+                device=self.device,
             )
-
-        return quantize_phase(volume, options.num_phases), stats
-
-    def _generate_volume(self, volume_size: int) -> tuple[torch.Tensor, dict]:
-        if volume_size == self._image_size():
             volume = generate_initial_volume(
                 self.sampler,
                 self.vae,
                 size=self._image_size(),
+                anchor_latent=anchor_latent,
+                anchor_mask=anchor_mask,
             ).to(self.device)
             return volume, {}
 
@@ -286,6 +299,14 @@ class Predictor:
             elif size != int(height):
                 raise ValueError("anchor images must have the same size.")
         return size
+
+    def _validate_anchors(
+        self,
+        anchors: Sequence[AnchorSlice] | None,
+        volume_size: int,
+    ) -> None:
+        if anchors:
+            validate_anchors(anchors, (volume_size, volume_size, volume_size))
 
     def _scale_latent_size(
         self,
