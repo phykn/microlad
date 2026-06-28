@@ -2,7 +2,10 @@
 
 MicroLad-style 2D-to-3D microstructure generation.
 
-This repo trains on 2D grayscale image patches, then generates a 3D candidate. During inference, one or more observed 2D slices can be fixed inside the generated volume.
+This repo trains on 2D grayscale or phase image patches, then generates a 3D candidate. During inference, observed 2D slices can be fixed at specified positions, and target statistics from a slice bundle can guide SDS refinement.
+
+The active implementation is in `src`. Legacy reference folders and old notebooks are not part of the maintained workflow.
+Training data and model checkpoints are not checked in.
 
 ## Install
 
@@ -12,60 +15,83 @@ python -m pip install -r requirements.txt
 
 ## Config
 
-- VAE config: `config/train_vae.yaml`
-- UNet config: `config/train_unet.yaml`
-- Put training images in `data.data_dir`.
-- Train VAE first, then train UNet.
-- `checkpoints.vae_ckpt` is required for UNet training.
-- `checkpoints.unet_ckpt` is only for resuming a UNet.
+- VAE config: `config/vae.yaml`
+- Diffusion config: `config/diffusion.yaml`
+- Put training images outside the repo or in a local folder, then set `data.data_dir` in the config.
+- Train VAE first, then train diffusion.
+- Set `output.vae_run_dir` in `config/diffusion.yaml` to the VAE run folder before diffusion training.
 
 ## Train
 
 ```sh
 python run_train_vae.py
-python run_train_unet.py
+python run_train_diffusion.py
 ```
 
 DDP:
 
 ```sh
 torchrun --nproc_per_node 4 run_train_vae.py
-torchrun --nproc_per_node 4 run_train_unet.py
+torchrun --nproc_per_node 4 run_train_diffusion.py
 ```
 
-## Predict
+Training writes to `run/<timestamp>` by default.
 
-```python
-from src.inference import MicroLadPredictor
-from src.models import DDPM
+A VAE run contains:
 
-predictor = MicroLadPredictor(
-    vae=vae,
-    unet=unet,
-    ddpm=DDPM(timesteps=1000, device=device),
-    device=device,
-)
-
-volume = predictor.predict()["volume"]
+```text
+run/<timestamp>/
+  vae.yaml
+  weight/
+    vae/last/model.pt
 ```
 
-With an observed slice:
+A diffusion run copies the VAE config and last VAE checkpoint, then adds diffusion state:
 
-```python
-volume = predictor.predict({
-    "size": 64,
-    "images": [{"image": condition_image, "axis": 0, "index": 12}],
-})["volume"]
+```text
+run/<timestamp>/
+  vae.yaml
+  diffusion.yaml
+  weight/
+    vae/last/model.pt
+    diffusion/last/model.pt
 ```
-
-`condition_image` can be a numpy array or torch tensor. It is converted to grayscale and normalized before entering the model.
 
 ## Data Shape
 
 - 2D images: `H x W`
-- 3D TIFF stack: `D x H x W`
-- Dataset output: `[1, H, W]`, float, `0..1`
-- Generated volume: `[D, 1, H, W]`
+- Dataset output: `[1, H, W]`, float, `-1..1`
+- VAE latent: `[C, 16, 16]` by default
+- Dataset inputs are loaded as grayscale `uint8`.
+- If `segment: true`, images are segmented into `num_phases` before scaling to `-1..1`.
+
+## Predict
+
+Load a trained run folder and call `predict`:
+
+```python
+from src.build import load_predictor
+from src.predict import AnchorSlice, PredictOptions
+
+predictor = load_predictor("run/20260628-xxxxxx", device="cuda")
+
+options = PredictOptions(
+    num_phases=3,
+    sds_steps=0,
+    refine_steps=0,
+)
+
+volume, stats = predictor.predict(options)
+```
+
+Anchors are full 2D slices fixed at a volume axis and index:
+
+```python
+anchor = AnchorSlice(image=anchor_image, axis=0, index=32)
+volume, stats = predictor.predict(options, anchors=[anchor])
+```
+
+For scale-up, pass a larger `volume_size` or provide larger anchor slices. Target-image bundles can be passed with SDS target weights such as `vf_weight`, `tpc_weight`, `sa_weight`, or `diffusivity_weight`.
 
 ## Reference
 

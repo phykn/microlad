@@ -1,0 +1,92 @@
+import unittest
+
+import torch
+
+from src.predict.sds import volume_fraction_loss
+
+
+class PredictSDSVolumeFractionTest(unittest.TestCase):
+    def test_volume_fraction_loss_matches_each_phase_fraction_directly(self):
+        values = torch.tensor([[-1.0, 0.0, 1.0]])
+        targets = {0: 1.0 / 3.0, 1: 1.0 / 3.0, 2: 1.0 / 3.0}
+
+        loss, stats = volume_fraction_loss(
+            values,
+            targets,
+            num_phases=3,
+            temperature=0.01,
+        )
+
+        self.assertLess(float(loss), 1e-4)
+        self.assertTrue(
+            torch.allclose(
+                stats["actual_vf"],
+                torch.tensor([1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]),
+                atol=1e-3,
+            )
+        )
+        self.assertTrue(
+            torch.allclose(
+                stats["target_vf"],
+                torch.tensor([1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]),
+            )
+        )
+
+    def test_volume_fraction_loss_handles_more_than_three_phases(self):
+        values = torch.tensor([-1.0, -1.0 / 3.0, 1.0 / 3.0, 1.0])
+        targets = torch.tensor([0.25, 0.25, 0.25, 0.25])
+
+        loss, stats = volume_fraction_loss(
+            values,
+            targets,
+            num_phases=4,
+            temperature=0.01,
+        )
+
+        self.assertLess(float(loss), 1e-4)
+        self.assertTrue(
+            torch.allclose(
+                stats["actual_vf"],
+                torch.tensor([0.25, 0.25, 0.25, 0.25]),
+                atol=1e-3,
+            )
+        )
+
+    def test_volume_fraction_loss_is_differentiable(self):
+        values = torch.tensor([[[-0.5, 0.5], [0.25, -0.25]]], requires_grad=True)
+
+        loss, _ = volume_fraction_loss(
+            values,
+            {0: 0.5, 1: 0.5},
+            num_phases=2,
+        )
+        loss.backward()
+
+        self.assertIsNotNone(values.grad)
+        self.assertEqual(values.grad.shape, values.shape)
+
+    def test_volume_fraction_loss_rejects_invalid_inputs(self):
+        with self.assertRaisesRegex(ValueError, "num_phases"):
+            volume_fraction_loss(torch.zeros(1), {0: 1.0}, num_phases=1)
+        with self.assertRaisesRegex(ValueError, "targets"):
+            volume_fraction_loss(torch.zeros(1), {0: 1.0}, num_phases=2)
+        with self.assertRaisesRegex(ValueError, "sum"):
+            volume_fraction_loss(torch.zeros(1), {0: 0.2, 1: 0.2}, num_phases=2)
+        with self.assertRaisesRegex(ValueError, "temperature"):
+            volume_fraction_loss(
+                torch.zeros(1),
+                {0: 0.5, 1: 0.5},
+                num_phases=2,
+                temperature=0.0,
+            )
+        with self.assertRaisesRegex(ValueError, "weight"):
+            volume_fraction_loss(
+                torch.zeros(1),
+                {0: 0.5, 1: 0.5},
+                num_phases=2,
+                weight=-1.0,
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

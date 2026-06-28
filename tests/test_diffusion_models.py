@@ -1,0 +1,97 @@
+import unittest
+
+import torch
+
+from src.models import DDPM, TimeUNet
+
+
+class DDPMTest(unittest.TestCase):
+    def test_q_sample_uses_closed_form_noise_formula(self):
+        ddpm = DDPM(timesteps=4, beta_start=0.1, beta_end=0.2)
+        x_start = torch.ones(2, 3, 4, 4)
+        noise = torch.full_like(x_start, 2.0)
+        t = torch.tensor([0, 3], dtype=torch.long)
+
+        noisy = ddpm.q_sample(x_start, t, noise=noise)
+
+        expected = (
+            ddpm.sqrt_alphas_cumprod[t].view(2, 1, 1, 1) * x_start
+            + ddpm.sqrt_one_minus_alphas_cumprod[t].view(2, 1, 1, 1) * noise
+        )
+        self.assertTrue(torch.allclose(noisy, expected))
+
+    def test_add_noise_matches_q_sample(self):
+        ddpm = DDPM(timesteps=4)
+        x_start = torch.randn(2, 3, 4, 4)
+        noise = torch.randn_like(x_start)
+        t = torch.tensor([1, 2], dtype=torch.long)
+
+        self.assertTrue(
+            torch.allclose(
+                ddpm.add_noise(x_start, t, noise=noise),
+                ddpm.q_sample(x_start, t, noise=noise),
+            )
+        )
+
+    def test_sample_timesteps_returns_integer_batch(self):
+        ddpm = DDPM(timesteps=8)
+
+        t = ddpm.sample_timesteps(batch_size=5)
+
+        self.assertEqual(t.shape, torch.Size([5]))
+        self.assertEqual(t.dtype, torch.long)
+        self.assertGreaterEqual(int(t.min()), 0)
+        self.assertLess(int(t.max()), 8)
+
+    def test_p_sample_preserves_shape(self):
+        class ZeroNoise(torch.nn.Module):
+            def forward(self, x, t):
+                return torch.zeros_like(x)
+
+        ddpm = DDPM(timesteps=4)
+        x = torch.randn(2, 3, 4, 4)
+        t = torch.tensor([0, 2], dtype=torch.long)
+
+        sample = ddpm.p_sample(ZeroNoise(), x, t)
+
+        self.assertEqual(sample.shape, x.shape)
+
+    def test_rejects_invalid_timesteps(self):
+        ddpm = DDPM(timesteps=4)
+        x = torch.randn(2, 3, 4, 4)
+
+        with self.assertRaisesRegex(ValueError, "shape"):
+            ddpm.q_sample(x, torch.tensor([[0, 1]], dtype=torch.long))
+        with self.assertRaisesRegex(ValueError, "integer"):
+            ddpm.q_sample(x, torch.tensor([0.0, 1.0]))
+        with self.assertRaisesRegex(ValueError, "schedule"):
+            ddpm.q_sample(x, torch.tensor([0, 4], dtype=torch.long))
+
+
+class TimeUNetTest(unittest.TestCase):
+    def test_forward_predicts_noise_with_same_shape_as_latent(self):
+        model = TimeUNet(latent_ch=4, base_ch=8, time_dim=16)
+        x = torch.randn(2, 4, 16, 16)
+        t = torch.tensor([0, 9], dtype=torch.long)
+
+        noise = model(x, t)
+
+        self.assertEqual(noise.shape, x.shape)
+
+    def test_rejects_wrong_latent_shape(self):
+        model = TimeUNet(latent_ch=4, base_ch=8, time_dim=16)
+
+        with self.assertRaisesRegex(ValueError, "shape"):
+            model(torch.randn(2, 3, 16, 16), torch.tensor([0, 1]))
+        with self.assertRaisesRegex(ValueError, "divisible"):
+            model(torch.randn(2, 4, 15, 16), torch.tensor([0, 1]))
+
+    def test_rejects_wrong_timestep_shape(self):
+        model = TimeUNet(latent_ch=4, base_ch=8, time_dim=16)
+
+        with self.assertRaisesRegex(ValueError, "timesteps"):
+            model(torch.randn(2, 4, 16, 16), torch.tensor([[0, 1]]))
+
+
+if __name__ == "__main__":
+    unittest.main()

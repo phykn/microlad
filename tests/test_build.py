@@ -1,0 +1,335 @@
+import argparse
+import tempfile
+import unittest
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+import torch
+
+from src.build import (
+    build_dataset,
+    build_ddpm,
+    build_diffusion_model,
+    build_predictor_from_run,
+    build_diffusion_trainer,
+    build_loader,
+    build_vae,
+    build_optimizer,
+    build_vae_trainer,
+    copy_vae_run,
+    fill_diffusion_defaults_from_run,
+    load_frozen_diffusion_model,
+    load_predictor,
+    load_frozen_vae_from_run,
+    load_frozen_vae,
+    load_config_defaults,
+    save_run_config,
+)
+from src.data import PatchDataset
+from src.models import DDPM, PatchVAE, TimeUNet
+from src.predict import Predictor
+from src.train import DiffusionTrainer, VAETrainer
+
+
+def save_image(path: Path, pixels: np.ndarray) -> None:
+    Image.fromarray(pixels.astype(np.uint8)).save(path)
+
+
+class BuildTest(unittest.TestCase):
+    def test_load_config_defaults_flattens_nested_yaml(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "train.yaml"
+            path.write_text(
+                "\n".join(
+                    [
+                        "data:",
+                        "  data_dir: data",
+                        "  crop_size: 64",
+                        "training:",
+                        "  steps: 10",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            defaults = load_config_defaults(path)
+
+        self.assertEqual(
+            defaults,
+            {
+                "data_dir": "data",
+                "crop_size": 64,
+                "steps": 10,
+            },
+        )
+
+    def test_build_dataset_expands_image_files_from_data_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            save_image(root / "b.png", np.zeros((8, 8), dtype=np.uint8))
+            save_image(root / "a.png", np.ones((8, 8), dtype=np.uint8))
+            (root / "ignore.txt").write_text("x", encoding="utf-8")
+            args = argparse.Namespace(
+                data_dir=root,
+                crop_size=8,
+                size=4,
+                num_phases=2,
+                segment=False,
+                augment=False,
+            )
+
+            dataset = build_dataset(args)
+
+        self.assertIsInstance(dataset, PatchDataset)
+        self.assertEqual([path.name for path in dataset.image_paths], ["a.png", "b.png"])
+        self.assertEqual(dataset.crop_size, 8)
+        self.assertEqual(dataset.size, 4)
+
+    def test_build_loader_samples_batch_with_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            save_image(root / "phase.png", np.zeros((8, 8), dtype=np.uint8))
+            args = argparse.Namespace(
+                data_dir=root,
+                crop_size=8,
+                size=4,
+                num_phases=2,
+                segment=False,
+                augment=False,
+                batch_size=8,
+            )
+            dataset = build_dataset(args)
+            loader = build_loader(
+                dataset,
+                args,
+                device=torch.device("cpu"),
+            )
+
+            batch = next(loader)
+
+        self.assertEqual(len(dataset), 1)
+        self.assertEqual(batch.shape, torch.Size([8, 1, 4, 4]))
+
+    def test_build_vae_uses_model_config(self):
+        args = argparse.Namespace(
+            image_size=64,
+            latent_size=16,
+            latent_ch=2,
+            base_ch=8,
+            max_ch=16,
+        )
+
+        vae = build_vae(args)
+
+        self.assertIsInstance(vae, PatchVAE)
+        self.assertEqual(vae.image_size, 64)
+        self.assertEqual(vae.latent_size, 16)
+        self.assertEqual(vae.latent_ch, 2)
+        self.assertEqual(vae.channels, (8, 16, 16))
+
+    def test_load_frozen_vae_loads_checkpoint_and_disables_gradients(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = argparse.Namespace(
+                image_size=64,
+                latent_size=16,
+                latent_ch=2,
+                base_ch=8,
+                max_ch=16,
+                vae_ckpt=Path(tmp) / "vae.pt",
+            )
+            source = build_vae(args)
+            with torch.no_grad():
+                for parameter in source.parameters():
+                    parameter.fill_(0.5)
+            torch.save({"model": source.state_dict()}, args.vae_ckpt)
+
+            vae = load_frozen_vae(args, device=torch.device("cpu"))
+
+        self.assertIsInstance(vae, PatchVAE)
+        self.assertFalse(vae.training)
+        self.assertTrue(all(not parameter.requires_grad for parameter in vae.parameters()))
+        self.assertTrue(
+            all(
+                torch.allclose(parameter, torch.full_like(parameter, 0.5))
+                for parameter in vae.parameters()
+            )
+        )
+
+    def test_load_frozen_diffusion_model_loads_checkpoint_and_disables_gradients(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = argparse.Namespace(
+                latent_ch=2,
+                base_ch=8,
+                time_dim=16,
+                diffusion_ckpt=Path(tmp) / "diffusion.pt",
+            )
+            source = build_diffusion_model(args)
+            with torch.no_grad():
+                for parameter in source.parameters():
+                    parameter.fill_(0.25)
+            torch.save({"model": source.state_dict()}, args.diffusion_ckpt)
+
+            model = load_frozen_diffusion_model(args, device=torch.device("cpu"))
+
+        self.assertIsInstance(model, TimeUNet)
+        self.assertFalse(model.training)
+        self.assertTrue(all(not parameter.requires_grad for parameter in model.parameters()))
+        self.assertTrue(
+            all(
+                torch.allclose(parameter, torch.full_like(parameter, 0.25))
+                for parameter in model.parameters()
+            )
+        )
+
+    def test_build_diffusion_model_uses_model_config(self):
+        args = argparse.Namespace(latent_ch=4, base_ch=8, time_dim=16)
+
+        model = build_diffusion_model(args)
+
+        self.assertIsInstance(model, TimeUNet)
+        self.assertEqual(model.latent_ch, 4)
+        self.assertEqual(model.base_ch, 8)
+        self.assertEqual(model.time_dim, 16)
+
+    def test_save_run_config_writes_flat_config_yaml(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            args = argparse.Namespace(num_phases=3, vae_ckpt="vae.pt")
+
+            save_run_config(run_dir, args, name="vae")
+
+            defaults = load_config_defaults(run_dir / "vae.yaml")
+
+        self.assertEqual(defaults["num_phases"], 3)
+        self.assertEqual(defaults["vae_ckpt"], "vae.pt")
+
+    def test_load_frozen_vae_from_run_uses_vae_config_and_weight(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            args = argparse.Namespace(
+                image_size=64,
+                latent_size=16,
+                latent_ch=2,
+                base_ch=8,
+                max_ch=16,
+                num_phases=2,
+            )
+            source = build_vae(args)
+            with torch.no_grad():
+                for parameter in source.parameters():
+                    parameter.fill_(0.5)
+            checkpoint = run_dir / "weight" / "vae" / "last" / "model.pt"
+            checkpoint.parent.mkdir(parents=True)
+            torch.save({"model": source.state_dict()}, checkpoint)
+            save_run_config(run_dir, args, name="vae")
+
+            vae = load_frozen_vae_from_run(run_dir, device=torch.device("cpu"))
+
+        self.assertIsInstance(vae, PatchVAE)
+        self.assertFalse(vae.training)
+        self.assertTrue(all(not parameter.requires_grad for parameter in vae.parameters()))
+
+    def test_load_predictor_uses_run_dir_for_notebook_use(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            vae_args = argparse.Namespace(
+                image_size=64,
+                latent_size=16,
+                latent_ch=2,
+                base_ch=8,
+                max_ch=16,
+                num_phases=2,
+            )
+            diffusion_args = argparse.Namespace(
+                base_ch=8,
+                time_dim=16,
+                timesteps=8,
+                beta_start=0.01,
+                beta_end=0.02,
+            )
+            source_vae = build_vae(vae_args)
+            source_diffusion = build_diffusion_model(
+                argparse.Namespace(latent_ch=2, base_ch=8, time_dim=16)
+            )
+            vae_ckpt = run_dir / "weight" / "vae" / "last" / "model.pt"
+            diffusion_ckpt = run_dir / "weight" / "diffusion" / "last" / "model.pt"
+            vae_ckpt.parent.mkdir(parents=True)
+            diffusion_ckpt.parent.mkdir(parents=True)
+            torch.save({"model": source_vae.state_dict()}, vae_ckpt)
+            torch.save({"model": source_diffusion.state_dict()}, diffusion_ckpt)
+            save_run_config(run_dir, vae_args, name="vae")
+            save_run_config(run_dir, diffusion_args, name="diffusion")
+
+            predictor = load_predictor(run_dir, device="cpu")
+
+        self.assertIsInstance(predictor, Predictor)
+        self.assertEqual(predictor.device, torch.device("cpu"))
+        self.assertEqual(predictor.ddpm.num_timesteps, 8)
+
+    def test_fill_diffusion_defaults_from_run_uses_vae_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            save_run_config(
+                run_dir,
+                argparse.Namespace(
+                    size=64,
+                    latent_ch=2,
+                    num_phases=3,
+                ),
+                name="vae",
+            )
+            args = argparse.Namespace(vae_run_dir=run_dir)
+
+            filled = fill_diffusion_defaults_from_run(args)
+
+        self.assertIs(filled, args)
+        self.assertEqual(args.size, 64)
+        self.assertEqual(args.latent_ch, 2)
+        self.assertEqual(args.num_phases, 3)
+
+    def test_copy_vae_run_copies_config_and_last_weight_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "vae-run"
+            target = Path(tmp) / "diffusion-run"
+            save_run_config(
+                source,
+                argparse.Namespace(image_size=64, latent_ch=2, num_phases=3),
+                name="vae",
+            )
+            weight = source / "weight" / "vae" / "last" / "model.pt"
+            weight.parent.mkdir(parents=True)
+            torch.save({"model": {}}, weight)
+            extra = source / "weight" / "vae" / "1" / "model.pt"
+            extra.parent.mkdir(parents=True)
+            torch.save({"model": {}}, extra)
+
+            copy_vae_run(source, target)
+
+            self.assertTrue((target / "vae.yaml").is_file())
+            self.assertTrue((target / "weight" / "vae" / "last" / "model.pt").is_file())
+            self.assertFalse((target / "weight" / "vae" / "1").exists())
+
+    def test_build_ddpm_uses_diffusion_config(self):
+        args = argparse.Namespace(timesteps=8, beta_start=0.01, beta_end=0.02)
+
+        ddpm = build_ddpm(args, device=torch.device("cpu"))
+
+        self.assertIsInstance(ddpm, DDPM)
+        self.assertEqual(ddpm.num_timesteps, 8)
+        self.assertTrue(torch.allclose(ddpm.betas[0], torch.tensor(0.01)))
+        self.assertTrue(torch.allclose(ddpm.betas[-1], torch.tensor(0.02)))
+
+    def test_build_optimizer_uses_adamw_and_lr(self):
+        model = torch.nn.Linear(1, 1)
+        args = argparse.Namespace(lr=1e-3, weight_decay=0.01)
+
+        optimizer = build_optimizer(model, args)
+
+        self.assertIsInstance(optimizer, torch.optim.AdamW)
+        self.assertEqual(optimizer.param_groups[0]["lr"], 1e-3)
+        self.assertEqual(optimizer.param_groups[0]["weight_decay"], 0.01)
+
+
+if __name__ == "__main__":
+    unittest.main()

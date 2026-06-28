@@ -1,10 +1,18 @@
-.venv/
-venv/
+# Python
 __pycache__/
 *.pyc
+.venv/
+venv/
+
+# Local notes
 .obsidian/
 AGENTS.md
 docs/
-microlad-anode/
+
+# Generated outputs
+run/
 output/
+
+# Reference copies
+microlad-anode/
 reference/

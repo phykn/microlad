@@ -1,129 +1,154 @@
 import torch
 import torch.nn as nn
 
+from src.models.norm import norm_groups
+from src.models.shape import downsample_steps
+
+
+class ConvBlock(nn.Module):
+    def __init__(
+        self,
+        in_ch: int,
+        out_ch: int,
+        kernel_size: int = 3,
+        stride: int = 1,
+        padding: int = 1,
+    ) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, kernel_size, stride=stride, padding=padding),
+            nn.GroupNorm(norm_groups(out_ch), out_ch),
+            nn.SiLU(inplace=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
 
 class ResidualBlock(nn.Module):
-    def __init__(self, channels: int, num_groups: int = 16) -> None:
-        super().__init__()
-        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
-        self.gn1 = nn.GroupNorm(num_groups, channels)
-        self.act1 = nn.SiLU(inplace=True)
-        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
-        self.gn2 = nn.GroupNorm(num_groups, channels)
-        self.act2 = nn.SiLU(inplace=True)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h = self.act1(self.gn1(self.conv1(x)))
-        h = self.gn2(self.conv2(h))
-        return self.act2(x + h)
-
-
-class AttentionBlock(nn.Module):
     def __init__(self, channels: int) -> None:
         super().__init__()
-        self.norm = nn.GroupNorm(16, channels)
-        self.qkv = nn.Conv2d(channels, channels * 3, kernel_size=1)
-        self.proj_out = nn.Conv2d(channels, channels, kernel_size=1)
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.norm1 = nn.GroupNorm(norm_groups(channels), channels)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.norm2 = nn.GroupNorm(norm_groups(channels), channels)
+        self.act = nn.SiLU(inplace=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        b, c, h, w = x.shape
-        x_norm = self.norm(x)
-        q, k, v = self.qkv(x_norm).chunk(3, dim=1)
-        q = q.view(b, c, -1).permute(0, 2, 1)
-        k = k.view(b, c, -1)
-        v = v.view(b, c, -1).permute(0, 2, 1)
-        attn = torch.softmax(torch.bmm(q, k) * (c**-0.5), dim=-1)
-        out = torch.bmm(attn, v)
-        out = out.permute(0, 2, 1).view(b, c, h, w)
-        return x + self.proj_out(out)
+        h = self.act(self.norm1(self.conv1(x)))
+        h = self.norm2(self.conv2(h))
+        return self.act(x + h)
 
 
 class DownBlock(nn.Module):
     def __init__(self, in_ch: int, out_ch: int) -> None:
         super().__init__()
-        self.res1 = ResidualBlock(in_ch)
-        self.res2 = ResidualBlock(in_ch)
-        self.down = nn.Conv2d(in_ch, out_ch, kernel_size=4, stride=2, padding=1)
-        self.gn = nn.GroupNorm(16, out_ch)
-        self.act = nn.SiLU(inplace=True)
+        self.down = ConvBlock(
+            in_ch,
+            out_ch,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+        )
+        self.res = ResidualBlock(out_ch)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.res1(x)
-        x = self.res2(x)
-        return self.act(self.gn(self.down(x)))
+        return self.res(self.down(x))
 
 
 class UpBlock(nn.Module):
     def __init__(self, in_ch: int, out_ch: int) -> None:
         super().__init__()
-        self.res1 = ResidualBlock(in_ch)
-        self.res2 = ResidualBlock(in_ch)
-        self.up = nn.ConvTranspose2d(in_ch, out_ch, kernel_size=4, stride=2, padding=1)
-        self.gn = nn.GroupNorm(16, out_ch)
+        self.up = nn.ConvTranspose2d(
+            in_ch,
+            out_ch,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+        )
+        self.norm = nn.GroupNorm(norm_groups(out_ch), out_ch)
         self.act = nn.SiLU(inplace=True)
+        self.res = ResidualBlock(out_ch)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.res1(x)
-        x = self.res2(x)
-        return self.act(self.gn(self.up(x)))
+        x = self.act(self.norm(self.up(x)))
+        return self.res(x)
 
 
 class PatchVAE(nn.Module):
-    """VAE for 64x64 grayscale microstructure patches."""
-
-    def __init__(self, latent_ch: int = 4) -> None:
+    def __init__(
+        self,
+        image_size: int = 64,
+        latent_size: int = 16,
+        latent_ch: int = 4,
+        base_ch: int = 64,
+        max_ch: int = 512,
+    ) -> None:
+        super().__init__()
         if latent_ch <= 0:
             raise ValueError("latent_ch must be positive.")
+        if base_ch <= 0:
+            raise ValueError("base_ch must be positive.")
+        if max_ch < base_ch:
+            raise ValueError("max_ch must be greater than or equal to base_ch.")
 
-        super().__init__()
+        self.image_size = image_size
+        self.latent_size = latent_size
         self.latent_ch = latent_ch
-        self.conv_in = nn.Conv2d(1, 128, kernel_size=3, padding=1)
-        self.down1 = DownBlock(128, 128)
-        self.down2 = DownBlock(128, 256)
-        self.res1 = ResidualBlock(256)
-        self.attn1 = AttentionBlock(256)
-        self.res2 = ResidualBlock(256)
-        self.to_mu = nn.Conv2d(256, latent_ch, kernel_size=1)
-        self.to_logvar = nn.Conv2d(256, latent_ch, kernel_size=1)
+        self.downsample_factor = image_size // latent_size
+        self.downsample_steps = downsample_steps(image_size, latent_size)
 
-        self.conv_z = nn.Conv2d(latent_ch, 256, kernel_size=3, padding=1)
-        self.res3 = ResidualBlock(256)
-        self.attn2 = AttentionBlock(256)
-        self.res4 = ResidualBlock(256)
-        self.up1 = UpBlock(256, 128)
-        self.up2 = UpBlock(128, 64)
-        self.conv_out = nn.Conv2d(64, 1, kernel_size=3, padding=1)
-        self.act_out = nn.Sigmoid()
+        channels = [base_ch]
+        for step in range(self.downsample_steps):
+            channels.append(min(base_ch * 2 ** (step + 1), max_ch))
+        self.channels = tuple(channels)
+
+        self.conv_in = ConvBlock(1, channels[0])
+        self.down_blocks = nn.ModuleList(
+            DownBlock(channels[i], channels[i + 1])
+            for i in range(self.downsample_steps)
+        )
+        self.enc_mid = ResidualBlock(channels[-1])
+        self.to_mu = nn.Conv2d(channels[-1], latent_ch, kernel_size=1)
+        self.to_logvar = nn.Conv2d(channels[-1], latent_ch, kernel_size=1)
+
+        self.from_latent = ConvBlock(latent_ch, channels[-1])
+        self.dec_mid = ResidualBlock(channels[-1])
+        self.up_blocks = nn.ModuleList(
+            UpBlock(channels[i], channels[i - 1])
+            for i in range(len(channels) - 1, 0, -1)
+        )
+        self.conv_out = nn.Conv2d(channels[0], 1, kernel_size=3, padding=1)
 
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if x.ndim != 4 or x.shape[1] != 1:
+            raise ValueError("input must have shape [B, 1, H, W].")
+        if x.shape[-2:] != (self.image_size, self.image_size):
             raise ValueError(
-                "input must be a gray image batch with shape [B, 1, H, W]."
+                f"input image size must be {self.image_size}x{self.image_size}."
             )
-        if x.shape[-2] % 4 != 0 or x.shape[-1] % 4 != 0:
-            raise ValueError("input height and width must be divisible by 4.")
 
         h = self.conv_in(x)
-        h = self.down1(h)
-        h = self.down2(h)
-        h = self.res1(h)
-        h = self.attn1(h)
-        h = self.res2(h)
+        for block in self.down_blocks:
+            h = block(h)
+        h = self.enc_mid(h)
         return self.to_mu(h), self.to_logvar(h)
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
         if z.ndim != 4 or z.shape[1] != self.latent_ch:
             raise ValueError(
-                f"latent batch must have shape [B, {self.latent_ch}, H, W]."
+                f"latent must have shape [B, {self.latent_ch}, H, W]."
+            )
+        if z.shape[-2:] != (self.latent_size, self.latent_size):
+            raise ValueError(
+                f"latent spatial size must be {self.latent_size}x{self.latent_size}."
             )
 
-        h = self.conv_z(z)
-        h = self.res3(h)
-        h = self.attn2(h)
-        h = self.res4(h)
-        h = self.up1(h)
-        h = self.up2(h)
-        return self.act_out(self.conv_out(h))
+        h = self.from_latent(z)
+        h = self.dec_mid(h)
+        for block in self.up_blocks:
+            h = block(h)
+        return self.conv_out(h)
 
     def forward(
         self, x: torch.Tensor
