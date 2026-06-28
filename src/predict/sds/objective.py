@@ -8,6 +8,13 @@ from src.predict.sds.tpc import tpc_loss
 from src.predict.sds.vf import volume_fraction_loss
 
 
+def _validate_descriptor_inputs(name: str, weight: float, targets) -> None:
+    if weight < 0.0:
+        raise ValueError(f"{name}_weight must be non-negative.")
+    if weight > 0.0 and targets is None:
+        raise ValueError(f"{name}_targets are required when {name}_weight is positive.")
+
+
 def descriptor_loss(
     decoded: torch.Tensor,
     *,
@@ -27,6 +34,15 @@ def descriptor_loss(
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     total = decoded.sum() * 0.0
     stats: dict[str, torch.Tensor] = {}
+
+    _validate_descriptor_inputs("vf", vf_weight, vf_targets)
+    _validate_descriptor_inputs("tpc", tpc_weight, tpc_targets)
+    _validate_descriptor_inputs("sa", sa_weight, sa_targets)
+    _validate_descriptor_inputs(
+        "diffusivity",
+        diffusivity_weight,
+        diffusivity_targets,
+    )
 
     if vf_weight > 0.0 and vf_targets is not None:
         loss, _ = volume_fraction_loss(

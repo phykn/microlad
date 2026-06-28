@@ -100,6 +100,20 @@ class PredictSDSDiffusivityTest(unittest.TestCase):
         solver = DiffusivitySolver(height=2, width=2)
         with self.assertRaisesRegex(ValueError, "values"):
             diffusivity_loss(torch.zeros(1), torch.zeros(2), solver=solver, num_phases=2)
+        with self.assertRaisesRegex(ValueError, "values"):
+            diffusivity_loss(
+                torch.empty(0, 4),
+                torch.zeros(2),
+                solver=solver,
+                num_phases=2,
+            )
+        with self.assertRaisesRegex(ValueError, "values"):
+            diffusivity_loss(
+                torch.empty(4, 0),
+                torch.zeros(2),
+                solver=solver,
+                num_phases=2,
+            )
         with self.assertRaisesRegex(ValueError, "num_phases"):
             diffusivity_loss(torch.zeros(2, 2), torch.zeros(1), solver=solver, num_phases=1)
         with self.assertRaisesRegex(ValueError, "temperature"):

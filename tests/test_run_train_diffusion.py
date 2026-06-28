@@ -82,6 +82,22 @@ def write_vae_run(run_dir: Path) -> None:
     save_run_config(run_dir, vae_args, name="vae")
 
 
+class CloseFailTrainer:
+    def __init__(self, run_dir: Path) -> None:
+        self.run_dir = run_dir
+
+    def train(self):
+        return None
+
+    def close(self) -> None:
+        raise RuntimeError("close failed")
+
+
+class DeviceModel:
+    def to(self, device):
+        return self
+
+
 class RunTrainDiffusionTest(unittest.TestCase):
     def test_committed_diffusion_config_does_not_reference_local_run_output(self):
         script = load_script()
@@ -144,6 +160,43 @@ class RunTrainDiffusionTest(unittest.TestCase):
                 (run_dir / "weight" / "diffusion" / "last" / "model.pt").is_file()
             )
             self.assertFalse((vae_run_dir / "weight" / "diffusion").exists())
+
+    def test_main_cleans_up_distributed_when_close_raises(self):
+        script = load_script()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_dir = root / "data"
+            data_dir.mkdir()
+            write_image(data_dir / "phase.png")
+
+            vae_run_dir = root / "vae-run"
+            run_root = root / "run"
+            write_vae_run(vae_run_dir)
+            config = root / "diffusion.yaml"
+            write_config(config, data_dir, vae_run_dir, run_root)
+            trainer = CloseFailTrainer(root / "failed-close-run")
+
+            old_config = script.DEFAULT_CONFIG
+            script.DEFAULT_CONFIG = str(config)
+            self.addCleanup(setattr, script, "DEFAULT_CONFIG", old_config)
+
+            with (
+                patch.object(sys, "argv", ["run_train_diffusion.py"]),
+                patch.object(script, "setup_device", return_value=("cpu", 0, False)),
+                patch.object(script, "build_dataset", return_value=object()),
+                patch.object(script, "build_loader", return_value=iter([object()])),
+                patch.object(script, "load_frozen_vae_from_run", return_value=object()),
+                patch.object(script, "build_diffusion_model", return_value=DeviceModel()),
+                patch.object(script, "build_optimizer", return_value=object()),
+                patch.object(script, "build_diffusion_trainer", return_value=trainer),
+                patch.object(script, "copy_vae_run"),
+                patch.object(script, "save_run_config"),
+                patch.object(script, "cleanup_distributed") as cleanup,
+                self.assertRaisesRegex(RuntimeError, "close failed"),
+            ):
+                script.main()
+
+        cleanup.assert_called_once_with(False)
 
 
 if __name__ == "__main__":

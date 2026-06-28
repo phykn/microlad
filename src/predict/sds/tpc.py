@@ -16,6 +16,8 @@ def tpc_loss(
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if values.ndim < 2:
         raise ValueError("values must have at least two spatial dimensions.")
+    if values.numel() == 0 or values.shape[-2] <= 0 or values.shape[-1] <= 0:
+        raise ValueError("values must have non-empty spatial dimensions.")
     if values.ndim == 4 and values.shape[1] != 1:
         raise ValueError("values with 4 dimensions must have shape [B, 1, H, W].")
     if num_phases < 2:
@@ -56,6 +58,8 @@ def compute_tpc(
 ) -> torch.Tensor:
     if values.ndim < 2:
         raise ValueError("values must have at least two spatial dimensions.")
+    if values.numel() == 0 or values.shape[-2] <= 0 or values.shape[-1] <= 0:
+        raise ValueError("values must have non-empty spatial dimensions.")
     if values.ndim == 4 and values.shape[1] != 1:
         raise ValueError("values with 4 dimensions must have shape [B, 1, H, W].")
     if num_phases < 2:

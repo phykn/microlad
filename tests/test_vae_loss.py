@@ -123,6 +123,16 @@ class VAELossTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "mu"):
             vae_loss(recon, recon, mu, torch.zeros(1, 4, 2, 2))
 
+        with self.assertRaisesRegex(ValueError, "batch"):
+            vae_loss(torch.zeros(2, 1, 2, 2), torch.zeros(2, 1, 2, 2), mu, logvar)
+
+    def test_kl_divergence_rejects_empty_latent(self):
+        mu = torch.zeros(0, 4, 1, 1)
+        logvar = torch.zeros_like(mu)
+
+        with self.assertRaisesRegex(ValueError, "empty"):
+            kl_divergence(mu, logvar)
+
     def test_vae_loss_rejects_negative_beta(self):
         recon = torch.zeros(1, 1, 2, 2)
         mu = torch.zeros(1, 4, 1, 1)

@@ -60,6 +60,10 @@ class PredictSDSTPCTest(unittest.TestCase):
     def test_tpc_loss_rejects_invalid_inputs(self):
         with self.assertRaisesRegex(ValueError, "values"):
             tpc_loss(torch.zeros(1), torch.zeros(2, 1), num_phases=2)
+        with self.assertRaisesRegex(ValueError, "values"):
+            tpc_loss(torch.empty(0, 4), torch.zeros(2, 1), num_phases=2)
+        with self.assertRaisesRegex(ValueError, "values"):
+            tpc_loss(torch.empty(4, 0), torch.zeros(2, 1), num_phases=2)
         with self.assertRaisesRegex(ValueError, "num_phases"):
             tpc_loss(torch.zeros(2, 2), torch.zeros(1, 1), num_phases=1)
         with self.assertRaisesRegex(ValueError, "temperature"):

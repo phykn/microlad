@@ -15,6 +15,8 @@ def volume_fraction_loss(
     temperature: float = 0.1,
     weight: float = 1.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    if values.numel() == 0:
+        raise ValueError("values must be non-empty.")
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
     if temperature <= 0.0:
@@ -50,6 +52,8 @@ def compute_volume_fraction(
     num_phases: int,
     temperature: float = 0.1,
 ) -> torch.Tensor:
+    if values.numel() == 0:
+        raise ValueError("values must be non-empty.")
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
     if temperature <= 0.0:

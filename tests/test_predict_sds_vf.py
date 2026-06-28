@@ -66,6 +66,8 @@ class PredictSDSVolumeFractionTest(unittest.TestCase):
         self.assertEqual(values.grad.shape, values.shape)
 
     def test_volume_fraction_loss_rejects_invalid_inputs(self):
+        with self.assertRaisesRegex(ValueError, "values"):
+            volume_fraction_loss(torch.empty(0), {0: 0.5, 1: 0.5}, num_phases=2)
         with self.assertRaisesRegex(ValueError, "num_phases"):
             volume_fraction_loss(torch.zeros(1), {0: 1.0}, num_phases=1)
         with self.assertRaisesRegex(ValueError, "targets"):

@@ -70,9 +70,11 @@ def main() -> None:
             print(f"Training diffusion steps={args.steps} save_dir={trainer.run_dir}")
         trainer.train()
     finally:
-        if trainer is not None:
-            trainer.close()
-        cleanup_distributed(distributed)
+        try:
+            if trainer is not None:
+                trainer.close()
+        finally:
+            cleanup_distributed(distributed)
 
 
 if __name__ == "__main__":

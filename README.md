@@ -13,13 +13,17 @@ Training data and model checkpoints are not checked in.
 python -m pip install -r requirements.txt
 ```
 
+Run training and prediction examples from the repository root. For scripts or
+notebooks launched elsewhere, add the checkout root to `PYTHONPATH` so imports
+such as `from src.build import load_predictor` resolve.
+
 ## Config
 
 - VAE config: `config/vae.yaml`
 - Diffusion config: `config/diffusion.yaml`
 - Put training images outside the repo or in a local folder, then set `data.data_dir` in the config.
 - Train VAE first, then train diffusion.
-- Set `output.vae_run_dir` in `config/diffusion.yaml` to the VAE run folder before diffusion training.
+- For local diffusion training, set `output.vae_run_dir` in `config/diffusion.yaml` to the VAE run folder before launching `run_train_diffusion.py`.
 
 ## Train
 
