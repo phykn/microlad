@@ -52,6 +52,7 @@ def prepare_scale_anchor_latents(
         device=device,
     )
     mask = torch.zeros_like(latent)
+    written_planes: set[tuple[int, int, int, int, int]] = set()
 
     for anchor in anchors:
         anchor_size = int(anchor.image.shape[0])
@@ -80,6 +81,16 @@ def prepare_scale_anchor_latents(
         else:
             raise ValueError("anchor image size must match vae.image_size or volume_size.")
 
+        key = (
+            int(anchor.axis),
+            int(index),
+            int(plane_start),
+            int(encoded.shape[1]),
+            int(encoded.shape[2]),
+        )
+        if key in written_planes:
+            raise ValueError("anchor slices collapse to the same latent plane.")
+        written_planes.add(key)
         _write_anchor_plane(
             latent,
             mask,

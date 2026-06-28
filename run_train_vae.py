@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     device, local_rank, distributed = setup_device()
+    trainer = None
     try:
         rank = int(os.environ.get("RANK", "0"))
         dataset = build_dataset(args)
@@ -59,9 +60,12 @@ def main() -> None:
             save_run_config(trainer.run_dir, args, name="vae")
             print(f"Training VAE steps={args.steps} save_dir={trainer.run_dir}")
         trainer.train()
-        trainer.close()
     finally:
-        cleanup_distributed(distributed)
+        try:
+            if trainer is not None:
+                trainer.close()
+        finally:
+            cleanup_distributed(distributed)
 
 
 if __name__ == "__main__":
