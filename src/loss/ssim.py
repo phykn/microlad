@@ -11,6 +11,8 @@ def ssim_loss(
         raise ValueError("recon and target must have the same shape.")
     if recon.ndim != 4:
         raise ValueError("recon and target must have shape [B, C, H, W].")
+    if any(size <= 0 for size in recon.shape):
+        raise ValueError("recon and target must not be empty.")
     if data_range <= 0:
         raise ValueError("data_range must be positive.")
 

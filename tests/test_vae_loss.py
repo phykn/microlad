@@ -30,6 +30,12 @@ class VAELossTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(loss, torch.tensor(0.0), atol=1e-6))
 
+    def test_ssim_loss_rejects_empty_inputs(self):
+        with self.assertRaisesRegex(ValueError, "empty"):
+            ssim_loss(torch.empty(0, 1, 32, 32), torch.empty(0, 1, 32, 32))
+        with self.assertRaisesRegex(ValueError, "empty"):
+            ssim_loss(torch.empty(1, 1, 0, 32), torch.empty(1, 1, 0, 32))
+
     def test_phase_levels_span_minus_one_to_one(self):
         levels = phase_levels(num_phases=4)
 
@@ -55,6 +61,12 @@ class VAELossTest(unittest.TestCase):
         expected = F.cross_entropy(logits, target_index)
 
         self.assertTrue(torch.allclose(loss, expected))
+
+    def test_phase_loss_rejects_empty_inputs(self):
+        with self.assertRaisesRegex(ValueError, "empty"):
+            phase_loss(torch.empty(0, 1, 2, 2), torch.empty(0, 1, 2, 2), num_phases=3)
+        with self.assertRaisesRegex(ValueError, "empty"):
+            phase_loss(torch.empty(1, 1, 0, 2), torch.empty(1, 1, 0, 2), num_phases=3)
 
     def test_vae_loss_combines_reconstruction_ssim_phase_and_beta_weighted_kl(self):
         recon = torch.zeros(1, 1, 32, 32)

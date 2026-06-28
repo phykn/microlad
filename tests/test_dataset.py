@@ -117,6 +117,20 @@ class PatchDatasetTest(unittest.TestCase):
         )
         self.assertTrue(torch.allclose(patch, expected))
 
+    def test_rejects_num_phases_that_exceed_uint8_range(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image_dir = Path(tmp)
+            save_image(image_dir / "phase.png", np.array([[0, 255]], dtype=np.uint8))
+
+            with self.assertRaisesRegex(ValueError, "num_phases"):
+                PatchDataset(
+                    [image_dir / "phase.png"],
+                    crop_size=1,
+                    size=1,
+                    num_phases=257,
+                    segment=False,
+                )
+
     def test_phase_image_rejects_values_outside_phase_range(self):
         with tempfile.TemporaryDirectory() as tmp:
             image_dir = Path(tmp)

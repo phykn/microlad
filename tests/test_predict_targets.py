@@ -92,6 +92,12 @@ class PredictTargetsTest(unittest.TestCase):
     def test_build_sds_targets_rejects_invalid_inputs(self):
         with self.assertRaisesRegex(ValueError, "images"):
             build_sds_targets([], num_phases=2, use_vf=True)
+        with self.assertRaisesRegex(ValueError, "num_phases"):
+            build_sds_targets(
+                [np.array([[0, 255]], dtype=np.uint8)],
+                num_phases=257,
+                use_vf=True,
+            )
         with self.assertRaisesRegex(ValueError, "0 to 1"):
             build_sds_targets(
                 [np.array([[0, 2]], dtype=np.uint8)],

@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 
+from src.predict.types import MAX_UINT8_PHASES
 from src.segment import segment_multi_otsu
 
 
@@ -9,9 +10,13 @@ def prepare_anchor_image(
     *,
     num_phases: int,
     segment: bool = False,
-) -> torch.Tensor:
+    ) -> torch.Tensor:
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
+    if num_phases > MAX_UINT8_PHASES:
+        raise ValueError(
+            f"num_phases must be at most {MAX_UINT8_PHASES} for uint8 images."
+        )
     if not isinstance(image, np.ndarray):
         raise TypeError("image must be a numpy array.")
     if image.ndim != 2:

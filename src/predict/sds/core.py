@@ -15,6 +15,8 @@ def sds_loss(
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if latent.ndim != 4:
         raise ValueError("latent must have shape [B, C, H, W].")
+    if any(size <= 0 for size in latent.shape):
+        raise ValueError("latent dimensions must be positive.")
     _validate_timestep_range(ddpm, t_min, t_max)
 
     if t is None:

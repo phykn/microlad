@@ -126,6 +126,21 @@ class PredictSDSOptimizeTest(unittest.TestCase):
             self.assertIn(key, stats)
 
 class PredictSDSOptimizeVolumeTest(unittest.TestCase):
+    def test_optimize_volume_rejects_empty_volume_axes(self):
+        with self.assertRaisesRegex(ValueError, "positive"):
+            optimize_volume(
+                torch.empty(0, 4, 4),
+                IdentityVAE(),
+                ZeroNoiseModel(),
+                DDPM(timesteps=4),
+                steps=1,
+                slice_steps=0,
+                lr=0.1,
+                t_min=1,
+                t_max=3,
+                num_phases=2,
+            )
+
     def test_optimize_volume_runs_scheduled_slices(self):
         volume = torch.zeros(4, 4, 4)
         vae = IdentityVAE()

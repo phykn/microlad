@@ -63,6 +63,17 @@ class DiffusionLossTest(unittest.TestCase):
         self.assertIn("noise", parts)
         self.assertGreaterEqual(float(loss.detach()), 0.0)
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for device mismatch")
+    def test_diffusion_loss_rejects_timestep_on_wrong_device(self):
+        ddpm = DDPM(timesteps=4, device="cuda")
+        model = TimeUNet(latent_ch=4, base_ch=8, time_dim=16).cuda()
+        clean = torch.randn(2, 4, 8, 8, device="cuda")
+        noise = torch.randn_like(clean)
+        t = torch.tensor([1, 2], dtype=torch.long, device="cpu")
+
+        with self.assertRaisesRegex(ValueError, "device"):
+            diffusion_loss(model, ddpm, clean, t=t, noise=noise)
+
     def test_diffusion_loss_module_wraps_function(self):
         ddpm = DDPM(timesteps=4)
         loss_fn = DiffusionLoss(ddpm)

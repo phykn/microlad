@@ -7,6 +7,7 @@ from src.predict.sds.diffusivity import DiffusivitySolver, compute_diffusivity
 from src.predict.sds.sa import compute_surface_area
 from src.predict.sds.tpc import compute_tpc
 from src.predict.sds.vf import compute_volume_fraction
+from src.predict.types import MAX_UINT8_PHASES
 from src.segment import segment_multi_otsu
 
 
@@ -157,9 +158,13 @@ def _validate_options(
     use_diffusivity: bool,
     diffusivity_size: int | tuple[int, int] | None,
     diffusivity_low_cond: float,
-) -> None:
+    ) -> None:
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
+    if num_phases > MAX_UINT8_PHASES:
+        raise ValueError(
+            f"num_phases must be at most {MAX_UINT8_PHASES} for uint8 images."
+        )
     if temperature <= 0.0:
         raise ValueError("temperature must be positive.")
     if sa_kernel_size <= 0 or sa_kernel_size % 2 == 0:

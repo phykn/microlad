@@ -37,6 +37,8 @@ def phase_loss(
         raise ValueError("recon and target must have the same shape.")
     if target.ndim != 4 or target.shape[1] != 1:
         raise ValueError("target must have shape [B, 1, H, W].")
+    if any(size <= 0 for size in target.shape):
+        raise ValueError("recon and target must not be empty.")
 
     logits = phase_logits(recon, num_phases, temperature)
     levels = phase_levels(num_phases, device=target.device, dtype=target.dtype)

@@ -28,6 +28,8 @@ class PatchDataset(Dataset):
             raise ValueError("size must be positive.")
         if num_phases < 2:
             raise ValueError("num_phases must be at least 2.")
+        if num_phases > int(np.iinfo(np.uint8).max) + 1:
+            raise ValueError("num_phases must be at most 256 for uint8 images.")
 
         self.crop_size = crop_size
         self.size = size

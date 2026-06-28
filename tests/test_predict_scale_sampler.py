@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import torch
 
+from src.predict.scale.denoise import denoise_tiled_plane
 from src.predict.sampler import DiffusionSampler
 from src.predict.scale.sampler import sample_large_lmpdd
 
@@ -32,6 +33,11 @@ class OrientationDDPM:
 
     def q_sample(self, x_start: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return x_start
+
+
+class BadShapeDDPM:
+    def p_sample(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return torch.zeros(x.shape[0], x.shape[1], 1, x.shape[-1], device=x.device)
 
 
 class ScaleSamplerTest(unittest.TestCase):
@@ -93,6 +99,17 @@ class ScaleSamplerTest(unittest.TestCase):
             )
 
         self.assertTrue(torch.equal(large, base.permute(1, 0, 2, 3).contiguous()))
+
+    def test_denoise_tiled_plane_rejects_bad_sample_shape(self):
+        with self.assertRaisesRegex(ValueError, "p_sample"):
+            denoise_tiled_plane(
+                ZeroModel(),
+                BadShapeDDPM(),
+                torch.zeros(1, 1, 2, 2),
+                torch.zeros(1, dtype=torch.long),
+                tile_size=2,
+                overlap=0,
+            )
 
 
 if __name__ == "__main__":

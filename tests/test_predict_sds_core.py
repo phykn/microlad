@@ -91,6 +91,10 @@ class PredictSDSCoreTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "latent"):
             sds_loss(torch.zeros(1, 2, 2), model, ddpm, t_min=1, t_max=3)
+        with self.assertRaisesRegex(ValueError, "positive"):
+            sds_loss(torch.empty(0, 1, 2, 2), model, ddpm, t_min=1, t_max=3)
+        with self.assertRaisesRegex(ValueError, "positive"):
+            sds_loss(torch.empty(1, 1, 0, 2), model, ddpm, t_min=1, t_max=3)
         with self.assertRaisesRegex(ValueError, "timestep"):
             sds_loss(torch.zeros(1, 1, 2, 2), model, ddpm, t_min=3, t_max=3)
         with self.assertRaisesRegex(ValueError, "noise"):

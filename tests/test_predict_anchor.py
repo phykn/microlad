@@ -61,6 +61,12 @@ class PredictAnchorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "0 to 1"):
             prepare_anchor_image(image, num_phases=2)
 
+    def test_prepare_anchor_image_rejects_num_phases_above_uint8_range(self):
+        image = np.array([[0, 255]], dtype=np.uint8)
+
+        with self.assertRaisesRegex(ValueError, "num_phases"):
+            prepare_anchor_image(image, num_phases=257)
+
     def test_validate_anchor_accepts_matching_slice_shape(self):
         anchor = AnchorSlice(image=np.zeros((5, 6), dtype=np.uint8), axis=0, index=2)
 

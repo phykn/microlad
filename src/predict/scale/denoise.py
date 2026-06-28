@@ -29,6 +29,8 @@ def denoise_tiled_plane(
     for row, col in tile_grid(height, width, tile_size=tile_size, overlap=overlap):
         patch = planes[:, :, row : row + tile_size, col : col + tile_size]
         denoised = ddpm.p_sample(model, patch, timesteps)
+        if denoised.shape != patch.shape:
+            raise ValueError("ddpm.p_sample output must match input patch shape.")
         out[:, :, row : row + tile_size, col : col + tile_size] += denoised
         count[:, :, row : row + tile_size, col : col + tile_size] += 1
 

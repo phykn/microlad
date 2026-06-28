@@ -18,6 +18,8 @@ def diffusion_loss(
         raise ValueError("clean_latent dimensions must be positive.")
     if t is None:
         t = ddpm.sample_timesteps(clean_latent.shape[0], device=clean_latent.device)
+    elif t.device != clean_latent.device:
+        raise ValueError("t must be on the same device as clean_latent.")
     if noise is None:
         noise = torch.randn_like(clean_latent)
     if noise.shape != clean_latent.shape:

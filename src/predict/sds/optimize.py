@@ -359,6 +359,8 @@ def _validate_volume_inputs(
 ) -> None:
     if volume.ndim != 3:
         raise ValueError("volume must have shape [D, H, W].")
+    if any(size <= 0 for size in volume.shape):
+        raise ValueError("volume dimensions must be positive.")
     if steps < 0:
         raise ValueError("steps must be non-negative.")
     if slice_steps < 0:
