@@ -307,6 +307,10 @@ class PredictorTest(unittest.TestCase):
 
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
         self.assertIn("anchor", stats)
+        self.assertEqual(stats["volume_size"], 4)
+        self.assertEqual(stats["latent_size"], 4)
+        self.assertEqual(stats["tile_size"], 2)
+        self.assertEqual(stats["condition_start"], 1)
 
     def test_predict_runs_scale_sds_with_large_target_images(self):
         predictor = Predictor(

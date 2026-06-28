@@ -143,6 +143,26 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(dataset.crop_size, 8)
         self.assertEqual(dataset.size, 4)
 
+    def test_build_dataset_accepts_single_image_path_string(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image_path = root / "phase.png"
+            save_image(image_path, np.zeros((8, 8), dtype=np.uint8))
+            args = argparse.Namespace(
+                image_paths=str(image_path),
+                crop_size=8,
+                size=4,
+                num_phases=2,
+                segment=False,
+                augment=False,
+            )
+
+            dataset = build_dataset(args)
+            sample = dataset[0]
+
+        self.assertEqual(dataset.image_paths, [image_path])
+        self.assertEqual(sample.shape, torch.Size([1, 4, 4]))
+
     def test_build_dataset_rejects_empty_data_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             args = argparse.Namespace(

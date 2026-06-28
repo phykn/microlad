@@ -19,6 +19,8 @@ def _to_uint8_grayscale(image: np.ndarray) -> np.ndarray:
         return image.copy()
 
     values = image.astype(np.float32)
+    if not np.isfinite(values).all():
+        raise ValueError("image values must be finite.")
     low = float(values.min())
     high = float(values.max())
     if np.issubdtype(image.dtype, np.floating) and 0.0 <= low and high <= 1.0:

@@ -294,6 +294,8 @@ def build_dataset(args: argparse.Namespace) -> PatchDataset:
     image_paths = getattr(args, "image_paths", None)
     if image_paths is None:
         image_paths = _image_paths_from_dir(args.data_dir)
+    elif isinstance(image_paths, (str, Path)):
+        image_paths = [image_paths]
     return PatchDataset(
         image_paths,
         crop_size=args.crop_size,

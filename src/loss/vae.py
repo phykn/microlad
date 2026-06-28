@@ -20,6 +20,8 @@ def vae_loss(
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if recon.shape != target.shape:
         raise ValueError("recon and target must have the same shape.")
+    if recon.numel() == 0:
+        raise ValueError("recon and target must not be empty.")
     if mu.shape != logvar.shape:
         raise ValueError("mu and logvar must have the same shape.")
     if mu.ndim == 0 or mu.shape[0] != recon.shape[0]:

@@ -62,6 +62,20 @@ class ImageLoaderTest(unittest.TestCase):
         self.assertEqual(image.dtype, np.uint8)
         self.assertEqual(image[0].tolist(), [0, 127, 255])
 
+    def test_load_image_rejects_non_finite_numeric_grayscale(self):
+        cases = [
+            np.array([[0.0, np.nan], [1.0, 0.0]], dtype=np.float32),
+            np.array([[0.0, np.inf], [1.0, 0.0]], dtype=np.float32),
+        ]
+        for pixels in cases:
+            with self.subTest(pixels=pixels):
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = Path(tmp) / "invalid.tif"
+                    Image.fromarray(pixels).save(path)
+
+                    with self.assertRaisesRegex(ValueError, "finite"):
+                        load_image(path)
+
     def test_load_image_rounds_near_integer_float_phase_labels(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "near-labels.tif"

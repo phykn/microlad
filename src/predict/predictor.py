@@ -63,12 +63,13 @@ class Predictor:
         )
 
         if options.sds_steps > 0:
-            volume, stats = self._run_sds(
+            volume, sds_stats = self._run_sds(
                 volume,
                 options=options,
                 anchors=anchors,
                 target_images=target_images,
             )
+            stats = {**stats, **sds_stats}
 
         if options.refine_steps > 0:
             volume = self._refine_volume(volume, options.refine_steps)
