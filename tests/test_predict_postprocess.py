@@ -30,6 +30,10 @@ class PredictPostprocessTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "num_phases"):
             quantize_phase(torch.zeros(1), num_phases=1)
 
+    def test_quantize_phase_rejects_num_phases_that_exceed_uint8_range(self):
+        with self.assertRaisesRegex(ValueError, "num_phases"):
+            quantize_phase(torch.zeros(1), num_phases=257)
+
     def test_model_output_to_phase_removes_single_channel_dimension(self):
         output = torch.tensor([[[[-1.0, 0.0], [1.0, 2.0]]]])
 

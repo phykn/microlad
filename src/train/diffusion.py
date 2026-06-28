@@ -12,6 +12,7 @@ from src.train.utils import (
     log_stats,
     loss_stats,
     model_grad_norm,
+    next_batch,
     progress_postfix,
     save_checkpoint,
     setup_run_dirs,
@@ -73,7 +74,8 @@ class DiffusionTrainer:
     def train_step(self) -> dict[str, float]:
         self.model.train()
         self.vae.eval()
-        image = image_from_batch(next(self.iterator)).to(self.device)
+        batch, self.iterator = next_batch(self.dataloader, self.iterator)
+        image = image_from_batch(batch).to(self.device)
 
         with torch.no_grad():
             latent, _ = unwrap_model(self.vae).encode(image)

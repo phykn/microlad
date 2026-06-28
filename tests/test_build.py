@@ -1,7 +1,9 @@
 import argparse
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
@@ -18,6 +20,7 @@ from src.build import (
     build_optimizer,
     build_vae_trainer,
     copy_vae_run,
+    cleanup_distributed,
     fill_diffusion_defaults_from_run,
     load_frozen_diffusion_model,
     load_predictor,
@@ -25,6 +28,8 @@ from src.build import (
     load_frozen_vae,
     load_config_defaults,
     save_run_config,
+    setup_device,
+    wrap_distributed,
 )
 from src.data import PatchDataset
 from src.models import DDPM, PatchVAE, TimeUNet
@@ -85,6 +90,20 @@ class BuildTest(unittest.TestCase):
         self.assertEqual([path.name for path in dataset.image_paths], ["a.png", "b.png"])
         self.assertEqual(dataset.crop_size, 8)
         self.assertEqual(dataset.size, 4)
+
+    def test_build_dataset_rejects_empty_data_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = argparse.Namespace(
+                data_dir=Path(tmp),
+                crop_size=8,
+                size=4,
+                num_phases=2,
+                segment=False,
+                augment=False,
+            )
+
+            with self.assertRaisesRegex(ValueError, "image_paths"):
+                build_dataset(args)
 
     def test_build_loader_samples_batch_with_replacement(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -347,6 +366,56 @@ class BuildTest(unittest.TestCase):
         self.assertIsInstance(optimizer, torch.optim.AdamW)
         self.assertEqual(optimizer.param_groups[0]["lr"], 1e-3)
         self.assertEqual(optimizer.param_groups[0]["weight_decay"], 0.01)
+
+    def test_setup_device_uses_plain_device_without_distributed_env(self):
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("src.build.torch.cuda.is_available", return_value=False),
+            patch("src.build.dist.init_process_group") as init_process_group,
+        ):
+            device, local_rank, distributed = setup_device()
+
+        self.assertEqual(device, torch.device("cpu"))
+        self.assertEqual(local_rank, 0)
+        self.assertFalse(distributed)
+        init_process_group.assert_not_called()
+
+    def test_setup_device_initializes_cpu_distributed_from_env(self):
+        with (
+            patch.dict(
+                os.environ,
+                {"RANK": "1", "WORLD_SIZE": "2", "LOCAL_RANK": "1"},
+                clear=True,
+            ),
+            patch("src.build.torch.cuda.is_available", return_value=False),
+            patch("src.build.dist.init_process_group") as init_process_group,
+        ):
+            device, local_rank, distributed = setup_device()
+
+        self.assertEqual(device, torch.device("cpu"))
+        self.assertEqual(local_rank, 1)
+        self.assertTrue(distributed)
+        init_process_group.assert_called_once_with(backend="gloo")
+
+    def test_wrap_distributed_uses_ddp_without_cpu_device_ids(self):
+        model = torch.nn.Linear(1, 1)
+
+        with patch("src.build.DistributedDataParallel") as ddp:
+            ddp.return_value = "wrapped"
+            wrapped = wrap_distributed(model, local_rank=1, distributed=True)
+
+        self.assertEqual(wrapped, "wrapped")
+        ddp.assert_called_once_with(model)
+
+    def test_cleanup_distributed_destroys_initialized_process_group(self):
+        with (
+            patch("src.build.dist.is_available", return_value=True),
+            patch("src.build.dist.is_initialized", return_value=True),
+            patch("src.build.dist.destroy_process_group") as destroy,
+        ):
+            cleanup_distributed(enabled=True)
+
+        destroy.assert_called_once_with()
 
 
 if __name__ == "__main__":

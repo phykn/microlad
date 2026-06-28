@@ -3,8 +3,12 @@ __pycache__/
 .venv/
 venv/
 .obsidian/
-AGENTS.md
-docs/
+docs/*
+!docs/paper/
+docs/paper/*
+!docs/paper/graph/
+docs/paper/graph/*
+!docs/paper/graph/*.md
 run/
 output/
 microlad-anode/

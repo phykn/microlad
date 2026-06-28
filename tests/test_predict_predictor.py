@@ -41,6 +41,10 @@ class IdentityVAE(torch.nn.Module):
 
 
 class PredictOptionsTest(unittest.TestCase):
+    def test_predict_options_rejects_num_phases_that_exceed_uint8_range(self):
+        with self.assertRaisesRegex(ValueError, "num_phases"):
+            PredictOptions(num_phases=257)
+
     def test_predict_options_rejects_weights_outside_zero_to_one(self):
         with self.assertRaisesRegex(ValueError, "sds_weight"):
             PredictOptions(num_phases=2, sds_weight=1.1)

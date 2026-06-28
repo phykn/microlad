@@ -23,8 +23,14 @@ def prepare_anchor_latents(
     anchor_latent = torch.zeros(shape, device=device)
     anchor_mask = torch.zeros(shape, device=device)
     factor = _downsample_factor(vae)
+    written_planes: set[tuple[int, int]] = set()
 
     for anchor in anchors:
+        latent_index = min(anchor.index // factor, latent_size - 1)
+        plane_key = (int(anchor.axis), int(latent_index))
+        if plane_key in written_planes:
+            raise ValueError("anchor slices collapse to the same latent plane.")
+        written_planes.add(plane_key)
         latent = _encode_anchor_latent(
             vae,
             anchor,
@@ -32,7 +38,6 @@ def prepare_anchor_latents(
             segment=segment,
             device=device,
         )
-        latent_index = min(anchor.index // factor, latent_size - 1)
         _write_anchor_latent(
             anchor_latent,
             anchor_mask,

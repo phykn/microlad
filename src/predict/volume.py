@@ -83,4 +83,7 @@ def _decode_slice(vae: torch.nn.Module, latent_slice: torch.Tensor) -> torch.Ten
     decoded = vae.decode(latent_slice)
     if decoded.ndim != 4 or decoded.shape[:2] != (1, 1):
         raise ValueError("decode output must have shape [1, 1, H, W].")
+    expected = (int(vae.image_size), int(vae.image_size))
+    if tuple(decoded.shape[-2:]) != expected:
+        raise ValueError(f"decode output spatial shape must be {expected}.")
     return decoded[0, 0].float()

@@ -11,6 +11,7 @@ from src.train.utils import (
     log_stats,
     loss_stats,
     model_grad_norm,
+    next_batch,
     progress_postfix,
     save_checkpoint,
     setup_run_dirs,
@@ -63,7 +64,8 @@ class VAETrainer:
 
     def train_step(self) -> dict[str, float]:
         self.model.train()
-        image = image_from_batch(next(self.iterator)).to(self.device)
+        batch, self.iterator = next_batch(self.dataloader, self.iterator)
+        image = image_from_batch(batch).to(self.device)
 
         self.optimizer.zero_grad(set_to_none=True)
         recon, mu, logvar = self.model(image)

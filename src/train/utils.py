@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import datetime
 import os
 from pathlib import Path
@@ -62,6 +62,20 @@ def log_stats(writer: SummaryWriter | None, stats: dict[str, float], step: int) 
 
 def progress_postfix(stats: dict[str, float]) -> dict[str, str]:
     return {name: f"{value:.4g}" for name, value in stats.items()}
+
+
+def next_batch(dataloader: Iterable, iterator: Iterator) -> tuple[object, Iterator]:
+    try:
+        return next(iterator), iterator
+    except StopIteration:
+        iterator = iter(dataloader)
+        try:
+            return next(iterator), iterator
+        except StopIteration as exc:
+            raise ValueError(
+                "dataloader is exhausted and cannot be restarted; "
+                "use a re-iterable dataloader or an infinite iterator."
+            ) from exc
 
 
 def save_checkpoint(

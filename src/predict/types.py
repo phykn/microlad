@@ -3,6 +3,9 @@ from dataclasses import dataclass
 import numpy as np
 
 
+MAX_UINT8_PHASES = int(np.iinfo(np.uint8).max) + 1
+
+
 @dataclass(frozen=True)
 class AnchorSlice:
     image: np.ndarray
@@ -38,6 +41,10 @@ class PredictOptions:
     def __post_init__(self) -> None:
         if self.num_phases < 2:
             raise ValueError("num_phases must be at least 2.")
+        if self.num_phases > MAX_UINT8_PHASES:
+            raise ValueError(
+                f"num_phases must be at most {MAX_UINT8_PHASES} for uint8 output."
+            )
 
         for name, weight in (
             ("anchor_weight", self.anchor_weight),

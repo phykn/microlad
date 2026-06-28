@@ -42,6 +42,11 @@ class BadVAE(CountingVAE):
         return torch.zeros(latent.shape[0], 2, self.image_size, self.image_size)
 
 
+class BadSpatialVAE(CountingVAE):
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        return torch.zeros(latent.shape[0], 1, 1, self.image_size)
+
+
 class PredictVolumeTest(unittest.TestCase):
     def test_decode_latent_volume_averages_three_axis_decodes(self):
         vae = CountingVAE()
@@ -91,6 +96,10 @@ class PredictVolumeTest(unittest.TestCase):
     def test_decode_latent_volume_rejects_bad_decode_shape(self):
         with self.assertRaisesRegex(ValueError, "decode"):
             decode_latent_volume(BadVAE(), torch.zeros(1, 2, 2, 2))
+
+    def test_decode_latent_volume_rejects_bad_decode_spatial_shape(self):
+        with self.assertRaisesRegex(ValueError, "spatial shape"):
+            decode_latent_volume(BadSpatialVAE(), torch.zeros(1, 2, 2, 2))
 
 
 if __name__ == "__main__":

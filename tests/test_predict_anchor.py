@@ -18,6 +18,17 @@ class IdentityVAE(torch.nn.Module):
         return image.clone(), torch.zeros_like(image)
 
 
+class DownsamplingVAE(torch.nn.Module):
+    image_size = 4
+    latent_size = 2
+    latent_ch = 1
+    downsample_factor = 2
+
+    def encode(self, image: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        latent = torch.nn.functional.avg_pool2d(image, kernel_size=2)
+        return latent, torch.zeros_like(latent)
+
+
 class PredictAnchorTest(unittest.TestCase):
     def test_prepare_anchor_image_scales_phase_image_to_tensor(self):
         image = np.array([[0, 1, 2]], dtype=np.uint8)
@@ -84,6 +95,21 @@ class PredictAnchorTest(unittest.TestCase):
         self.assertTrue(torch.equal(latent[1], torch.ones(1, 2, 2)))
         self.assertTrue(torch.equal(mask[1], torch.ones(1, 2, 2)))
         self.assertTrue(torch.equal(mask[0], torch.zeros(1, 2, 2)))
+
+    def test_prepare_anchor_latents_rejects_same_latent_plane_collision(self):
+        anchors = [
+            AnchorSlice(image=np.zeros((4, 4), dtype=np.uint8), axis=0, index=0),
+            AnchorSlice(image=np.ones((4, 4), dtype=np.uint8), axis=0, index=1),
+        ]
+
+        with self.assertRaisesRegex(ValueError, "latent plane"):
+            prepare_anchor_latents(
+                DownsamplingVAE(),
+                anchors,
+                num_phases=2,
+                segment=False,
+                device=torch.device("cpu"),
+            )
 
     def test_prepare_anchor_latents_maps_axis_one(self):
         anchor = AnchorSlice(image=np.ones((2, 2), dtype=np.uint8), axis=1, index=1)

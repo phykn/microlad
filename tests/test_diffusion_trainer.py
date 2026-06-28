@@ -167,6 +167,21 @@ class DiffusionTrainerTest(unittest.TestCase):
         self.assertEqual(trainer.step, 2)
         self.assertIn("loss", stats)
 
+    def test_train_restarts_finite_reiterable_dataloader(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trainer = self._make_trainer(
+                tmp,
+                dataloader=[torch.randn(2, 1, 64, 64)],
+                steps=2,
+                save_every=2,
+            )
+
+            stats = trainer.train()
+            trainer.close()
+
+        self.assertEqual(trainer.step, 2)
+        self.assertIn("loss", stats)
+
     def test_train_shows_tqdm_progress(self):
         with tempfile.TemporaryDirectory() as tmp:
             trainer = self._make_trainer(tmp, steps=2, save_every=2)
@@ -220,6 +235,7 @@ class DiffusionTrainerTest(unittest.TestCase):
         steps: int = 1,
         save_every: int = 1,
         run_dir: Path | None = None,
+        dataloader=None,
     ) -> DiffusionTrainer:
         model = TinyDenoiser()
         loss_fn = DiffusionLoss(DDPM(timesteps=4))
@@ -227,7 +243,7 @@ class DiffusionTrainerTest(unittest.TestCase):
         return DiffusionTrainer(
             model=model,
             vae=TinyVAE(),
-            dataloader=infinite_batches(),
+            dataloader=infinite_batches() if dataloader is None else dataloader,
             loss_fn=loss_fn,
             optimizer=optimizer,
             steps=steps,
