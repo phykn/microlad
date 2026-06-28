@@ -108,6 +108,8 @@ class TimeUNet(nn.Module):
             )
         if t.ndim != 1 or t.shape[0] != x.shape[0]:
             raise ValueError("timesteps must have shape [B].")
+        if x.shape[0] <= 0 or x.shape[-2] <= 0 or x.shape[-1] <= 0:
+            raise ValueError("latent batch dimensions must be positive.")
         if x.shape[-2] % 4 != 0 or x.shape[-1] % 4 != 0:
             raise ValueError("latent height and width must be divisible by 4.")
 

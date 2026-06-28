@@ -32,7 +32,7 @@ def sample_large_lmpdd(
     latent = torch.randn(shape, device=device)
     for pass_index, step in enumerate(range(int(ddpm.num_timesteps) - 1, -1, -1)):
         axis = pass_index % 3
-        planes = _axis_to_planes(latent, axis)
+        planes = _lmpdd_pass_to_planes(latent, axis)
         timesteps = torch.full(
             (planes.shape[0],),
             step,
@@ -47,7 +47,7 @@ def sample_large_lmpdd(
             tile_size=tile_size,
             overlap=tile_overlap,
         )
-        latent = _planes_to_axis(planes, axis)
+        latent = _planes_to_lmpdd_pass(planes, axis)
         if anchor_latent is not None and anchor_mask is not None:
             latent = _blend_anchor(latent, anchor_latent, anchor_mask, ddpm, step)
 
@@ -73,20 +73,20 @@ def _validate_latent_shape(
     return shape
 
 
-def _axis_to_planes(latent: torch.Tensor, axis: int) -> torch.Tensor:
+def _lmpdd_pass_to_planes(latent: torch.Tensor, axis: int) -> torch.Tensor:
     if axis == 0:
         return latent.permute(1, 0, 2, 3).contiguous()
     if axis == 1:
-        return latent.permute(2, 0, 1, 3).contiguous()
-    return latent.permute(3, 0, 1, 2).contiguous()
+        return latent.permute(3, 0, 1, 2).contiguous()
+    return latent.permute(2, 0, 3, 1).contiguous()
 
 
-def _planes_to_axis(planes: torch.Tensor, axis: int) -> torch.Tensor:
+def _planes_to_lmpdd_pass(planes: torch.Tensor, axis: int) -> torch.Tensor:
     if axis == 0:
         return planes.permute(1, 0, 2, 3).contiguous()
     if axis == 1:
-        return planes.permute(1, 2, 0, 3).contiguous()
-    return planes.permute(1, 2, 3, 0).contiguous()
+        return planes.permute(1, 2, 3, 0).contiguous()
+    return planes.permute(1, 3, 0, 2).contiguous()
 
 
 def _prepare_anchor(

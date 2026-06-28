@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import torch
 
+from src.predict.sampler import DiffusionSampler
 from src.predict.scale.sampler import sample_large_lmpdd
 
 
@@ -19,6 +20,18 @@ class IdentityDDPM:
 class ZeroModel(torch.nn.Module):
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return torch.zeros_like(x)
+
+
+class OrientationDDPM:
+    num_timesteps = 3
+
+    def p_sample(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        rows = torch.arange(x.shape[-2], device=x.device, dtype=x.dtype).view(1, 1, -1, 1)
+        cols = torch.arange(x.shape[-1], device=x.device, dtype=x.dtype).view(1, 1, 1, -1)
+        return x + (int(t[0].item()) + 1) * (rows * 10 + cols)
+
+    def q_sample(self, x_start: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return x_start
 
 
 class ScaleSamplerTest(unittest.TestCase):
@@ -54,6 +67,32 @@ class ScaleSamplerTest(unittest.TestCase):
                 device="cpu",
                 anchor_latent=torch.zeros(1, 4, 4, 4),
             )
+
+    def test_sample_large_lmpdd_matches_base_sampler_axis_orientation(self):
+        ddpm = OrientationDDPM()
+        model = ZeroModel()
+        size = 4
+
+        with patch(
+            "torch.randn",
+            side_effect=[
+                torch.zeros(size, 1, size, size),
+                torch.zeros(1, size, size, size),
+            ],
+        ):
+            base = DiffusionSampler(model, ddpm, device="cpu").sample_lmpdd(
+                (size, 1, size, size)
+            )
+            large = sample_large_lmpdd(
+                model,
+                ddpm,
+                (1, size, size, size),
+                tile_size=size,
+                tile_overlap=0,
+                device="cpu",
+            )
+
+        self.assertTrue(torch.equal(large, base.permute(1, 0, 2, 3).contiguous()))
 
 
 if __name__ == "__main__":

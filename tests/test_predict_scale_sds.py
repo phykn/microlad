@@ -21,6 +21,11 @@ class IdentityVAE(torch.nn.Module):
         return latent
 
 
+class ShiftDecodeVAE(IdentityVAE):
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        return latent + 0.25
+
+
 class ZeroNoiseModel(torch.nn.Module):
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return torch.zeros_like(x)
@@ -58,6 +63,28 @@ class PredictScaleSDSTest(unittest.TestCase):
         self.assertTrue(torch.allclose(updated[0], volume[0]))
         self.assertIn("anchor", stats)
         self.assertIn("steps", stats)
+
+    def test_optimize_large_volume_with_zero_slice_steps_preserves_slice(self):
+        volume = torch.zeros(4, 4, 4)
+
+        updated, stats = optimize_large_volume(
+            volume,
+            ShiftDecodeVAE(),
+            ZeroNoiseModel(),
+            DDPM(timesteps=4),
+            steps=1,
+            slice_steps=0,
+            lr=0.1,
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            slice_schedule=[(0, 2)],
+            sds_weight=0.0,
+            tile_overlap=0,
+        )
+
+        self.assertTrue(torch.equal(updated, volume))
+        self.assertEqual(int(stats["steps"].item()), 1)
 
     def test_optimize_large_volume_applies_masked_anchor_target_patch(self):
         target = torch.zeros(4, 4)

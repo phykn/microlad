@@ -83,6 +83,13 @@ class DiffusionLossTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "latent"):
             diffusion_loss(ZeroNoiseModel(), ddpm, torch.randn(2, 4, 8), t=t)
+        with self.assertRaisesRegex(ValueError, "positive"):
+            diffusion_loss(
+                ZeroNoiseModel(),
+                ddpm,
+                torch.empty(0, 4, 8, 8),
+                t=torch.empty(0, dtype=torch.long),
+            )
         with self.assertRaisesRegex(ValueError, "noise"):
             diffusion_loss(ZeroNoiseModel(), ddpm, clean, t=t, noise=noise[:, :1])
         with self.assertRaisesRegex(ValueError, "model output"):

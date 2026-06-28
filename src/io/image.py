@@ -21,6 +21,11 @@ def _to_uint8_grayscale(image: np.ndarray) -> np.ndarray:
     values = image.astype(np.float32)
     low = float(values.min())
     high = float(values.max())
+    if np.issubdtype(image.dtype, np.floating) and 0.0 <= low and high <= 1.0:
+        rounded = np.round(values)
+        if np.allclose(values, rounded):
+            return rounded.astype(np.uint8)
+        return (values * 255.0).astype(np.uint8)
     if 0.0 <= low and high <= 255.0:
         return image.astype(np.uint8)
     if high <= low:

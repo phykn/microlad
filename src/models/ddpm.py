@@ -114,6 +114,8 @@ class DDPM:
         return values[t].view(shape)
 
     def _validate_timesteps(self, t: torch.Tensor, batch_size: int) -> None:
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive.")
         if t.ndim != 1 or t.shape[0] != batch_size:
             raise ValueError("timesteps must have shape [B].")
         if t.dtype != torch.long:

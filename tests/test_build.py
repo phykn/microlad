@@ -288,6 +288,24 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(args.latent_ch, 2)
         self.assertEqual(args.num_phases, 3)
 
+    def test_fill_diffusion_defaults_rejects_diffusion_incompatible_latent_size(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            save_run_config(
+                run_dir,
+                argparse.Namespace(
+                    image_size=40,
+                    latent_size=10,
+                    latent_ch=2,
+                    num_phases=3,
+                ),
+                name="vae",
+            )
+            args = argparse.Namespace(vae_run_dir=run_dir)
+
+            with self.assertRaisesRegex(ValueError, "latent_size"):
+                fill_diffusion_defaults_from_run(args)
+
     def test_copy_vae_run_copies_config_and_last_weight_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "vae-run"

@@ -163,6 +163,9 @@ def fill_diffusion_defaults_from_run(args: argparse.Namespace) -> argparse.Names
         if existing is not None and existing != value:
             raise ValueError(f"{arg_name} must match VAE run config.")
         setattr(args, arg_name, value)
+    latent_size = vae_config.get("latent_size")
+    if latent_size is not None and int(latent_size) % 4 != 0:
+        raise ValueError("latent_size must be divisible by 4 for diffusion.")
     return args
 
 

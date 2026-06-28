@@ -44,6 +44,44 @@ class ImageLoaderTest(unittest.TestCase):
         self.assertEqual(int(image.max()), 255)
         self.assertEqual(image[0].tolist(), [0, 63, 127, 191, 255])
 
+    def test_load_image_scales_normalized_float_grayscale_to_uint8(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "normalized.tif"
+            pixels = np.array(
+                [
+                    [0.0, 0.5, 1.0],
+                    [0.0, 0.5, 1.0],
+                    [0.0, 0.5, 1.0],
+                ],
+                dtype=np.float32,
+            )
+            Image.fromarray(pixels).save(path)
+
+            image = load_image(path)
+
+        self.assertEqual(image.dtype, np.uint8)
+        self.assertEqual(image[0].tolist(), [0, 127, 255])
+
+    def test_load_image_rounds_near_integer_float_phase_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "near-labels.tif"
+            pixels = np.array(
+                [
+                    [0.0, 0.99999994],
+                    [0.99999994, 0.0],
+                ],
+                dtype=np.float32,
+            )
+            Image.fromarray(pixels).save(path)
+
+            image = load_image(path)
+
+        self.assertEqual(image.dtype, np.uint8)
+        np.testing.assert_array_equal(
+            image,
+            np.array([[0, 1], [1, 0]], dtype=np.uint8),
+        )
+
     def test_load_image_preserves_low_valued_uint16_phase_labels(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "labels.tif"

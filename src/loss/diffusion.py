@@ -11,9 +11,11 @@ def diffusion_loss(
     clean_latent: torch.Tensor,
     t: torch.Tensor | None = None,
     noise: torch.Tensor | None = None,
-) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if clean_latent.ndim != 4:
         raise ValueError("clean_latent must have shape [B, C, H, W].")
+    if any(size <= 0 for size in clean_latent.shape):
+        raise ValueError("clean_latent dimensions must be positive.")
     if t is None:
         t = ddpm.sample_timesteps(clean_latent.shape[0], device=clean_latent.device)
     if noise is None:

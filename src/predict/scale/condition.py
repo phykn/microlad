@@ -15,13 +15,36 @@ def center_start(*, volume_size: int, base_size: int) -> int:
     return (volume_size - base_size) // 2
 
 
+def _aligned_center_start(
+    *,
+    volume_size: int,
+    base_size: int,
+    downsample_factor: int,
+) -> int:
+    start = center_start(volume_size=volume_size, base_size=base_size)
+    factor = int(downsample_factor)
+    if factor <= 0:
+        raise ValueError("downsample_factor must be positive.")
+    if start % factor != 0:
+        raise ValueError("anchor center must align to the VAE latent grid.")
+    return start
+
+
 def shifted_anchor_slices(
     anchors: Sequence[AnchorSlice] | None,
     *,
     volume_size: int,
     base_size: int,
+    downsample_factor: int | None = None,
 ) -> list[tuple[int, int]]:
-    start = center_start(volume_size=volume_size, base_size=base_size)
+    if downsample_factor is None:
+        start = center_start(volume_size=volume_size, base_size=base_size)
+    else:
+        start = _aligned_center_start(
+            volume_size=volume_size,
+            base_size=base_size,
+            downsample_factor=downsample_factor,
+        )
     return [(int(anchor.axis), start + int(anchor.index)) for anchor in anchors or []]
 
 
@@ -42,10 +65,19 @@ def prepare_scale_anchor_latents(
     if int(volume_size) % factor != 0:
         raise ValueError("volume_size must be divisible by VAE downsample factor.")
 
-    latent_size = int(volume_size) // factor
-    base_latent_size = int(vae.latent_size)
-    start = center_start(volume_size=latent_size, base_size=base_latent_size)
     image_size = int(vae.image_size)
+    needs_base_center = any(int(anchor.image.shape[0]) == image_size for anchor in anchors)
+    image_start = (
+        _aligned_center_start(
+            volume_size=int(volume_size),
+            base_size=image_size,
+            downsample_factor=factor,
+        )
+        if needs_base_center
+        else 0
+    )
+    latent_size = int(volume_size) // factor
+    start = image_start // factor
 
     latent = torch.zeros(
         (int(vae.latent_ch), latent_size, latent_size, latent_size),
@@ -112,6 +144,7 @@ def prepare_scale_anchor_targets(
     segment: bool,
     device: torch.device,
     dtype: torch.dtype,
+    downsample_factor: int | None = None,
 ) -> tuple[dict[tuple[int, int], torch.Tensor], dict[tuple[int, int], torch.Tensor]]:
     if not anchors:
         return {}, {}
@@ -119,7 +152,14 @@ def prepare_scale_anchor_targets(
     volume_size = int(volume_size)
     base_size = int(base_size)
     validate_anchors(anchors, (base_size, base_size, base_size))
-    start = center_start(volume_size=volume_size, base_size=base_size)
+    if downsample_factor is None:
+        start = center_start(volume_size=volume_size, base_size=base_size)
+    else:
+        start = _aligned_center_start(
+            volume_size=volume_size,
+            base_size=base_size,
+            downsample_factor=downsample_factor,
+        )
 
     targets: dict[tuple[int, int], torch.Tensor] = {}
     masks: dict[tuple[int, int], torch.Tensor] = {}

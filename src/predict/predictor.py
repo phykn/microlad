@@ -236,6 +236,7 @@ class Predictor:
                 segment=options.anchor_segment,
                 device=self.device,
                 dtype=torch.float32,
+                downsample_factor=self._downsample_factor(),
             )
             sds_anchors = None
             slice_schedule = self._scale_anchor_schedule(
@@ -417,6 +418,7 @@ class Predictor:
             anchors,
             volume_size=volume_size,
             base_size=self._image_size(),
+            downsample_factor=self._downsample_factor(),
         )
         if not shifted or steps <= 0:
             return None

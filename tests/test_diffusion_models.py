@@ -67,6 +67,16 @@ class DDPMTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "schedule"):
             ddpm.q_sample(x, torch.tensor([0, 4], dtype=torch.long))
 
+    def test_rejects_empty_batch_timesteps(self):
+        ddpm = DDPM(timesteps=4)
+        empty = torch.empty(0, 3, 4, 4)
+        t = torch.empty(0, dtype=torch.long)
+
+        with self.assertRaisesRegex(ValueError, "batch"):
+            ddpm.q_sample(empty, t)
+        with self.assertRaisesRegex(ValueError, "batch"):
+            ddpm.p_sample(torch.nn.Identity(), empty, t)
+
 
 class TimeUNetTest(unittest.TestCase):
     def test_forward_predicts_noise_with_same_shape_as_latent(self):
@@ -83,6 +93,8 @@ class TimeUNetTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "shape"):
             model(torch.randn(2, 3, 16, 16), torch.tensor([0, 1]))
+        with self.assertRaisesRegex(ValueError, "positive"):
+            model(torch.empty(1, 4, 0, 16), torch.tensor([0]))
         with self.assertRaisesRegex(ValueError, "divisible"):
             model(torch.randn(2, 4, 15, 16), torch.tensor([0, 1]))
 

@@ -6,6 +6,7 @@ import torch
 from src.predict.scale.condition import (
     center_start,
     prepare_scale_anchor_latents,
+    prepare_scale_anchor_targets,
     shifted_anchor_slices,
 )
 from src.predict.types import AnchorSlice
@@ -73,11 +74,39 @@ class ScaleConditionTest(unittest.TestCase):
             prepare_scale_anchor_latents(
                 DownsamplingVAE(),
                 anchors,
-                volume_size=8,
+                volume_size=6,
                 num_phases=2,
                 segment=False,
                 device=torch.device("cpu"),
             )
+
+    def test_anchor_latents_reject_center_that_cannot_align_to_latent_grid(self):
+        anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=0)
+
+        with self.assertRaisesRegex(ValueError, "align"):
+            prepare_scale_anchor_latents(
+                DownsamplingVAE(),
+                [anchor],
+                volume_size=4,
+                num_phases=2,
+                segment=False,
+                device=torch.device("cpu"),
+            )
+
+    def test_large_anchor_latents_do_not_require_base_center_alignment(self):
+        anchor = AnchorSlice(image=np.zeros((4, 4), dtype=np.uint8), axis=0, index=0)
+
+        latent, mask = prepare_scale_anchor_latents(
+            DownsamplingVAE(),
+            [anchor],
+            volume_size=4,
+            num_phases=2,
+            segment=False,
+            device=torch.device("cpu"),
+        )
+
+        self.assertEqual(latent.shape, torch.Size([1, 2, 2, 2]))
+        self.assertEqual(mask.shape, torch.Size([1, 2, 2, 2]))
 
     def test_shifted_anchor_slices_move_base_index_to_output_index(self):
         anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=1)
@@ -85,6 +114,32 @@ class ScaleConditionTest(unittest.TestCase):
         shifted = shifted_anchor_slices([anchor], volume_size=6, base_size=2)
 
         self.assertEqual(shifted, [(0, 3)])
+
+    def test_scale_anchor_targets_reject_center_that_cannot_align_to_latent_grid(self):
+        anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=0)
+
+        with self.assertRaisesRegex(ValueError, "align"):
+            prepare_scale_anchor_targets(
+                [anchor],
+                volume_size=4,
+                base_size=2,
+                num_phases=2,
+                segment=False,
+                device=torch.device("cpu"),
+                dtype=torch.float32,
+                downsample_factor=2,
+            )
+
+    def test_shifted_anchor_slices_reject_center_that_cannot_align_to_latent_grid(self):
+        anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=0)
+
+        with self.assertRaisesRegex(ValueError, "align"):
+            shifted_anchor_slices(
+                [anchor],
+                volume_size=4,
+                base_size=2,
+                downsample_factor=2,
+            )
 
 
 if __name__ == "__main__":

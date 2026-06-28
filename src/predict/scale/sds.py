@@ -172,13 +172,7 @@ def _optimize_large_slice(
     use_tile_descriptor = descriptor_tile_size is not None
 
     if steps == 0:
-        with torch.no_grad():
-            decoded = _decode_tiled_image(
-                image.float(),
-                vae,
-                tile_overlap=tile_overlap,
-            ).clamp(-1.0, 1.0)
-        return decoded, {}
+        return image.float(), {}
 
     image_param = image.detach().clone().float().requires_grad_(True)
     optimizer = torch.optim.Adam([image_param], lr=lr)
