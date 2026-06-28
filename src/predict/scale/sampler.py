@@ -14,9 +14,17 @@ def sample_large_lmpdd(
     tile_size: int,
     tile_overlap: int,
     device: str | torch.device,
+    anchor_latent: torch.Tensor | None = None,
+    anchor_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     shape = _validate_latent_shape(latent_shape, tile_size=tile_size)
     device = torch.device(device)
+    anchor_latent, anchor_mask = _prepare_anchor(
+        shape,
+        device=device,
+        anchor_latent=anchor_latent,
+        anchor_mask=anchor_mask,
+    )
 
     model = model.to(device)
     model.eval()
@@ -40,6 +48,8 @@ def sample_large_lmpdd(
             overlap=tile_overlap,
         )
         latent = _planes_to_axis(planes, axis)
+        if anchor_latent is not None and anchor_mask is not None:
+            latent = _blend_anchor(latent, anchor_latent, anchor_mask, ddpm, step)
 
     return latent
 
@@ -77,3 +87,49 @@ def _planes_to_axis(planes: torch.Tensor, axis: int) -> torch.Tensor:
     if axis == 1:
         return planes.permute(1, 2, 0, 3).contiguous()
     return planes.permute(1, 2, 3, 0).contiguous()
+
+
+def _prepare_anchor(
+    shape: tuple[int, int, int, int],
+    *,
+    device: torch.device,
+    anchor_latent: torch.Tensor | None,
+    anchor_mask: torch.Tensor | None,
+) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+    if (anchor_latent is None) != (anchor_mask is None):
+        raise ValueError("anchor_latent and anchor_mask must be provided together.")
+    if anchor_latent is None or anchor_mask is None:
+        return None, None
+
+    anchor_latent = anchor_latent.to(device=device)
+    if anchor_latent.shape != torch.Size(shape):
+        raise ValueError("anchor_latent must have the same shape as latent_shape.")
+
+    anchor_mask = anchor_mask.to(device=device, dtype=anchor_latent.dtype)
+    try:
+        anchor_mask = torch.broadcast_to(anchor_mask, anchor_latent.shape)
+    except RuntimeError as exc:
+        raise ValueError("anchor_mask must be broadcastable to anchor_latent shape.") from exc
+    if anchor_mask.min().item() < 0.0 or anchor_mask.max().item() > 1.0:
+        raise ValueError("anchor_mask values must be between 0 and 1.")
+    return anchor_latent, anchor_mask
+
+
+def _blend_anchor(
+    latent: torch.Tensor,
+    anchor_latent: torch.Tensor,
+    anchor_mask: torch.Tensor,
+    ddpm,
+    step: int,
+) -> torch.Tensor:
+    if step == 0:
+        anchor = anchor_latent
+    else:
+        t = torch.full(
+            (anchor_latent.shape[0],),
+            step - 1,
+            dtype=torch.long,
+            device=latent.device,
+        )
+        anchor = ddpm.q_sample(anchor_latent, t)
+    return latent * (1.0 - anchor_mask) + anchor * anchor_mask

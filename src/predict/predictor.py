@@ -14,6 +14,12 @@ from src.predict.scale import (
     optimize_large_volume,
     sample_large_lmpdd,
 )
+from src.predict.scale.condition import (
+    center_start,
+    prepare_scale_anchor_latents,
+    prepare_scale_anchor_targets,
+    shifted_anchor_slices,
+)
 from src.predict.sds import optimize_volume
 from src.predict.targets import build_sds_targets
 from src.predict.types import AnchorSlice, PredictOptions
@@ -93,11 +99,18 @@ class Predictor:
             ).to(self.device)
             return volume, {}
 
-        return self._generate_large_volume(volume_size)
+        return self._generate_large_volume(
+            volume_size,
+            options=options,
+            anchors=anchors,
+        )
 
     def _generate_large_volume(
         self,
         volume_size: int,
+        *,
+        options: PredictOptions,
+        anchors: Sequence[AnchorSlice] | None,
     ) -> tuple[torch.Tensor, dict[str, int]]:
         factor = self._downsample_factor()
         tile_size = int(self.vae.latent_size)
@@ -106,6 +119,11 @@ class Predictor:
             volume_size,
             factor=factor,
             tile_size=tile_size,
+        )
+        anchor_latent, anchor_mask = self._scale_anchor_latents(
+            anchors,
+            options=options,
+            volume_size=volume_size,
         )
 
         latent = sample_large_lmpdd(
@@ -120,6 +138,8 @@ class Predictor:
             tile_size=tile_size,
             tile_overlap=overlap,
             device=self.device,
+            anchor_latent=anchor_latent,
+            anchor_mask=anchor_mask,
         )
         volume = decode_large_latent_volume(
             self.vae,
@@ -131,6 +151,10 @@ class Predictor:
             "latent_size": latent_size,
             "tile_size": tile_size,
             "tile_overlap": overlap,
+            "condition_start": center_start(
+                volume_size=volume_size,
+                base_size=self._image_size(),
+            ),
         }
         return volume, stats
 
@@ -161,6 +185,7 @@ class Predictor:
             options,
             anchors=anchors,
             target_images=target_images,
+            volume_size=int(volume.shape[0]),
         )
 
         if volume.shape[0] != self._image_size():
@@ -173,6 +198,9 @@ class Predictor:
                 **kwargs,
             )
 
+        kwargs.pop("anchor_targets", None)
+        kwargs.pop("anchor_masks", None)
+        kwargs.pop("descriptor_tile_size", None)
         return optimize_volume(
             volume,
             self.vae,
@@ -187,11 +215,33 @@ class Predictor:
         *,
         anchors: Sequence[AnchorSlice] | None,
         target_images: Sequence[np.ndarray] | None,
+        volume_size: int,
     ) -> dict[str, object]:
         targets = self._build_targets(options, target_images)
         solver = targets.get("diffusivity_solver")
         if isinstance(solver, torch.nn.Module):
             solver = solver.to(self.device)
+
+        sds_anchors = anchors
+        anchor_targets = None
+        anchor_masks = None
+        slice_schedule = None
+        if self._uses_scale_anchor(anchors, volume_size):
+            anchor_targets, anchor_masks = prepare_scale_anchor_targets(
+                anchors,
+                volume_size=volume_size,
+                base_size=self._image_size(),
+                num_phases=options.num_phases,
+                segment=options.anchor_segment,
+                device=self.device,
+                dtype=torch.float32,
+            )
+            sds_anchors = None
+            slice_schedule = self._scale_anchor_schedule(
+                anchors,
+                steps=options.sds_steps,
+                volume_size=volume_size,
+            )
 
         return {
             "steps": options.sds_steps,
@@ -200,7 +250,10 @@ class Predictor:
             "t_min": options.sds_t_min,
             "t_max": self._sds_t_max(options),
             "num_phases": options.num_phases,
-            "anchors": anchors,
+            "slice_schedule": slice_schedule,
+            "anchors": sds_anchors,
+            "anchor_targets": anchor_targets,
+            "anchor_masks": anchor_masks,
             "anchor_segment": options.anchor_segment,
             "sds_weight": options.sds_weight,
             "anchor_weight": options.anchor_weight if anchors else 0.0,
@@ -213,6 +266,11 @@ class Predictor:
             "diffusivity_targets": targets.get("diffusivity_targets"),
             "diffusivity_solver": solver,
             "diffusivity_weight": options.diffusivity_weight,
+            "descriptor_tile_size": self._scale_descriptor_tile_size(
+                options,
+                target_images=target_images,
+                volume_size=volume_size,
+            ),
         }
 
     def _build_targets(
@@ -274,8 +332,8 @@ class Predictor:
         volume_size = int(volume_size)
         if volume_size <= 0:
             raise ValueError("volume_size must be positive.")
-        if anchor_size is not None and volume_size != anchor_size:
-            raise ValueError("volume_size must match anchor image size.")
+        if anchor_size is not None and anchor_size not in (self._image_size(), volume_size):
+            raise ValueError("anchor image size must match vae.image_size or volume_size.")
         return volume_size
 
     def _anchor_volume_size(
@@ -305,8 +363,110 @@ class Predictor:
         anchors: Sequence[AnchorSlice] | None,
         volume_size: int,
     ) -> None:
-        if anchors:
-            validate_anchors(anchors, (volume_size, volume_size, volume_size))
+        if not anchors:
+            return
+
+        image_size = self._image_size()
+        anchor_size = self._anchor_volume_size(anchors)
+        if anchor_size == image_size and volume_size > image_size:
+            validate_anchors(anchors, (image_size, image_size, image_size))
+            return
+        validate_anchors(anchors, (volume_size, volume_size, volume_size))
+
+    def _scale_anchor_latents(
+        self,
+        anchors: Sequence[AnchorSlice] | None,
+        *,
+        options: PredictOptions,
+        volume_size: int,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        if not anchors or self._anchor_volume_size(anchors) != self._image_size():
+            return None, None
+        return prepare_scale_anchor_latents(
+            self.vae,
+            anchors,
+            volume_size=volume_size,
+            num_phases=options.num_phases,
+            segment=options.anchor_segment,
+            device=self.device,
+        )
+
+    def _uses_scale_anchor(
+        self,
+        anchors: Sequence[AnchorSlice] | None,
+        volume_size: int,
+    ) -> bool:
+        return (
+            bool(anchors)
+            and volume_size > self._image_size()
+            and self._anchor_volume_size(anchors) == self._image_size()
+        )
+
+    def _scale_anchor_schedule(
+        self,
+        anchors: Sequence[AnchorSlice] | None,
+        *,
+        steps: int,
+        volume_size: int,
+    ) -> list[tuple[int, int]] | None:
+        shifted = shifted_anchor_slices(
+            anchors,
+            volume_size=volume_size,
+            base_size=self._image_size(),
+        )
+        if not shifted or steps <= 0:
+            return None
+
+        schedule: list[tuple[int, int]] = []
+        for anchor_slice in shifted:
+            if len(schedule) >= steps:
+                return schedule
+            schedule.append(anchor_slice)
+
+        while len(schedule) < steps:
+            axis = int(torch.randint(0, 3, (), device=self.device).item())
+            index = int(torch.randint(0, volume_size, (), device=self.device).item())
+            schedule.append((axis, index))
+        return schedule
+
+    def _scale_descriptor_tile_size(
+        self,
+        options: PredictOptions,
+        *,
+        target_images: Sequence[np.ndarray] | None,
+        volume_size: int,
+    ) -> int | None:
+        if volume_size == self._image_size() or not self._uses_targets(options):
+            return None
+
+        target_size = self._target_image_size(target_images)
+        if target_size == self._image_size():
+            return target_size
+        if target_size == volume_size:
+            return None
+        raise ValueError("scale-up target images must match vae.image_size or volume_size.")
+
+    def _target_image_size(
+        self,
+        target_images: Sequence[np.ndarray] | None,
+    ) -> int:
+        if not target_images:
+            raise ValueError("target_images are required when target losses are enabled.")
+
+        size = None
+        for image in target_images:
+            if not isinstance(image, np.ndarray):
+                raise TypeError("target images must be numpy arrays.")
+            if image.ndim != 2:
+                raise ValueError("target images must be 2D.")
+            height, width = image.shape
+            if height != width:
+                raise ValueError("scale-up target images must be square.")
+            if size is None:
+                size = int(height)
+            elif size != int(height):
+                raise ValueError("target images must have the same shape.")
+        return int(size)
 
     def _scale_latent_size(
         self,

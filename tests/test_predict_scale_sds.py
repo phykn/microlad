@@ -59,6 +59,35 @@ class PredictScaleSDSTest(unittest.TestCase):
         self.assertIn("anchor", stats)
         self.assertIn("steps", stats)
 
+    def test_optimize_large_volume_applies_masked_anchor_target_patch(self):
+        target = torch.zeros(4, 4)
+        target[1:3, 1:3] = 1
+        mask = torch.zeros(4, 4)
+        mask[1:3, 1:3] = 1
+
+        updated, stats = optimize_large_volume(
+            torch.zeros(4, 4, 4),
+            IdentityVAE(),
+            ZeroNoiseModel(),
+            DDPM(timesteps=4),
+            steps=1,
+            slice_steps=1,
+            lr=0.1,
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            slice_schedule=[(0, 2)],
+            anchor_targets={(0, 2): target},
+            anchor_masks={(0, 2): mask},
+            anchor_weight=1.0,
+            sds_weight=0.0,
+            tile_overlap=0,
+        )
+
+        self.assertGreater(float(updated[2, 1:3, 1:3].mean()), 0.0)
+        self.assertEqual(float(updated[2, 0, 0]), 0.0)
+        self.assertIn("anchor", stats)
+
     def test_optimize_large_volume_applies_full_slice_vf_target_loss(self):
         updated, stats = optimize_large_volume(
             torch.zeros(4, 4, 4),

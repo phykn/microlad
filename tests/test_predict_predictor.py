@@ -159,6 +159,30 @@ class PredictorTest(unittest.TestCase):
 
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
 
+    def test_predict_scale_up_accepts_vae_size_anchor_and_larger_volume(self):
+        predictor = Predictor(
+            IdentityVAE(),
+            ZeroDenoiser(),
+            IdentityDDPM(timesteps=1),
+            device="cpu",
+        )
+        anchor = AnchorSlice(
+            image=np.ones((2, 2), dtype=np.uint8),
+            axis=0,
+            index=1,
+        )
+
+        with patch("torch.randn", return_value=torch.zeros(1, 4, 4, 4)):
+            volume, stats = predictor.predict(
+                PredictOptions(num_phases=2),
+                anchors=[anchor],
+                volume_size=4,
+            )
+
+        self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
+        self.assertEqual(stats["condition_start"], 1)
+        self.assertTrue(torch.equal(volume[2, 1:3, 1:3], torch.ones(2, 2, dtype=torch.uint8)))
+
     def test_predict_refines_large_volume_when_enabled(self):
         predictor = Predictor(
             IdentityVAE(),
@@ -204,6 +228,35 @@ class PredictorTest(unittest.TestCase):
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
         self.assertIn("steps", stats)
 
+    def test_predict_scale_sds_visits_shifted_vae_size_anchor_slice(self):
+        predictor = Predictor(
+            IdentityVAE(),
+            ZeroDenoiser(),
+            IdentityDDPM(timesteps=4),
+            device="cpu",
+        )
+        anchor = AnchorSlice(
+            image=np.ones((2, 2), dtype=np.uint8),
+            axis=0,
+            index=1,
+        )
+
+        with patch("torch.randn", return_value=torch.zeros(1, 4, 4, 4)):
+            volume, stats = predictor.predict(
+                PredictOptions(
+                    num_phases=2,
+                    sds_steps=1,
+                    sds_slice_steps=1,
+                    sds_weight=0.0,
+                    anchor_weight=1.0,
+                ),
+                anchors=[anchor],
+                volume_size=4,
+            )
+
+        self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
+        self.assertIn("anchor", stats)
+
     def test_predict_runs_scale_sds_with_large_target_images(self):
         predictor = Predictor(
             IdentityVAE(),
@@ -219,6 +272,7 @@ class PredictorTest(unittest.TestCase):
             sds_t_max=3,
             sds_weight=0.0,
             vf_weight=1.0,
+            tpc_weight=1.0,
         )
         target_images = [np.zeros((4, 4), dtype=np.uint8)]
 
@@ -231,6 +285,35 @@ class PredictorTest(unittest.TestCase):
 
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
         self.assertIn("vf", stats)
+        self.assertIn("tpc", stats)
+
+    def test_predict_runs_scale_sds_with_vae_size_tpc_targets(self):
+        predictor = Predictor(
+            IdentityVAE(),
+            ZeroDenoiser(),
+            IdentityDDPM(timesteps=4),
+            device="cpu",
+        )
+        options = PredictOptions(
+            num_phases=2,
+            sds_steps=1,
+            sds_slice_steps=1,
+            sds_t_min=1,
+            sds_t_max=3,
+            sds_weight=0.0,
+            tpc_weight=1.0,
+        )
+        target_images = [np.zeros((2, 2), dtype=np.uint8)]
+
+        with patch("torch.randn", return_value=torch.zeros(1, 4, 4, 4)):
+            volume, stats = predictor.predict(
+                options,
+                target_images=target_images,
+                volume_size=4,
+            )
+
+        self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
+        self.assertIn("tpc", stats)
 
 
 if __name__ == "__main__":
