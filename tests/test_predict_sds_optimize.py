@@ -26,6 +26,16 @@ class ZeroNoiseModel(nn.Module):
         return torch.zeros_like(x)
 
 
+class RecordingNoiseModel(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.batch_sizes: list[int] = []
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        self.batch_sizes.append(int(x.shape[0]))
+        return torch.zeros_like(x)
+
+
 class PredictSDSOptimizeTest(unittest.TestCase):
     def test_optimize_slice_updates_only_selected_slice(self):
         volume = torch.zeros(4, 4, 4)
@@ -193,6 +203,49 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
         self.assertLess(float(updated[:, 1, :].mean()), 0.0)
         self.assertIn("loss", stats)
         self.assertEqual(int(stats["steps"]), 2)
+
+    def test_optimize_volume_batches_same_axis_slices_for_sds_prior(self):
+        volume = torch.zeros(4, 4, 4)
+        vae = IdentityVAE()
+        model = RecordingNoiseModel()
+        ddpm = DDPM(timesteps=4)
+
+        updated, stats = optimize_volume(
+            volume,
+            vae,
+            model,
+            ddpm,
+            steps=1,
+            slice_steps=1,
+            sds_batch_size=2,
+            lr=0.1,
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            slice_schedule=[(0, 1), (0, 3)],
+            sds_weight=1.0,
+        )
+
+        self.assertEqual(model.batch_sizes, [2])
+        self.assertEqual(updated.shape, volume.shape)
+        self.assertIn("sds", stats)
+
+    def test_optimize_volume_rejects_cross_axis_slice_batch(self):
+        with self.assertRaisesRegex(ValueError, "same axis"):
+            optimize_volume(
+                torch.zeros(4, 4, 4),
+                IdentityVAE(),
+                ZeroNoiseModel(),
+                DDPM(timesteps=4),
+                steps=1,
+                slice_steps=1,
+                sds_batch_size=2,
+                lr=0.1,
+                t_min=1,
+                t_max=3,
+                num_phases=2,
+                slice_schedule=[(0, 1), (1, 1)],
+            )
 
     def test_optimize_volume_uses_matching_anchor_as_soft_loss_only(self):
         volume = torch.zeros(4, 4, 4)

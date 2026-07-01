@@ -31,6 +31,16 @@ class ZeroNoiseModel(torch.nn.Module):
         return torch.zeros_like(x)
 
 
+class RecordingNoiseModel(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.batch_sizes: list[int] = []
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        self.batch_sizes.append(int(x.shape[0]))
+        return torch.zeros_like(x)
+
+
 class PredictScaleSDSTest(unittest.TestCase):
     def test_optimize_large_volume_updates_scheduled_anchor_slice_tiles(self):
         volume = torch.zeros(4, 4, 4)
@@ -138,6 +148,30 @@ class PredictScaleSDSTest(unittest.TestCase):
         self.assertLess(float(updated[1].mean()), 0.0)
         self.assertIn("vf", stats)
         self.assertIn("loss", stats)
+
+    def test_optimize_large_volume_batches_same_axis_slices_for_sds_prior(self):
+        model = RecordingNoiseModel()
+
+        updated, stats = optimize_large_volume(
+            torch.zeros(4, 4, 4),
+            IdentityVAE(),
+            model,
+            DDPM(timesteps=4),
+            steps=1,
+            slice_steps=1,
+            sds_batch_size=2,
+            lr=0.1,
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            slice_schedule=[(0, 1), (0, 3)],
+            sds_weight=1.0,
+            tile_overlap=0,
+        )
+
+        self.assertEqual(model.batch_sizes, [2, 2, 2, 2])
+        self.assertEqual(updated.shape, torch.Size([4, 4, 4]))
+        self.assertIn("sds", stats)
 
     def test_large_slice_prior_loss_is_averaged_across_tiles(self):
         decoded, total, stats = _local_prior_objective(

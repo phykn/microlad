@@ -243,12 +243,14 @@ class Predictor:
             slice_schedule = self._scale_anchor_schedule(
                 anchors,
                 steps=options.sds_steps,
+                batch_size=options.sds_batch_size,
                 volume_size=volume_size,
             )
 
         return {
             "steps": options.sds_steps,
             "slice_steps": options.sds_slice_steps,
+            "sds_batch_size": options.sds_batch_size,
             "lr": options.sds_lr,
             "t_min": options.sds_t_min,
             "t_max": self._sds_t_max(options),
@@ -413,6 +415,7 @@ class Predictor:
         anchors: Sequence[AnchorSlice] | None,
         *,
         steps: int,
+        batch_size: int = 1,
         volume_size: int,
     ) -> list[tuple[int, int]] | None:
         shifted = shifted_anchor_slices(
@@ -424,17 +427,55 @@ class Predictor:
         if not shifted or steps <= 0:
             return None
 
-        schedule: list[tuple[int, int]] = []
-        for anchor_slice in shifted:
-            if len(schedule) >= steps:
-                return schedule
-            schedule.append(anchor_slice)
+        batch_size = int(batch_size)
+        if batch_size <= 0:
+            raise ValueError("sds_batch_size must be positive.")
+        if batch_size > volume_size:
+            raise ValueError("sds_batch_size cannot exceed volume_size.")
 
-        while len(schedule) < steps:
-            axis = int(torch.randint(0, 3, (), device=self.device).item())
-            index = int(torch.randint(0, volume_size, (), device=self.device).item())
-            schedule.append((axis, index))
+        remaining = [(int(axis), int(index)) for axis, index in shifted]
+        schedule: list[tuple[int, int]] = []
+        for _ in range(steps):
+            group: list[tuple[int, int]] = []
+            used_indices: set[int] = set()
+            if remaining:
+                axis = remaining[0][0]
+                next_remaining: list[tuple[int, int]] = []
+                for entry_axis, entry_index in remaining:
+                    if (
+                        entry_axis == axis
+                        and len(group) < batch_size
+                        and entry_index not in used_indices
+                    ):
+                        group.append((entry_axis, entry_index))
+                        used_indices.add(entry_index)
+                    else:
+                        next_remaining.append((entry_axis, entry_index))
+                remaining = next_remaining
+            else:
+                axis = int(torch.randint(0, 3, (), device=self.device).item())
+
+            while len(group) < batch_size:
+                index = self._random_unused_index(
+                    volume_size,
+                    used_indices=used_indices,
+                )
+                group.append((axis, index))
+                used_indices.add(index)
+            schedule.extend(group)
         return schedule
+
+    def _random_unused_index(
+        self,
+        volume_size: int,
+        *,
+        used_indices: set[int],
+    ) -> int:
+        for index in torch.randperm(volume_size, device=self.device).tolist():
+            index = int(index)
+            if index not in used_indices:
+                return index
+        raise ValueError("sds_batch_size cannot exceed volume_size.")
 
     def _scale_descriptor_tile_size(
         self,

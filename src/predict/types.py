@@ -31,6 +31,7 @@ class PredictOptions:
 
     sds_steps: int = 0
     sds_slice_steps: int = 1
+    sds_batch_size: int = 1
     sds_lr: float = 1e-2
     sds_t_min: int = 1
     sds_t_max: int | None = None
@@ -68,6 +69,13 @@ class PredictOptions:
             raise ValueError("sds_steps must be non-negative.")
         if self.sds_slice_steps < 0:
             raise ValueError("sds_slice_steps must be non-negative.")
+        if (
+            not isinstance(self.sds_batch_size, int)
+            or isinstance(self.sds_batch_size, bool)
+        ):
+            raise ValueError("sds_batch_size must be an integer.")
+        if self.sds_batch_size <= 0:
+            raise ValueError("sds_batch_size must be positive.")
         if self.sds_lr <= 0.0:
             raise ValueError("sds_lr must be positive.")
         if self.sds_t_min < 0:

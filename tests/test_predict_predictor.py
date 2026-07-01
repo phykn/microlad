@@ -57,6 +57,12 @@ class PredictOptionsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "vf_weight"):
             PredictOptions(num_phases=2, vf_weight=2.0)
 
+    def test_predict_options_rejects_invalid_sds_batch_size(self):
+        with self.assertRaisesRegex(ValueError, "sds_batch_size"):
+            PredictOptions(num_phases=2, sds_batch_size=0)
+        with self.assertRaisesRegex(ValueError, "sds_batch_size"):
+            PredictOptions(num_phases=2, sds_batch_size=1.5)
+
 
 class PredictorTest(unittest.TestCase):
     def test_predict_returns_quantized_phase_volume(self):
@@ -315,6 +321,7 @@ class PredictorTest(unittest.TestCase):
                     num_phases=2,
                     sds_steps=1,
                     sds_slice_steps=1,
+                    sds_batch_size=2,
                     sds_weight=0.0,
                     anchor_weight=1.0,
                 ),
