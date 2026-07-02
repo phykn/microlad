@@ -21,6 +21,9 @@ class IdentityVAE(torch.nn.Module):
     def encode(self, image: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         return image.clone(), torch.zeros_like(image)
 
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        return latent
+
 
 class DownsamplingVAE(torch.nn.Module):
     image_size = 2
@@ -37,6 +40,14 @@ class DownsamplingVAE(torch.nn.Module):
             dtype=image.dtype,
             device=image.device,
         )
+
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        return latent.expand(-1, 1, self.image_size, self.image_size)
+
+
+class ShiftDecodeVAE(IdentityVAE):
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        return latent + 0.25
 
 
 class NonFiniteVAE(IdentityVAE):
@@ -177,6 +188,7 @@ class ScaleConditionTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "align"):
             prepare_scale_anchor_targets(
+                DownsamplingVAE(),
                 [anchor],
                 volume_size=4,
                 base_size=2,
@@ -186,6 +198,27 @@ class ScaleConditionTest(unittest.TestCase):
                 dtype=torch.float32,
                 downsample_factor=2,
             )
+
+    def test_scale_anchor_targets_use_reconstructed_center_patch(self):
+        anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=1)
+
+        targets, masks = prepare_scale_anchor_targets(
+            ShiftDecodeVAE(),
+            [anchor],
+            volume_size=6,
+            base_size=2,
+            num_phases=2,
+            segment=False,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+
+        target = targets[(0, 3)]
+        mask = masks[(0, 3)]
+
+        self.assertTrue(torch.allclose(target[2:4, 2:4], torch.full((2, 2), -0.75)))
+        self.assertTrue(torch.equal(mask[2:4, 2:4], torch.ones(2, 2)))
+        self.assertTrue(torch.equal(mask[:2, :], torch.zeros(2, 6)))
 
     def test_shifted_anchor_slices_reject_center_that_cannot_align_to_latent_grid(self):
         anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=0)

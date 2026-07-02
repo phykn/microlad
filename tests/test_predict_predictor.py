@@ -10,14 +10,22 @@ from src.predict import AnchorSlice, PredictOptions, Predictor
 class IdentityDDPM:
     def __init__(self, timesteps: int = 4) -> None:
         self.num_timesteps = timesteps
+        self.posterior_variance = torch.zeros(timesteps)
         self.steps: list[int] = []
 
-    def p_sample(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def p_mean(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         self.steps.append(int(t[0].item()))
         return x
 
+    def p_sample(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return self.p_mean(model, x, t)
+
     def q_sample(self, x_start: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return x_start
+
+    def _expand(self, values: torch.Tensor, t: torch.Tensor, ndim: int) -> torch.Tensor:
+        shape = (t.shape[0],) + (1,) * (ndim - 1)
+        return values.to(device=t.device)[t].view(shape)
 
 
 class ZeroDenoiser(torch.nn.Module):

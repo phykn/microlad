@@ -234,6 +234,7 @@ class Predictor:
 
         if self._uses_scale_anchor(anchors, volume_size):
             anchor_targets, anchor_masks = prepare_scale_anchor_targets(
+                self.vae,
                 anchors,
                 volume_size=volume_size,
                 base_size=self._image_size(),

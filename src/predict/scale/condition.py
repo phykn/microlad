@@ -3,7 +3,12 @@ from collections.abc import Sequence
 import numpy as np
 import torch
 
-from src.predict.anchor import prepare_anchor_image, validate_anchor, validate_anchors
+from src.predict.anchor import (
+    prepare_anchor_image,
+    reconstruct_anchor_target,
+    validate_anchor,
+    validate_anchors,
+)
 from src.predict.scale.tiles import tile_grid
 from src.predict.types import AnchorSlice
 from src.predict.validation import validate_finite_tensor
@@ -157,6 +162,7 @@ def prepare_scale_anchor_latents(
 
 
 def prepare_scale_anchor_targets(
+    vae: torch.nn.Module,
     anchors: Sequence[AnchorSlice] | None,
     *,
     volume_size: int,
@@ -191,7 +197,8 @@ def prepare_scale_anchor_targets(
             anchor.image,
             num_phases=num_phases,
             segment=segment,
-        )[0, 0].to(device=device, dtype=dtype)
+        ).to(device=device, dtype=dtype)
+        image = reconstruct_anchor_target(vae, image)[0, 0]
 
         target = torch.zeros((volume_size, volume_size), device=device, dtype=dtype)
         mask = torch.zeros_like(target)

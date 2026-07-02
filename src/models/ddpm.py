@@ -84,7 +84,7 @@ class DDPM:
         sigma = self._expand(self.sqrt_one_minus_alphas_cumprod, t, x_start.ndim)
         return alpha * x_start + sigma * noise
 
-    def p_sample(
+    def p_mean(
         self,
         model: torch.nn.Module,
         x_t: torch.Tensor,
@@ -100,7 +100,16 @@ class DDPM:
         alpha = self._expand(self.alphas, t, x_t.ndim)
         beta = self._expand(self.betas, t, x_t.ndim)
         sigma = self._expand(self.sqrt_one_minus_alphas_cumprod, t, x_t.ndim)
-        mean = (x_t - beta / sigma * pred_noise) / torch.sqrt(alpha)
+
+        return (x_t - beta / sigma * pred_noise) / torch.sqrt(alpha)
+
+    def p_sample(
+        self,
+        model: torch.nn.Module,
+        x_t: torch.Tensor,
+        t: torch.Tensor,
+    ) -> torch.Tensor:
+        mean = self.p_mean(model, x_t, t)
 
         noise = torch.randn_like(x_t)
         shape = (t.shape[0],) + (1,) * (x_t.ndim - 1)

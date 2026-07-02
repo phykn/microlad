@@ -16,6 +16,21 @@ class PredictSDSPhaseTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(probability.sum(dim=0), torch.ones(3)))
 
+    def test_soft_phase_probability_uses_squared_distance_logits(self):
+        values = torch.tensor([0.25])
+        temperature = 0.5
+
+        probability = soft_phase_probability(
+            values,
+            num_phases=3,
+            temperature=temperature,
+            phase_dim=0,
+        )
+
+        levels = torch.tensor([-1.0, 0.0, 1.0])
+        expected = torch.softmax(-(values - levels).pow(2) / temperature, dim=0)
+        self.assertTrue(torch.allclose(probability[:, 0], expected))
+
     def test_soft_phase_probability_rejects_non_floating_values(self):
         with self.assertRaisesRegex(ValueError, "floating"):
             soft_phase_probability(torch.tensor([0, 1]), num_phases=4)

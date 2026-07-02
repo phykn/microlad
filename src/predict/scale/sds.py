@@ -79,12 +79,14 @@ def optimize_large_volume(
         num_phases=num_phases,
     )
     prepared_targets = prepare_anchor_targets(
+        vae,
         anchors,
         volume_shape=volume.shape,
         num_phases=num_phases,
         segment=anchor_segment,
         device=volume.device,
         dtype=volume.dtype,
+        tile_overlap=tile_overlap,
     )
     prepared_targets.update(
         _tensor_map(

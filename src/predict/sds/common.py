@@ -2,12 +2,17 @@ from collections.abc import Sequence
 
 import torch
 
-from src.predict.anchor import prepare_anchor_image, validate_anchors
+from src.predict.anchor import (
+    prepare_anchor_image,
+    reconstruct_anchor_target,
+    validate_anchors,
+)
 from src.predict.types import AnchorSlice
 from src.predict.validation import validate_floating_dtype
 
 
 def prepare_anchor_targets(
+    vae: torch.nn.Module,
     anchors: Sequence[AnchorSlice] | None,
     *,
     volume_shape: torch.Size,
@@ -15,6 +20,7 @@ def prepare_anchor_targets(
     segment: bool,
     device: torch.device,
     dtype: torch.dtype,
+    tile_overlap: int = 0,
 ) -> dict[tuple[int, int], torch.Tensor]:
     if not anchors:
         return {}
@@ -30,6 +36,11 @@ def prepare_anchor_targets(
             num_phases=num_phases,
             segment=segment,
         ).to(device=device, dtype=dtype)
+        target = reconstruct_anchor_target(
+            vae,
+            target,
+            tile_overlap=tile_overlap,
+        )
         targets[(anchor.axis, anchor.index)] = target
 
     return targets

@@ -76,6 +76,7 @@ def optimize_volume(
         diffusivity_solver=diffusivity_solver,
     )
     anchor_targets = prepare_anchor_targets(
+        vae,
         anchors,
         volume_shape=volume.shape,
         num_phases=num_phases,

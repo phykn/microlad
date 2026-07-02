@@ -27,7 +27,7 @@ def denoise_tiled_plane(
         raise ValueError("timesteps must be integer tensors.")
 
     _, _, height, width = planes.shape
-    out = torch.zeros_like(planes)
+    mean_out = torch.zeros_like(planes)
     count = torch.zeros(
         (1, 1, height, width),
         dtype=planes.dtype,
@@ -36,14 +36,23 @@ def denoise_tiled_plane(
 
     for row, col in tile_grid(height, width, tile_size=tile_size, overlap=overlap):
         patch = planes[:, :, row : row + tile_size, col : col + tile_size]
-        denoised = ddpm.p_sample(model, patch, timesteps)
+        mean_tile = ddpm.p_mean(model, patch, timesteps)
 
-        if denoised.shape != patch.shape:
-            raise ValueError("ddpm.p_sample output must match input patch shape.")
+        if mean_tile.shape != patch.shape:
+            raise ValueError("ddpm.p_mean output must match input patch shape.")
 
-        validate_finite_tensor("p_sample output", denoised)
+        validate_finite_tensor("p_mean output", mean_tile)
 
-        out[:, :, row : row + tile_size, col : col + tile_size] += denoised
+        mean_out[:, :, row : row + tile_size, col : col + tile_size] += mean_tile
         count[:, :, row : row + tile_size, col : col + tile_size] += 1
 
-    return out / count.clamp_min(1)
+    mean_out = mean_out / count.clamp_min(1)
+    noise = torch.randn_like(mean_out)
+    shape = (timesteps.shape[0],) + (1,) * (mean_out.ndim - 1)
+    noise = torch.where(timesteps.view(shape) > 0, noise, torch.zeros_like(noise))
+    variance = ddpm._expand(ddpm.posterior_variance, timesteps, mean_out.ndim)
+    denoised = mean_out + torch.sqrt(variance) * noise
+
+    validate_finite_tensor("denoised", denoised)
+
+    return denoised

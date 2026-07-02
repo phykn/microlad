@@ -29,6 +29,6 @@ def soft_phase_probability(
     level_shape = [1] * (values.ndim + 1)
     level_shape[phase_dim] = num_phases
 
-    distance = (values.unsqueeze(phase_dim) - levels.view(level_shape)).abs()
+    distance = values.unsqueeze(phase_dim) - levels.view(level_shape)
 
-    return torch.softmax(-distance / temperature, dim=phase_dim)
+    return torch.softmax(-distance.pow(2) / temperature, dim=phase_dim)

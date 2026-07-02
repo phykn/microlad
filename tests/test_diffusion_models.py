@@ -56,6 +56,23 @@ class DDPMTest(unittest.TestCase):
 
         self.assertEqual(sample.shape, x.shape)
 
+    def test_p_mean_matches_ddpm_posterior_mean_formula(self):
+        class FixedNoise(torch.nn.Module):
+            def forward(self, x, t):
+                return torch.full_like(x, 0.25)
+
+        ddpm = DDPM(timesteps=4, beta_start=0.1, beta_end=0.2)
+        x = torch.full((2, 3, 4, 4), 0.5)
+        t = torch.tensor([0, 2], dtype=torch.long)
+
+        mean = ddpm.p_mean(FixedNoise(), x, t)
+
+        alpha = ddpm.alphas[t].view(2, 1, 1, 1)
+        beta = ddpm.betas[t].view(2, 1, 1, 1)
+        sigma = ddpm.sqrt_one_minus_alphas_cumprod[t].view(2, 1, 1, 1)
+        expected = (x - beta / sigma * 0.25) / torch.sqrt(alpha)
+        self.assertTrue(torch.allclose(mean, expected))
+
     def test_rejects_invalid_timesteps(self):
         ddpm = DDPM(timesteps=4)
         x = torch.randn(2, 3, 4, 4)

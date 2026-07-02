@@ -10,12 +10,20 @@ from src.predict.scale.sampler import sample_large_lmpdd
 
 class IdentityDDPM:
     num_timesteps = 1
+    posterior_variance = torch.zeros(1)
+
+    def p_mean(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return x
 
     def p_sample(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return x
 
     def q_sample(self, x_start: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return x_start
+
+    def _expand(self, values: torch.Tensor, t: torch.Tensor, ndim: int) -> torch.Tensor:
+        shape = (t.shape[0],) + (1,) * (ndim - 1)
+        return values.to(device=t.device)[t].view(shape)
 
 
 class ZeroModel(torch.nn.Module):
@@ -25,28 +33,67 @@ class ZeroModel(torch.nn.Module):
 
 class OrientationDDPM:
     num_timesteps = 3
+    posterior_variance = torch.zeros(3)
 
-    def p_sample(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def p_mean(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         rows = torch.arange(x.shape[-2], device=x.device, dtype=x.dtype).view(1, 1, -1, 1)
         cols = torch.arange(x.shape[-1], device=x.device, dtype=x.dtype).view(1, 1, 1, -1)
         return x + (int(t[0].item()) + 1) * (rows * 10 + cols)
 
+    def p_sample(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return self.p_mean(model, x, t)
+
     def q_sample(self, x_start: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return x_start
 
+    def _expand(self, values: torch.Tensor, t: torch.Tensor, ndim: int) -> torch.Tensor:
+        shape = (t.shape[0],) + (1,) * (ndim - 1)
+        return values.to(device=t.device)[t].view(shape)
+
 
 class BadShapeDDPM:
-    def p_sample(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    posterior_variance = torch.zeros(1)
+
+    def p_mean(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return torch.zeros(x.shape[0], x.shape[1], 1, x.shape[-1], device=x.device)
+
+    def _expand(self, values: torch.Tensor, t: torch.Tensor, ndim: int) -> torch.Tensor:
+        shape = (t.shape[0],) + (1,) * (ndim - 1)
+        return values.to(device=t.device)[t].view(shape)
 
 
 class NonFiniteDDPM:
-    def p_sample(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    posterior_variance = torch.zeros(1)
+
+    def p_mean(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return torch.full_like(x, float("nan"))
+
+    def _expand(self, values: torch.Tensor, t: torch.Tensor, ndim: int) -> torch.Tensor:
+        shape = (t.shape[0],) + (1,) * (ndim - 1)
+        return values.to(device=t.device)[t].view(shape)
+
+
+class MeanOnlyDDPM:
+    posterior_variance = torch.tensor([0.0, 4.0])
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def p_mean(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        self.calls += 1
+        return torch.full_like(x, float(self.calls))
+
+    def p_sample(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        raise AssertionError("denoise_tiled_plane must average p_mean, not p_sample.")
+
+    def _expand(self, values: torch.Tensor, t: torch.Tensor, ndim: int) -> torch.Tensor:
+        shape = (t.shape[0],) + (1,) * (ndim - 1)
+        return values.to(device=t.device)[t].view(shape)
 
 
 class NonFiniteQSampleDDPM(IdentityDDPM):
     num_timesteps = 2
+    posterior_variance = torch.zeros(2)
 
     def q_sample(self, x_start: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return torch.full_like(x_start, float("nan"))
@@ -54,6 +101,7 @@ class NonFiniteQSampleDDPM(IdentityDDPM):
 
 class BroadcastQSampleDDPM(IdentityDDPM):
     num_timesteps = 2
+    posterior_variance = torch.zeros(2)
 
     def q_sample(self, x_start: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return torch.zeros(
@@ -226,7 +274,7 @@ class ScaleSamplerTest(unittest.TestCase):
         self.assertTrue(torch.equal(large, base.permute(1, 0, 2, 3).contiguous()))
 
     def test_denoise_tiled_plane_rejects_bad_sample_shape(self):
-        with self.assertRaisesRegex(ValueError, "p_sample"):
+        with self.assertRaisesRegex(ValueError, "p_mean"):
             denoise_tiled_plane(
                 ZeroModel(),
                 BadShapeDDPM(),
@@ -270,7 +318,7 @@ class ScaleSamplerTest(unittest.TestCase):
             )
 
     def test_denoise_tiled_plane_rejects_non_finite_sample_output(self):
-        with self.assertRaisesRegex(ValueError, "p_sample output.*finite"):
+        with self.assertRaisesRegex(ValueError, "p_mean output.*finite"):
             denoise_tiled_plane(
                 ZeroModel(),
                 NonFiniteDDPM(),
@@ -279,6 +327,38 @@ class ScaleSamplerTest(unittest.TestCase):
                 tile_size=2,
                 overlap=0,
             )
+
+    def test_denoise_tiled_plane_averages_means_then_adds_one_plane_noise(self):
+        ddpm = MeanOnlyDDPM()
+        planes = torch.zeros(1, 1, 3, 3)
+        timesteps = torch.tensor([1], dtype=torch.long)
+
+        with patch("torch.randn_like", return_value=torch.full_like(planes, 0.25)) as randn:
+            denoised = denoise_tiled_plane(
+                ZeroModel(),
+                ddpm,
+                planes,
+                timesteps,
+                tile_size=2,
+                overlap=1,
+            )
+
+        expected_mean = torch.tensor(
+            [
+                [
+                    [
+                        [1.0, 1.5, 2.0],
+                        [2.0, 2.5, 3.0],
+                        [3.0, 3.5, 4.0],
+                    ]
+                ]
+            ]
+        )
+        expected = expected_mean + 0.5
+
+        self.assertTrue(torch.allclose(denoised, expected))
+        self.assertEqual(ddpm.calls, 4)
+        self.assertEqual(randn.call_count, 1)
 
 
 if __name__ == "__main__":
