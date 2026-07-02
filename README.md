@@ -75,8 +75,10 @@ run/<timestamp>/
 - 2D images: `H x W`
 - Dataset output: `[1, H, W]`, float, `-1..1`
 - VAE latent: `[C, 16, 16]` by default
-- Dataset inputs are loaded as grayscale `uint8`.
-- If `segment: true`, images are segmented into `num_phases` before scaling to `-1..1`.
+- If `segment: true`, dataset inputs are loaded as grayscale `uint8`,
+  segmented into `num_phases`, then scaled to `-1..1`.
+- If `segment: false`, dataset inputs must already be 2D phase label images
+  with integer values from `0` to `num_phases - 1`.
 
 ## Predict
 

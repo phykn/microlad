@@ -9,6 +9,7 @@ def phase_levels(
 ) -> torch.Tensor:
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
+
     return torch.linspace(-1.0, 1.0, num_phases, device=device, dtype=dtype)
 
 
@@ -19,6 +20,7 @@ def phase_logits(
 ) -> torch.Tensor:
     if recon.ndim != 4 or recon.shape[1] != 1:
         raise ValueError("recon must have shape [B, 1, H, W].")
+
     if temperature <= 0:
         raise ValueError("temperature must be positive.")
 
@@ -35,8 +37,10 @@ def phase_loss(
 ) -> torch.Tensor:
     if recon.shape != target.shape:
         raise ValueError("recon and target must have the same shape.")
+
     if target.ndim != 4 or target.shape[1] != 1:
         raise ValueError("target must have shape [B, 1, H, W].")
+
     if any(size <= 0 for size in target.shape):
         raise ValueError("recon and target must not be empty.")
 

@@ -40,6 +40,12 @@ class IdentityVAE(torch.nn.Module):
         return latent.clone()
 
 
+class ZeroDownsampleVAE(IdentityVAE):
+    def __init__(self) -> None:
+        super().__init__()
+        self.downsample_factor = 0
+
+
 class PredictOptionsTest(unittest.TestCase):
     def test_predict_options_rejects_non_integer_num_phases(self):
         with self.assertRaisesRegex(ValueError, "num_phases"):
@@ -57,11 +63,38 @@ class PredictOptionsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "vf_weight"):
             PredictOptions(num_phases=2, vf_weight=2.0)
 
+    def test_predict_options_rejects_non_finite_numeric_values(self):
+        cases = [
+            ("sds_weight", {"sds_weight": float("nan")}),
+            ("anchor_weight", {"anchor_weight": float("nan")}),
+            ("diffusivity_low_cond", {"diffusivity_low_cond": float("nan")}),
+            ("sds_lr", {"sds_lr": float("nan")}),
+        ]
+
+        for message, kwargs in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    PredictOptions(num_phases=2, **kwargs)
+
     def test_predict_options_rejects_invalid_sds_batch_size(self):
         with self.assertRaisesRegex(ValueError, "sds_batch_size"):
             PredictOptions(num_phases=2, sds_batch_size=0)
         with self.assertRaisesRegex(ValueError, "sds_batch_size"):
             PredictOptions(num_phases=2, sds_batch_size=1.5)
+
+    def test_predict_options_rejects_non_integer_step_counts(self):
+        cases = [
+            ("sds_steps", {"sds_steps": 1.5}),
+            ("sds_slice_steps", {"sds_slice_steps": True}),
+            ("sds_t_min", {"sds_t_min": 1.5}),
+            ("sds_t_max", {"sds_t_max": 2.5}),
+            ("refine_steps", {"refine_steps": 1.5}),
+        ]
+
+        for message, kwargs in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, f"{message}.*integer"):
+                    PredictOptions(num_phases=2, **kwargs)
 
 
 class PredictorTest(unittest.TestCase):
@@ -209,6 +242,29 @@ class PredictorTest(unittest.TestCase):
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
         self.assertEqual(volume.dtype, torch.uint8)
         self.assertIsInstance(stats, dict)
+
+    def test_predict_rejects_non_integer_volume_size(self):
+        predictor = Predictor(
+            IdentityVAE(),
+            ZeroDenoiser(),
+            IdentityDDPM(timesteps=1),
+            device="cpu",
+        )
+
+        with self.assertRaisesRegex(ValueError, "volume_size.*integer"):
+            predictor.predict(PredictOptions(num_phases=2), volume_size=4.5)
+
+    def test_predict_rejects_invalid_vae_downsample_factor_before_sampling(self):
+        predictor = Predictor(
+            ZeroDownsampleVAE(),
+            ZeroDenoiser(),
+            IdentityDDPM(timesteps=1),
+            device="cpu",
+        )
+
+        with patch("torch.randn", side_effect=AssertionError("sampling started")):
+            with self.assertRaisesRegex(ValueError, "downsample"):
+                predictor.predict(PredictOptions(num_phases=2), volume_size=4)
 
     def test_predict_uses_full_size_anchor_for_large_volume_conditioning(self):
         predictor = Predictor(

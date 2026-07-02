@@ -1,5 +1,7 @@
 import torch
 
+from src.predict.validation import validate_finite_tensor, validate_floating_dtype
+
 
 @torch.no_grad()
 def generate_initial_volume(
@@ -12,6 +14,9 @@ def generate_initial_volume(
 ) -> torch.Tensor:
     if size is None:
         size = int(vae.image_size)
+
+    _validate_integer("size", size)
+
     if size != int(vae.image_size):
         raise ValueError("size must match vae.image_size.")
 
@@ -37,13 +42,7 @@ def decode_latent_volume(
     vae.eval()
 
     _, depth, height, width = latent.shape
-    factor = int(
-        getattr(
-            vae,
-            "downsample_factor",
-            int(vae.image_size) // int(vae.latent_size),
-        )
-    )
+    factor = _downsample_factor(vae)
     volume = torch.zeros(
         depth * factor,
         height * factor,
@@ -70,9 +69,15 @@ def decode_latent_volume(
 def _validate_latent_volume(vae: torch.nn.Module, latent: torch.Tensor) -> None:
     if latent.ndim != 4:
         raise ValueError("latent volume must have shape [C, D, H, W].")
+
     if latent.shape[0] != int(vae.latent_ch):
         raise ValueError("latent channel count must match vae.latent_ch.")
+
+    validate_floating_dtype("latent dtype", latent.dtype)
+    validate_finite_tensor("latent", latent)
+
     latent_size = int(vae.latent_size)
+
     if latent.shape[1:] != (latent_size, latent_size, latent_size):
         raise ValueError(
             f"latent spatial shape must be {(latent_size, latent_size, latent_size)}."
@@ -81,9 +86,40 @@ def _validate_latent_volume(vae: torch.nn.Module, latent: torch.Tensor) -> None:
 
 def _decode_slice(vae: torch.nn.Module, latent_slice: torch.Tensor) -> torch.Tensor:
     decoded = vae.decode(latent_slice)
+
     if decoded.ndim != 4 or decoded.shape[:2] != (1, 1):
         raise ValueError("decode output must have shape [1, 1, H, W].")
+
     expected = (int(vae.image_size), int(vae.image_size))
+
     if tuple(decoded.shape[-2:]) != expected:
         raise ValueError(f"decode output spatial shape must be {expected}.")
+
+    validate_finite_tensor("decoded", decoded)
+
     return decoded[0, 0].float()
+
+
+def _downsample_factor(vae: torch.nn.Module) -> int:
+    factor = int(
+        getattr(
+            vae,
+            "downsample_factor",
+            int(vae.image_size) // int(vae.latent_size),
+        )
+    )
+
+    if factor <= 0:
+        raise ValueError("VAE downsample factor must be positive.")
+
+    if int(vae.image_size) != int(vae.latent_size) * factor:
+        raise ValueError(
+            "vae.image_size must equal vae.latent_size times downsample factor."
+        )
+
+    return factor
+
+
+def _validate_integer(name: str, value: int) -> None:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer.")

@@ -41,6 +41,10 @@ class PredictPostprocessTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "finite"):
             quantize_phase(torch.tensor([float("nan")]), num_phases=3)
 
+    def test_quantize_phase_rejects_non_floating_values(self):
+        with self.assertRaisesRegex(ValueError, "floating"):
+            quantize_phase(torch.tensor([0, 1]), num_phases=3)
+
     def test_model_output_to_phase_removes_single_channel_dimension(self):
         output = torch.tensor([[[[-1.0, 0.0], [1.0, 2.0]]]])
 
@@ -55,6 +59,13 @@ class PredictPostprocessTest(unittest.TestCase):
             )
         )
 
+    def test_model_output_to_phase_rejects_non_floating_output(self):
+        with self.assertRaisesRegex(ValueError, "floating"):
+            model_output_to_phase(
+                torch.zeros(1, 1, 2, 2, dtype=torch.int64),
+                num_phases=3,
+            )
+
     def test_phase_to_numpy_returns_uint8_array_on_cpu(self):
         phase = torch.tensor([[[0, 1], [2, 2]]], dtype=torch.uint8)
 
@@ -64,6 +75,10 @@ class PredictPostprocessTest(unittest.TestCase):
         self.assertEqual(array.dtype, np.uint8)
         self.assertEqual(array.shape, (1, 2, 2))
         self.assertTrue(np.array_equal(array, phase.numpy()))
+
+    def test_phase_to_numpy_rejects_non_uint8_phase(self):
+        with self.assertRaisesRegex(ValueError, "uint8"):
+            phase_to_numpy(torch.zeros(1, 2, 2))
 
 
 if __name__ == "__main__":

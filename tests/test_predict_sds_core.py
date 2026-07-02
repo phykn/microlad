@@ -107,6 +107,47 @@ class PredictSDSCoreTest(unittest.TestCase):
                 noise=torch.zeros(1, 1, 1, 1),
             )
 
+    def test_sds_loss_rejects_non_finite_values(self):
+        ddpm = DDPM(timesteps=4)
+        valid_latent = torch.zeros(1, 1, 2, 2)
+        valid_noise = torch.zeros_like(valid_latent)
+        valid_t = torch.tensor([1], dtype=torch.long)
+
+        cases = [
+            lambda: sds_loss(
+                torch.full_like(valid_latent, float("nan")),
+                ConstantNoiseModel(value=0.0),
+                ddpm,
+                t=valid_t,
+                noise=valid_noise,
+                t_min=1,
+                t_max=3,
+            ),
+            lambda: sds_loss(
+                valid_latent,
+                ConstantNoiseModel(value=0.0),
+                ddpm,
+                t=valid_t,
+                noise=torch.full_like(valid_latent, float("inf")),
+                t_min=1,
+                t_max=3,
+            ),
+            lambda: sds_loss(
+                valid_latent,
+                ConstantNoiseModel(value=float("inf")),
+                ddpm,
+                t=valid_t,
+                noise=valid_noise,
+                t_min=1,
+                t_max=3,
+            ),
+        ]
+
+        for call in cases:
+            with self.subTest(call=call):
+                with self.assertRaisesRegex(ValueError, "finite"):
+                    call()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -91,6 +91,13 @@ class PatchVAETest(unittest.TestCase):
 
         self.assertEqual(z.shape, mu.shape)
 
+    def test_reparameterize_rejects_mismatched_shapes(self):
+        mu = torch.zeros(2, 4, 16, 16)
+        logvar = torch.zeros(1, 4, 16, 16)
+
+        with self.assertRaisesRegex(ValueError, "shape"):
+            reparameterize(mu, logvar)
+
 
 if __name__ == "__main__":
     unittest.main()

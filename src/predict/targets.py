@@ -1,3 +1,5 @@
+import math
+from numbers import Real
 from collections.abc import Sequence
 
 import numpy as np
@@ -56,12 +58,14 @@ def build_sds_targets(
             num_phases=num_phases,
             temperature=temperature,
         ).detach()
+
     if use_tpc:
         targets["tpc_targets"] = compute_tpc(
             values,
             num_phases=num_phases,
             temperature=temperature,
         ).detach()
+
     if use_sa:
         targets["sa_targets"] = compute_surface_area(
             values,
@@ -70,6 +74,7 @@ def build_sds_targets(
             kernel_size=sa_kernel_size,
             sigma=sa_sigma,
         ).detach()
+
     if use_diffusivity:
         height, width = _diffusivity_shape(diffusivity_size)
         solver = DiffusivitySolver(
@@ -119,6 +124,7 @@ def _prepare_images(
             shape = phase.shape
         elif phase.shape != shape:
             raise ValueError("target images must have the same shape.")
+
         phases.append(phase)
 
     array = np.stack(phases).astype(np.float32)
@@ -134,18 +140,23 @@ def _prepare_phase_image(
 ) -> np.ndarray:
     if not isinstance(image, np.ndarray):
         raise TypeError("images must be numpy arrays.")
+
     if image.ndim != 2:
         raise ValueError("target images must be 2D.")
+
     if image.size == 0:
         raise ValueError("target images must be non-empty.")
+
     if image.dtype != np.uint8:
         raise ValueError("target images must have dtype uint8.")
 
     phase = segment_multi_otsu(image, num_phases) if segment else image
+
     if phase.min() < 0 or phase.max() >= num_phases:
         raise ValueError(
             f"target images must contain values from 0 to {num_phases - 1}."
         )
+
     return phase
 
 
@@ -158,21 +169,29 @@ def _validate_options(
     use_diffusivity: bool,
     diffusivity_size: int | tuple[int, int] | None,
     diffusivity_low_cond: float,
-    ) -> None:
+) -> None:
+    _validate_integer("num_phases", num_phases)
+
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
+
     if num_phases > MAX_UINT8_PHASES:
         raise ValueError(
             f"num_phases must be at most {MAX_UINT8_PHASES} for uint8 images."
         )
-    if temperature <= 0.0:
-        raise ValueError("temperature must be positive.")
+
+    _validate_positive_scalar("temperature", temperature)
+
+    _validate_integer("sa_kernel_size", sa_kernel_size)
     if sa_kernel_size <= 0 or sa_kernel_size % 2 == 0:
         raise ValueError("sa_kernel_size must be a positive odd integer.")
-    if sa_sigma <= 0.0:
-        raise ValueError("sa_sigma must be positive.")
+
+    _validate_positive_scalar("sa_sigma", sa_sigma)
+
     if use_diffusivity:
         _diffusivity_shape(diffusivity_size)
+
+    _validate_finite_scalar("diffusivity_low_cond", diffusivity_low_cond)
     if diffusivity_low_cond < 0.0 or diffusivity_low_cond > 1.0:
         raise ValueError("diffusivity_low_cond must be between 0 and 1.")
 
@@ -180,13 +199,41 @@ def _validate_options(
 def _diffusivity_shape(size: int | tuple[int, int] | None) -> tuple[int, int]:
     if size is None:
         raise ValueError("diffusivity_size is required when use_diffusivity is True.")
-    if isinstance(size, int):
+
+    if isinstance(size, int) and not isinstance(size, bool):
         height = width = size
-    else:
+    elif isinstance(size, tuple) and len(size) == 2:
         height, width = size
+    else:
+        raise ValueError("diffusivity_size must be an integer or (height, width).")
+
+    _validate_integer("diffusivity_size height", height)
+    _validate_integer("diffusivity_size width", width)
 
     if height < 2:
         raise ValueError("diffusivity_size height must be at least 2.")
+
     if width < 2:
         raise ValueError("diffusivity_size width must be at least 2.")
+
     return int(height), int(width)
+
+
+def _validate_integer(name: str, value: int) -> None:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer.")
+
+
+def _validate_positive_scalar(name: str, value: float) -> None:
+    _validate_finite_scalar(name, value)
+
+    if value <= 0.0:
+        raise ValueError(f"{name} must be positive.")
+
+
+def _validate_finite_scalar(name: str, value: float) -> None:
+    if not isinstance(value, Real) or isinstance(value, bool):
+        raise ValueError(f"{name} must be a real scalar.")
+
+    if not math.isfinite(float(value)):
+        raise ValueError(f"{name} must be finite.")

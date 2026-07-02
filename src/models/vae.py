@@ -85,10 +85,13 @@ class PatchVAE(nn.Module):
         max_ch: int = 512,
     ) -> None:
         super().__init__()
+
         if latent_ch <= 0:
             raise ValueError("latent_ch must be positive.")
+
         if base_ch <= 0:
             raise ValueError("base_ch must be positive.")
+
         if max_ch < base_ch:
             raise ValueError("max_ch must be greater than or equal to base_ch.")
 
@@ -123,6 +126,7 @@ class PatchVAE(nn.Module):
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if x.ndim != 4 or x.shape[1] != 1:
             raise ValueError("input must have shape [B, 1, H, W].")
+
         if x.shape[-2:] != (self.image_size, self.image_size):
             raise ValueError(
                 f"input image size must be {self.image_size}x{self.image_size}."
@@ -139,6 +143,7 @@ class PatchVAE(nn.Module):
             raise ValueError(
                 f"latent must have shape [B, {self.latent_ch}, H, W]."
             )
+
         if z.shape[-2:] != (self.latent_size, self.latent_size):
             raise ValueError(
                 f"latent spatial size must be {self.latent_size}x{self.latent_size}."
@@ -159,6 +164,9 @@ class PatchVAE(nn.Module):
 
 
 def reparameterize(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+    if mu.shape != logvar.shape:
+        raise ValueError("mu and logvar must have the same shape.")
+
     std = (0.5 * logvar).exp()
     eps = torch.randn_like(std)
     return mu + eps * std

@@ -81,6 +81,18 @@ class PredictSDSTPCTest(unittest.TestCase):
             tpc_loss(torch.zeros(2, 2), torch.zeros(3, 1), num_phases=2)
         with self.assertRaisesRegex(ValueError, "length"):
             tpc_loss(torch.zeros(4, 4), torch.zeros(2, 3), num_phases=2)
+        with self.assertRaisesRegex(ValueError, "phase indices"):
+            tpc_loss(
+                torch.zeros(2, 2),
+                {0.5: torch.zeros(2), 1: torch.zeros(2)},
+                num_phases=2,
+            )
+        with self.assertRaisesRegex(ValueError, "finite"):
+            tpc_loss(torch.zeros(2, 2), torch.full((2, 2), float("nan")), num_phases=2)
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            tpc_loss(torch.zeros(2, 2), torch.full((2, 2), -1.0), num_phases=2)
+        with self.assertRaisesRegex(ValueError, "between 0 and 1"):
+            tpc_loss(torch.zeros(2, 2), torch.full((2, 2), 1.1), num_phases=2)
 
 
 if __name__ == "__main__":

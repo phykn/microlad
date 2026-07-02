@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.predict.sds import surface_area_loss
+from src.predict.sds import compute_surface_area, surface_area_loss
 
 
 class PredictSDSSurfaceAreaTest(unittest.TestCase):
@@ -28,6 +28,13 @@ class PredictSDSSurfaceAreaTest(unittest.TestCase):
         self.assertLess(float(loss), 1e-4)
         self.assertTrue(torch.allclose(stats["actual_sa"], targets, atol=1e-3))
         self.assertTrue(torch.allclose(stats["target_sa"], targets))
+
+    def test_surface_area_is_zero_for_uniform_phase_with_default_smoothing(self):
+        values = torch.full((4, 4), -1.0)
+
+        actual = compute_surface_area(values, num_phases=2, temperature=0.01)
+
+        self.assertTrue(torch.allclose(actual, torch.zeros(2), atol=1e-6))
 
     def test_surface_area_loss_accepts_phase_mapping_targets(self):
         values = torch.full((4, 4), -1.0)
@@ -103,6 +110,12 @@ class PredictSDSSurfaceAreaTest(unittest.TestCase):
             surface_area_loss(torch.zeros(2, 2), {0: 0.0}, num_phases=2)
         with self.assertRaisesRegex(ValueError, "targets"):
             surface_area_loss(torch.zeros(2, 2), torch.zeros(3), num_phases=2)
+        with self.assertRaisesRegex(ValueError, "finite"):
+            surface_area_loss(
+                torch.zeros(2, 2),
+                torch.tensor([float("nan"), 0.0]),
+                num_phases=2,
+            )
 
 
 if __name__ == "__main__":

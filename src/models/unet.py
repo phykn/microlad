@@ -60,10 +60,13 @@ class TimeUNet(nn.Module):
         time_dim: int = 64,
     ) -> None:
         super().__init__()
+
         if latent_ch <= 0:
             raise ValueError("latent_ch must be positive.")
+
         if base_ch <= 0:
             raise ValueError("base_ch must be positive.")
+
         if time_dim <= 0:
             raise ValueError("time_dim must be positive.")
 
@@ -106,10 +109,13 @@ class TimeUNet(nn.Module):
             raise ValueError(
                 f"latent batch must have shape [B, {self.latent_ch}, H, W]."
             )
+
         if t.ndim != 1 or t.shape[0] != x.shape[0]:
             raise ValueError("timesteps must have shape [B].")
+
         if x.shape[0] <= 0 or x.shape[-2] <= 0 or x.shape[-1] <= 0:
             raise ValueError("latent batch dimensions must be positive.")
+
         if x.shape[-2] % 4 != 0 or x.shape[-1] % 4 != 0:
             raise ValueError("latent height and width must be divisible by 4.")
 

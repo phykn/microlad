@@ -7,6 +7,7 @@ from torch import nn
 
 from src.predict.sds.phase import soft_phase_probability
 from src.predict.sds.targets import phase_vector_target
+from src.predict.validation import validate_finite_tensor
 
 
 LOW_COND_FLOOR = 0.001
@@ -20,12 +21,16 @@ class DiffusivitySolver(nn.Module):
         low_cond: float = 0.001,
     ) -> None:
         super().__init__()
+
         if height < 2:
             raise ValueError("height must be at least 2.")
+
         if width < 2:
             raise ValueError("width must be at least 2.")
+
         if low_cond < 0.0 or low_cond > 1.0:
             raise ValueError("low_cond must be between 0 and 1.")
+
         if low_cond == 0.0:
             low_cond = LOW_COND_FLOOR
 
@@ -42,8 +47,13 @@ class DiffusivitySolver(nn.Module):
 
     def forward(self, mask: torch.Tensor) -> torch.Tensor:
         expected_shape = torch.Size([self.height, self.width])
+
         if mask.shape != expected_shape:
             raise ValueError(f"mask must have shape [{self.height}, {self.width}].")
+
+        validate_finite_tensor("mask", mask)
+        _validate_unit_interval("mask", mask)
+
         return self._solve_raw(mask) / self.unit_response.to(
             device=self.base_data.device,
             dtype=self.base_data.dtype,
@@ -65,6 +75,7 @@ class DiffusivitySolver(nn.Module):
 
         bc = self.bc_idx
         fc = self.fc_idx
+
         k_ff = stiffness[fc][:, fc]
         k_fc = stiffness[fc][:, bc]
         u_c = self.u_c.to(dtype=data.dtype)
@@ -78,6 +89,7 @@ class DiffusivitySolver(nn.Module):
         u_e = u[self.elems]
         grad_u = torch.matmul(self.elem_grad_t, u_e.unsqueeze(-1)).squeeze(-1)
         energy = grad_u.pow(2).sum(dim=1)
+
         return (sigma_e * energy * self.elem_area).sum()
 
     def _build_mesh_buffers(self) -> None:
@@ -135,9 +147,11 @@ class DiffusivitySolver(nn.Module):
         self.register_buffer("elem_area", torch.tensor(area_list, dtype=torch.float32))
 
         bc = []
+
         for row in range(self.ny):
             bc.append(row * self.nx)
             bc.append(row * self.nx + self.nx - 1)
+
         bc_idx = np.unique(bc)
         fc_idx = np.setdiff1d(np.arange(self.nn), bc_idx)
 
@@ -161,14 +175,19 @@ def diffusivity_loss(
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if values.ndim < 2:
         raise ValueError("values must have at least two spatial dimensions.")
+
     if values.numel() == 0 or values.shape[-2] <= 0 or values.shape[-1] <= 0:
         raise ValueError("values must have non-empty spatial dimensions.")
+
     if values.ndim == 4 and values.shape[1] != 1:
         raise ValueError("values with 4 dimensions must have shape [B, 1, H, W].")
+
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
+
     if temperature <= 0.0:
         raise ValueError("temperature must be positive.")
+
     if weight < 0.0:
         raise ValueError("weight must be non-negative.")
 
@@ -184,13 +203,17 @@ def diffusivity_loss(
         device=actual_diffusivity.device,
         dtype=actual_diffusivity.dtype,
         label="diffusivity value",
-    ).clamp(min=solver.low_cond, max=1.0)
+    )
+    validate_finite_tensor("diffusivity targets", target_diffusivity)
+    target_diffusivity = target_diffusivity.clamp(min=solver.low_cond, max=1.0)
 
     loss = weight * F.mse_loss(actual_diffusivity, target_diffusivity)
+
     stats = {
         "actual_diffusivity": actual_diffusivity.detach(),
         "target_diffusivity": target_diffusivity.detach(),
     }
+
     return loss, stats
 
 
@@ -203,14 +226,20 @@ def compute_diffusivity(
 ) -> torch.Tensor:
     if values.ndim < 2:
         raise ValueError("values must have at least two spatial dimensions.")
+
     if values.numel() == 0 or values.shape[-2] <= 0 or values.shape[-1] <= 0:
         raise ValueError("values must have non-empty spatial dimensions.")
+
     if values.ndim == 4 and values.shape[1] != 1:
         raise ValueError("values with 4 dimensions must have shape [B, 1, H, W].")
+
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
+
     if temperature <= 0.0:
         raise ValueError("temperature must be positive.")
+
+    validate_finite_tensor("values", values)
 
     height, width = values.shape[-2:]
     slices = values.reshape(-1, height, width)
@@ -229,9 +258,18 @@ def compute_diffusivity(
         )
 
     actual = []
+
     for phase in range(num_phases):
         phase_values = []
+
         for slice_index in range(probability.shape[0]):
             phase_values.append(solver(probability[slice_index, phase]))
+
         actual.append(torch.stack(phase_values).mean())
+
     return torch.stack(actual)
+
+
+def _validate_unit_interval(name: str, values: torch.Tensor) -> None:
+    if values.min().item() < 0.0 or values.max().item() > 1.0:
+        raise ValueError(f"{name} values must be between 0 and 1.")

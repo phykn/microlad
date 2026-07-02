@@ -47,6 +47,22 @@ class BadSpatialVAE(CountingVAE):
         return torch.zeros(latent.shape[0], 1, 1, self.image_size)
 
 
+class NonFiniteDecodeVAE(CountingVAE):
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        return torch.full(
+            (latent.shape[0], 1, self.image_size, self.image_size),
+            float("nan"),
+            dtype=torch.float32,
+            device=latent.device,
+        )
+
+
+class ZeroDownsampleVAE(CountingVAE):
+    def __init__(self) -> None:
+        super().__init__()
+        self.downsample_factor = 0
+
+
 class PredictVolumeTest(unittest.TestCase):
     def test_decode_latent_volume_averages_three_axis_decodes(self):
         vae = CountingVAE()
@@ -85,6 +101,10 @@ class PredictVolumeTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "size"):
             generate_initial_volume(FakeSampler(), CountingVAE(), size=8)
 
+    def test_generate_initial_volume_rejects_non_integer_size(self):
+        with self.assertRaisesRegex(ValueError, "size.*integer"):
+            generate_initial_volume(FakeSampler(), CountingVAE(), size=4.0)
+
     def test_decode_latent_volume_rejects_bad_latent_shape(self):
         vae = CountingVAE()
 
@@ -100,6 +120,25 @@ class PredictVolumeTest(unittest.TestCase):
     def test_decode_latent_volume_rejects_bad_decode_spatial_shape(self):
         with self.assertRaisesRegex(ValueError, "spatial shape"):
             decode_latent_volume(BadSpatialVAE(), torch.zeros(1, 2, 2, 2))
+
+    def test_decode_latent_volume_rejects_non_floating_latent(self):
+        with self.assertRaisesRegex(ValueError, "floating"):
+            decode_latent_volume(
+                CountingVAE(),
+                torch.zeros(1, 2, 2, 2, dtype=torch.int64),
+            )
+
+    def test_decode_latent_volume_rejects_non_finite_latent(self):
+        with self.assertRaisesRegex(ValueError, "latent.*finite"):
+            decode_latent_volume(CountingVAE(), torch.full((1, 2, 2, 2), float("inf")))
+
+    def test_decode_latent_volume_rejects_non_finite_decode_output(self):
+        with self.assertRaisesRegex(ValueError, "decoded.*finite"):
+            decode_latent_volume(NonFiniteDecodeVAE(), torch.zeros(1, 2, 2, 2))
+
+    def test_decode_latent_volume_rejects_invalid_downsample_factor(self):
+        with self.assertRaisesRegex(ValueError, "downsample"):
+            decode_latent_volume(ZeroDownsampleVAE(), torch.zeros(1, 2, 2, 2))
 
 
 if __name__ == "__main__":

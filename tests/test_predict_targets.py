@@ -92,6 +92,12 @@ class PredictTargetsTest(unittest.TestCase):
     def test_build_sds_targets_rejects_invalid_inputs(self):
         with self.assertRaisesRegex(ValueError, "images"):
             build_sds_targets([], num_phases=2, use_vf=True)
+        with self.assertRaisesRegex(ValueError, "num_phases.*integer"):
+            build_sds_targets(
+                [np.array([[0, 1]], dtype=np.uint8)],
+                num_phases=2.5,
+                use_vf=True,
+            )
         with self.assertRaisesRegex(ValueError, "num_phases"):
             build_sds_targets(
                 [np.array([[0, 255]], dtype=np.uint8)],
@@ -118,6 +124,39 @@ class PredictTargetsTest(unittest.TestCase):
                 [np.zeros((2, 2), dtype=np.uint8)],
                 num_phases=2,
                 use_diffusivity=True,
+            )
+
+    def test_build_sds_targets_rejects_non_finite_numeric_options(self):
+        image = np.zeros((2, 2), dtype=np.uint8)
+
+        cases = [
+            ("temperature", {"temperature": float("nan")}),
+            ("sa_sigma", {"sa_sigma": float("nan"), "use_sa": True}),
+            ("diffusivity_low_cond", {"diffusivity_low_cond": float("nan")}),
+        ]
+
+        for message, kwargs in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    build_sds_targets([image], num_phases=2, use_vf=True, **kwargs)
+
+    def test_build_sds_targets_rejects_non_integer_size_options(self):
+        image = np.zeros((2, 2), dtype=np.uint8)
+
+        with self.assertRaisesRegex(ValueError, "sa_kernel_size.*integer"):
+            build_sds_targets(
+                [image],
+                num_phases=2,
+                use_sa=True,
+                sa_kernel_size=True,
+            )
+
+        with self.assertRaisesRegex(ValueError, "diffusivity_size.*integer"):
+            build_sds_targets(
+                [image],
+                num_phases=2,
+                use_diffusivity=True,
+                diffusivity_size=(2.5, 2),
             )
 
 

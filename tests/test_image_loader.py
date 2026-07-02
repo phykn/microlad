@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from src.io.image import load_image
+from src.io.image import load_image, load_phase_image
 
 
 class ImageLoaderTest(unittest.TestCase):
@@ -118,6 +118,46 @@ class ImageLoaderTest(unittest.TestCase):
             loaded = load_image(path)
 
         self.assertEqual(loaded.tolist(), [[0, 255]])
+
+    def test_load_phase_image_preserves_palette_indices(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "labels.png"
+            image = Image.fromarray(np.array([[0, 1]], dtype=np.uint8), mode="P")
+            palette = [0, 0, 0, 255, 255, 255] + [0, 0, 0] * 254
+            image.putpalette(palette)
+            image.save(path)
+
+            loaded = load_phase_image(path)
+
+        np.testing.assert_array_equal(loaded, np.array([[0, 1]], dtype=np.uint8))
+
+    def test_load_phase_image_rejects_rgb_images(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rgb.png"
+            pixels = np.zeros((2, 2, 3), dtype=np.uint8)
+            Image.fromarray(pixels, mode="RGB").save(path)
+
+            with self.assertRaisesRegex(ValueError, "2D"):
+                load_phase_image(path)
+
+    def test_load_phase_image_rejects_non_integer_float_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "intensity.tif"
+            pixels = np.array([[0.0, 0.5], [1.0, 0.5]], dtype=np.float32)
+            Image.fromarray(pixels).save(path)
+
+            with self.assertRaisesRegex(ValueError, "integer"):
+                load_phase_image(path)
+
+    def test_load_phase_image_accepts_near_integer_float_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "labels.tif"
+            pixels = np.array([[0.0, 0.99999994]], dtype=np.float32)
+            Image.fromarray(pixels).save(path)
+
+            loaded = load_phase_image(path)
+
+        np.testing.assert_array_equal(loaded, np.array([[0, 1]], dtype=np.uint8))
 
 
 if __name__ == "__main__":

@@ -84,8 +84,10 @@ class DiffusionTrainer:
         loss, parts = self.loss_fn(self.model, latent)
         loss.backward()
         grad_norm = self.grad_norm()
+
         if self.clip_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
+
         self.optimizer.step()
 
         stats = loss_stats(loss, parts)
@@ -103,10 +105,12 @@ class DiffusionTrainer:
             desc="diffusion",
             disable=not self.is_main_process,
         )
+
         for _ in progress:
             stats = self.train_step()
             visible_stats = {name: value for name, value in stats.items() if name != "noise"}
             progress.set_postfix(progress_postfix(visible_stats))
+
         return stats
 
     def log_step_stats(self, stats: dict[str, float]) -> None:

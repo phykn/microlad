@@ -68,6 +68,52 @@ class PredictSamplerTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "shape"):
                     sampler.sample(shape)
 
+    def test_sample_rejects_non_finite_anchor_inputs(self):
+        sampler = DiffusionSampler(
+            RecordingDenoiser(),
+            IdentityDDPM(timesteps=1),
+            device="cpu",
+        )
+
+        cases = [
+            (
+                torch.full((1, 1, 2, 2), float("inf")),
+                torch.ones(1, 1, 2, 2),
+            ),
+            (
+                torch.zeros(1, 1, 2, 2),
+                torch.full((1, 1, 2, 2), float("nan")),
+            ),
+        ]
+
+        for anchor_latent, anchor_mask in cases:
+            with self.subTest(anchor_latent=anchor_latent, anchor_mask=anchor_mask):
+                with self.assertRaisesRegex(ValueError, "finite"):
+                    sampler.sample(
+                        (1, 1, 2, 2),
+                        anchor_latent=anchor_latent,
+                        anchor_mask=anchor_mask,
+                    )
+
+    def test_sample_anchor_blend_keeps_sample_dtype(self):
+        sampler = DiffusionSampler(
+            RecordingDenoiser(),
+            IdentityDDPM(timesteps=1),
+            device="cpu",
+        )
+        anchor_latent = torch.ones(1, 1, 2, 2, dtype=torch.float64)
+        anchor_mask = torch.ones(1, 1, 2, 2, dtype=torch.float64)
+
+        with patch("torch.randn", return_value=torch.zeros(1, 1, 2, 2)):
+            latent = sampler.sample(
+                (1, 1, 2, 2),
+                anchor_latent=anchor_latent,
+                anchor_mask=anchor_mask,
+            )
+
+        self.assertEqual(latent.dtype, torch.float32)
+        self.assertTrue(torch.equal(latent, torch.ones(1, 1, 2, 2)))
+
     def test_sample_lmpdd_returns_canonical_axis_order_after_rotating_between_steps(self):
         base = torch.arange(8, dtype=torch.float32).view(2, 1, 2, 2)
         ddpm = IdentityDDPM(timesteps=3)

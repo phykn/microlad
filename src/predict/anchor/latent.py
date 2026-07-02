@@ -3,6 +3,7 @@ from collections.abc import Sequence
 import torch
 
 from src.predict.anchor.image import prepare_anchor_image
+from src.predict.anchor.validate import validate_anchors
 from src.predict.types import AnchorSlice
 
 
@@ -17,6 +18,9 @@ def prepare_anchor_latents(
     if not anchors:
         return None, None
 
+    image_size = int(vae.image_size)
+    validate_anchors(anchors, (image_size, image_size, image_size))
+
     latent_size = int(vae.latent_size)
     latent_ch = int(vae.latent_ch)
     shape = (latent_size, latent_ch, latent_size, latent_size)
@@ -28,9 +32,12 @@ def prepare_anchor_latents(
     for anchor in anchors:
         latent_index = min(anchor.index // factor, latent_size - 1)
         plane_key = (int(anchor.axis), int(latent_index))
+
         if plane_key in written_planes:
             raise ValueError("anchor slices collapse to the same latent plane.")
+
         written_planes.add(plane_key)
+
         latent = _encode_anchor_latent(
             vae,
             anchor,
@@ -38,6 +45,7 @@ def prepare_anchor_latents(
             segment=segment,
             device=device,
         )
+
         _write_anchor_latent(
             anchor_latent,
             anchor_mask,
@@ -74,8 +82,10 @@ def _encode_anchor_latent(
     ).to(device=device)
 
     vae.eval()
+
     with torch.no_grad():
         mu, _ = vae.encode(image)
+
     expected = torch.Size(
         [
             1,
@@ -98,6 +108,7 @@ def _write_anchor_latent(
     index: int,
 ) -> None:
     mask = torch.ones_like(latent)
+
     if axis == 0:
         anchor_latent[index] = latent
         anchor_mask[index] = mask
@@ -105,6 +116,7 @@ def _write_anchor_latent(
 
     plane = latent.permute(1, 0, 2).contiguous()
     plane_mask = mask.permute(1, 0, 2).contiguous()
+
     if axis == 1:
         anchor_latent[:, :, index, :] = plane
         anchor_mask[:, :, index, :] = plane_mask

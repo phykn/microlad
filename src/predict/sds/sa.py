@@ -19,18 +19,25 @@ def surface_area_loss(
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if values.ndim < 2:
         raise ValueError("values must have at least two spatial dimensions.")
+
     if values.numel() == 0 or values.shape[-2] <= 0 or values.shape[-1] <= 0:
         raise ValueError("values must have non-empty spatial dimensions.")
+
     if values.ndim == 4 and values.shape[1] != 1:
         raise ValueError("values with 4 dimensions must have shape [B, 1, H, W].")
+
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
+
     if temperature <= 0.0:
         raise ValueError("temperature must be positive.")
+
     if kernel_size <= 0 or kernel_size % 2 == 0:
         raise ValueError("kernel_size must be a positive odd integer.")
+
     if sigma <= 0.0:
         raise ValueError("sigma must be positive.")
+
     if weight < 0.0:
         raise ValueError("weight must be non-negative.")
 
@@ -50,10 +57,12 @@ def surface_area_loss(
     )
 
     loss = weight * F.mse_loss(actual_sa, target_sa)
+
     stats = {
         "actual_sa": actual_sa.detach(),
         "target_sa": target_sa.detach(),
     }
+
     return loss, stats
 
 
@@ -67,16 +76,22 @@ def compute_surface_area(
 ) -> torch.Tensor:
     if values.ndim < 2:
         raise ValueError("values must have at least two spatial dimensions.")
+
     if values.numel() == 0 or values.shape[-2] <= 0 or values.shape[-1] <= 0:
         raise ValueError("values must have non-empty spatial dimensions.")
+
     if values.ndim == 4 and values.shape[1] != 1:
         raise ValueError("values with 4 dimensions must have shape [B, 1, H, W].")
+
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
+
     if temperature <= 0.0:
         raise ValueError("temperature must be positive.")
+
     if kernel_size <= 0 or kernel_size % 2 == 0:
         raise ValueError("kernel_size must be a positive odd integer.")
+
     if sigma <= 0.0:
         raise ValueError("sigma must be positive.")
 
@@ -88,6 +103,7 @@ def compute_surface_area(
         temperature=temperature,
         phase_dim=1,
     )
+
     return _relative_surface_area(
         probability,
         kernel_size=kernel_size,
@@ -108,15 +124,23 @@ def _relative_surface_area(
         device=probability.device,
         dtype=probability.dtype,
     ).repeat(num_phases, 1, 1, 1)
+    padding = kernel_size // 2
+    if padding > 0:
+        probability = F.pad(
+            probability,
+            (padding, padding, padding, padding),
+            mode="replicate",
+        )
+
     smooth = F.conv2d(
         probability,
         weight=kernel,
-        padding=kernel_size // 2,
         groups=num_phases,
     )
 
     tv_h = (smooth[:, :, 1:, :] - smooth[:, :, :-1, :]).abs().sum(dim=(2, 3))
     tv_w = (smooth[:, :, :, 1:] - smooth[:, :, :, :-1]).abs().sum(dim=(2, 3))
+
     return ((tv_h + tv_w) / (height * width)).mean(dim=0)
 
 
@@ -132,4 +156,5 @@ def _gaussian_kernel(
     yy, xx = torch.meshgrid(axis, axis, indexing="ij")
     kernel = torch.exp(-(xx.pow(2) + yy.pow(2)) / (2 * sigma**2))
     kernel = kernel / kernel.sum()
+
     return kernel.view(1, 1, kernel_size, kernel_size)

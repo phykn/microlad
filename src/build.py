@@ -31,8 +31,10 @@ def _flatten_config(config: dict) -> dict:
             if isinstance(value, dict):
                 visit(value)
                 continue
+
             if key in defaults:
                 raise ValueError(f"Duplicate config key: {key}")
+
             defaults[key] = value
 
     visit(config)
@@ -58,6 +60,7 @@ def _load_model_checkpoint(
             if key in checkpoint:
                 target.load_state_dict(checkpoint[key])
                 return
+
     target.load_state_dict(checkpoint)
 
 
@@ -76,6 +79,7 @@ def _load_frozen_checkpoint(
         raise ValueError(
             f"{label} could not be loaded for model: {checkpoint_path}"
         ) from exc
+
     freeze_module(model)
     return model
 
@@ -86,8 +90,10 @@ def _last_model_path(run_dir: str | Path, component: str) -> Path:
 
 def _require_file(path: str | Path, label: str) -> Path:
     path = Path(path)
+
     if not path.is_file():
         raise FileNotFoundError(f"{label} is required: {path}")
+
     return path
 
 
@@ -100,6 +106,7 @@ def _require_config_value(config: dict, label: str, *names: str):
 
 def _require_config_values(config: dict, label: str, *names: str) -> None:
     missing = [name for name in names if name not in config]
+
     if missing:
         raise ValueError(
             f"{label} is missing required value: {', '.join(missing)}"
@@ -110,8 +117,10 @@ def _get_arg(args: argparse.Namespace, *names: str, default=_MISSING):
     for name in names:
         if hasattr(args, name):
             return getattr(args, name)
+
     if default is not _MISSING:
         return default
+
     raise AttributeError(f"missing config value: {' or '.join(names)}")
 
 
@@ -128,12 +137,16 @@ def _vae_model_from_args(args: argparse.Namespace) -> PatchVAE:
 def _yaml_safe_value(value):
     if isinstance(value, Path):
         return str(value)
+
     if isinstance(value, list):
         return [_yaml_safe_value(item) for item in value]
+
     if isinstance(value, tuple):
         return [_yaml_safe_value(item) for item in value]
+
     if isinstance(value, dict):
         return {str(key): _yaml_safe_value(item) for key, item in value.items()}
+
     return value
 
 
@@ -144,22 +157,28 @@ def load_config_defaults(
 ) -> dict:
     if not config_path:
         return {}
+
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f) or {}
     except yaml.YAMLError as exc:
         raise ValueError(f"{label} is malformed: {config_path}") from exc
+
     if not isinstance(config, dict):
         raise ValueError(f"{label} must contain a mapping.")
+
     return _flatten_config(config)
 
 
 def save_run_config(run_dir: str | Path, args: argparse.Namespace, name: str) -> None:
     if not name:
         raise ValueError("config name is required.")
+
     path = Path(run_dir)
     path.mkdir(parents=True, exist_ok=True)
+
     config = {key: _yaml_safe_value(value) for key, value in vars(args).items()}
+
     with open(path / f"{name}.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(config, f, sort_keys=False)
 
@@ -179,6 +198,7 @@ def copy_vae_run(source_run_dir: str | Path, target_run_dir: str | Path) -> None
 
 def fill_diffusion_defaults_from_run(args: argparse.Namespace) -> argparse.Namespace:
     run_dir = getattr(args, "vae_run_dir", None)
+
     if run_dir is None:
         return args
 
@@ -200,12 +220,17 @@ def fill_diffusion_defaults_from_run(args: argparse.Namespace) -> argparse.Names
         ),
     ):
         existing = getattr(args, arg_name, None)
+
         if existing is not None and existing != value:
             raise ValueError(f"{arg_name} must match VAE run config.")
+
         setattr(args, arg_name, value)
+
     latent_size = vae_config.get("latent_size")
+
     if latent_size is not None and int(latent_size) % 4 != 0:
         raise ValueError("latent_size must be divisible by 4 for diffusion.")
+
     return args
 
 
@@ -214,6 +239,7 @@ def setup_device() -> tuple[torch.device, int, bool]:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu"), 0, False
 
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+
     if torch.cuda.is_available():
         torch.cuda.set_device(local_rank)
         device = torch.device("cuda", local_rank)
@@ -221,6 +247,7 @@ def setup_device() -> tuple[torch.device, int, bool]:
     else:
         device = torch.device("cpu")
         backend = "gloo"
+
     dist.init_process_group(backend=backend)
     return device, local_rank, True
 
@@ -237,14 +264,17 @@ def wrap_distributed(
 ) -> torch.nn.Module:
     if not distributed:
         return model
+
     if next(model.parameters()).device.type == "cuda":
         return DistributedDataParallel(model, device_ids=[local_rank])
+
     return DistributedDataParallel(model)
 
 
 def load_frozen_vae(args: argparse.Namespace, device: torch.device) -> PatchVAE:
     if getattr(args, "vae_ckpt", None) is None:
         raise ValueError("vae_ckpt is required.")
+
     vae = _vae_model_from_args(args).to(device)
     return _load_frozen_checkpoint(
         vae,
@@ -278,6 +308,7 @@ def load_frozen_diffusion_model(
 ) -> TimeUNet:
     if getattr(args, "diffusion_ckpt", None) is None:
         raise ValueError("diffusion_ckpt is required.")
+
     model = build_diffusion_model(args).to(device)
     return _load_frozen_checkpoint(
         model,
@@ -292,10 +323,12 @@ def load_frozen_diffusion_model(
 
 def build_dataset(args: argparse.Namespace) -> PatchDataset:
     image_paths = getattr(args, "image_paths", None)
+
     if image_paths is None:
         image_paths = _image_paths_from_dir(args.data_dir)
     elif isinstance(image_paths, (str, Path)):
         image_paths = [image_paths]
+
     return PatchDataset(
         image_paths,
         crop_size=args.crop_size,

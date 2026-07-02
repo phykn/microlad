@@ -7,6 +7,7 @@ from torch import nn
 from src.models import DDPM
 from src.predict import AnchorSlice
 from src.predict.sds import DiffusivitySolver, optimize_slice, optimize_volume
+from src.predict.sds.optimize import _objective, _objective_batch
 
 
 class IdentityVAE(nn.Module):
@@ -18,6 +19,28 @@ class IdentityVAE(nn.Module):
         return x.clone(), torch.zeros_like(x)
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
+        return z
+
+
+class NonFiniteEncodeVAE(IdentityVAE):
+    def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        return torch.full_like(x, float("nan")), torch.zeros_like(x)
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        return torch.zeros_like(z)
+
+
+class NonFiniteFinalDecodeVAE(IdentityVAE):
+    def __init__(self) -> None:
+        super().__init__()
+        self.decode_calls = 0
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        self.decode_calls += 1
+
+        if self.decode_calls > 1:
+            return torch.full_like(z, float("nan"))
+
         return z
 
 
@@ -135,6 +158,41 @@ class PredictSDSOptimizeTest(unittest.TestCase):
         for key in ("loss", "sds", "anchor", "vf", "tpc", "sa", "diffusivity"):
             self.assertIn(key, stats)
 
+    def test_optimize_slice_rejects_non_finite_encoded_latent(self):
+        with self.assertRaisesRegex(ValueError, "latent.*finite"):
+            optimize_slice(
+                torch.zeros(4, 4, 4),
+                NonFiniteEncodeVAE(),
+                ZeroNoiseModel(),
+                DDPM(timesteps=4),
+                axis=0,
+                index=0,
+                steps=1,
+                lr=0.1,
+                t_min=1,
+                t_max=3,
+                num_phases=2,
+                sds_weight=0.0,
+            )
+
+    def test_optimize_slice_rejects_non_finite_final_decode(self):
+        with self.assertRaisesRegex(ValueError, "decoded.*finite"):
+            optimize_slice(
+                torch.zeros(4, 4, 4),
+                NonFiniteFinalDecodeVAE(),
+                ZeroNoiseModel(),
+                DDPM(timesteps=4),
+                axis=0,
+                index=0,
+                steps=1,
+                lr=0.1,
+                t_min=1,
+                t_max=3,
+                num_phases=2,
+                sds_weight=0.0,
+            )
+
+
 class PredictSDSOptimizeVolumeTest(unittest.TestCase):
     def test_optimize_volume_rejects_empty_volume_axes(self):
         with self.assertRaisesRegex(ValueError, "positive"):
@@ -230,6 +288,100 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
         self.assertEqual(updated.shape, volume.shape)
         self.assertIn("sds", stats)
 
+    def test_objective_batch_descriptor_loss_averages_per_slice_losses(self):
+        decoded = torch.stack(
+            [
+                torch.full((4, 4), -1.0),
+                torch.full((4, 4), 1.0),
+            ]
+        )
+        latent = decoded.view(2, 1, 4, 4).clone()
+
+        total, stats = _objective_batch(
+            latent,
+            decoded,
+            ZeroNoiseModel(),
+            DDPM(timesteps=4),
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            sds_weight=0.0,
+            anchor_targets=[None, None],
+            anchor_weight=0.0,
+            vf_targets=torch.tensor([0.5, 0.5]),
+            vf_weight=1.0,
+            tpc_targets=None,
+            tpc_weight=0.0,
+            sa_targets=None,
+            sa_weight=0.0,
+            diffusivity_targets=None,
+            diffusivity_solver=None,
+            diffusivity_weight=0.0,
+            temperature=0.01,
+            sa_kernel_size=7,
+            sa_sigma=1.0,
+        )
+
+        self.assertGreater(float(total.detach()), 0.1)
+        self.assertGreater(float(stats["vf"]), 0.1)
+
+    def test_objective_batch_anchor_loss_includes_unanchored_slices_in_mean(self):
+        decoded = torch.zeros(2, 4, 4)
+        latent = decoded.view(2, 1, 4, 4).clone()
+        target = torch.ones(4, 4)
+
+        single_total, _ = _objective(
+            latent[:1],
+            decoded[0],
+            ZeroNoiseModel(),
+            DDPM(timesteps=4),
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            sds_weight=0.0,
+            anchor_target=target,
+            anchor_weight=1.0,
+            vf_targets=None,
+            vf_weight=0.0,
+            tpc_targets=None,
+            tpc_weight=0.0,
+            sa_targets=None,
+            sa_weight=0.0,
+            diffusivity_targets=None,
+            diffusivity_solver=None,
+            diffusivity_weight=0.0,
+            temperature=0.5,
+            sa_kernel_size=7,
+            sa_sigma=1.0,
+        )
+        batch_total, stats = _objective_batch(
+            latent,
+            decoded,
+            ZeroNoiseModel(),
+            DDPM(timesteps=4),
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            sds_weight=0.0,
+            anchor_targets=[target, None],
+            anchor_weight=1.0,
+            vf_targets=None,
+            vf_weight=0.0,
+            tpc_targets=None,
+            tpc_weight=0.0,
+            sa_targets=None,
+            sa_weight=0.0,
+            diffusivity_targets=None,
+            diffusivity_solver=None,
+            diffusivity_weight=0.0,
+            temperature=0.5,
+            sa_kernel_size=7,
+            sa_sigma=1.0,
+        )
+
+        self.assertTrue(torch.allclose(batch_total, single_total / 2.0))
+        self.assertTrue(torch.allclose(stats["anchor"], single_total.detach() / 2.0))
+
     def test_optimize_volume_rejects_cross_axis_slice_batch(self):
         with self.assertRaisesRegex(ValueError, "same axis"):
             optimize_volume(
@@ -279,6 +431,42 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
         self.assertLess(float(updated[2].mean()), 1.0)
         self.assertTrue(torch.allclose(updated[0], volume[0]))
         self.assertIn("anchor", stats)
+
+    def test_optimize_volume_rejects_non_finite_batched_encoded_latent(self):
+        with self.assertRaisesRegex(ValueError, "latent.*finite"):
+            optimize_volume(
+                torch.zeros(4, 4, 4),
+                NonFiniteEncodeVAE(),
+                ZeroNoiseModel(),
+                DDPM(timesteps=4),
+                steps=1,
+                slice_steps=1,
+                sds_batch_size=2,
+                lr=0.1,
+                t_min=1,
+                t_max=3,
+                num_phases=2,
+                slice_schedule=[(0, 0), (0, 1)],
+                sds_weight=0.0,
+            )
+
+    def test_optimize_volume_rejects_non_finite_batched_final_decode(self):
+        with self.assertRaisesRegex(ValueError, "decoded.*finite"):
+            optimize_volume(
+                torch.zeros(4, 4, 4),
+                NonFiniteFinalDecodeVAE(),
+                ZeroNoiseModel(),
+                DDPM(timesteps=4),
+                steps=1,
+                slice_steps=1,
+                sds_batch_size=2,
+                lr=0.1,
+                t_min=1,
+                t_max=3,
+                num_phases=2,
+                slice_schedule=[(0, 0), (0, 1)],
+                sds_weight=0.0,
+            )
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ import torch
 from src.models import DDPM
 from src.predict import AnchorSlice
 from src.predict.scale import optimize_large_volume
-from src.predict.scale.sds import _local_prior_objective
+from src.predict.scale.sds import _local_prior_objective, _local_prior_objective_batch
 
 
 class IdentityVAE(torch.nn.Module):
@@ -26,6 +26,16 @@ class ShiftDecodeVAE(IdentityVAE):
         return latent + 0.25
 
 
+class NonFiniteEncodeVAE(IdentityVAE):
+    def encode(self, image: torch.Tensor):
+        return torch.full_like(image, float("nan")), torch.zeros_like(image)
+
+
+class NonFiniteDecodeVAE(IdentityVAE):
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        return torch.full_like(latent, float("nan"))
+
+
 class ZeroNoiseModel(torch.nn.Module):
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return torch.zeros_like(x)
@@ -42,6 +52,28 @@ class RecordingNoiseModel(torch.nn.Module):
 
 
 class PredictScaleSDSTest(unittest.TestCase):
+    def optimize(self, volume: torch.Tensor | None = None, **overrides):
+        kwargs = {
+            "steps": 1,
+            "slice_steps": 1,
+            "lr": 0.1,
+            "t_min": 1,
+            "t_max": 3,
+            "num_phases": 2,
+            "slice_schedule": [(0, 2)],
+            "sds_weight": 0.0,
+            "tile_overlap": 0,
+        }
+        kwargs.update(overrides)
+
+        return optimize_large_volume(
+            torch.zeros(4, 4, 4) if volume is None else volume,
+            kwargs.pop("vae", IdentityVAE()),
+            kwargs.pop("diffusion_model", ZeroNoiseModel()),
+            kwargs.pop("ddpm", DDPM(timesteps=4)),
+            **kwargs,
+        )
+
     def test_optimize_large_volume_updates_scheduled_anchor_slice_tiles(self):
         volume = torch.zeros(4, 4, 4)
         anchor = AnchorSlice(
@@ -173,6 +205,55 @@ class PredictScaleSDSTest(unittest.TestCase):
         self.assertEqual(updated.shape, torch.Size([4, 4, 4]))
         self.assertIn("sds", stats)
 
+    def test_optimize_large_volume_rejects_non_floating_volume(self):
+        with self.assertRaisesRegex(ValueError, "floating"):
+            self.optimize(torch.zeros(4, 4, 4, dtype=torch.int64))
+
+    def test_optimize_large_volume_rejects_non_finite_volume(self):
+        with self.assertRaisesRegex(ValueError, "volume.*finite"):
+            self.optimize(torch.full((4, 4, 4), float("nan")))
+
+    def test_optimize_large_volume_rejects_empty_volume(self):
+        with self.assertRaisesRegex(ValueError, "positive"):
+            self.optimize(torch.empty(0, 0, 0))
+
+    def test_optimize_large_volume_rejects_invalid_anchor_target_key(self):
+        with self.assertRaisesRegex(ValueError, "anchor_targets.*inside"):
+            self.optimize(
+                anchor_targets={(0, 99): torch.zeros(4, 4)},
+                anchor_weight=1.0,
+            )
+
+    def test_optimize_large_volume_rejects_non_finite_anchor_mask(self):
+        with self.assertRaisesRegex(ValueError, "anchor_masks.*finite"):
+            self.optimize(
+                anchor_targets={(0, 2): torch.zeros(4, 4)},
+                anchor_masks={(0, 2): torch.full((4, 4), float("nan"))},
+                anchor_weight=1.0,
+            )
+
+    def test_optimize_large_volume_rejects_anchor_mask_outside_unit_interval(self):
+        with self.assertRaisesRegex(ValueError, "anchor_masks.*between 0 and 1"):
+            self.optimize(
+                anchor_targets={(0, 2): torch.zeros(4, 4)},
+                anchor_masks={(0, 2): torch.full((4, 4), 2.0)},
+                anchor_weight=1.0,
+            )
+
+    def test_optimize_large_volume_rejects_non_finite_encoded_latent(self):
+        with self.assertRaisesRegex(ValueError, "latent.*finite"):
+            self.optimize(vae=NonFiniteEncodeVAE())
+
+    def test_optimize_large_volume_rejects_non_finite_decoded_tile(self):
+        with self.assertRaisesRegex(ValueError, "decoded.*finite"):
+            self.optimize(vae=NonFiniteDecodeVAE())
+
+    def test_optimize_large_volume_rejects_non_finite_scalar_parameters(self):
+        for name in ("lr", "sds_weight", "temperature"):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, name):
+                    self.optimize(**{name: float("nan")})
+
     def test_large_slice_prior_loss_is_averaged_across_tiles(self):
         decoded, total, stats = _local_prior_objective(
             torch.zeros(4, 4),
@@ -192,6 +273,72 @@ class PredictScaleSDSTest(unittest.TestCase):
         self.assertEqual(decoded.shape, torch.Size([4, 4]))
         self.assertIn("anchor", stats)
         self.assertTrue(torch.allclose(total.detach(), stats["anchor"]))
+
+    def test_large_slice_batch_descriptor_loss_averages_per_slice_losses(self):
+        images = torch.stack(
+            [
+                torch.full((2, 2), -1.0),
+                torch.full((2, 2), 1.0),
+            ]
+        )
+
+        _, total, stats = _local_prior_objective_batch(
+            images,
+            IdentityVAE(),
+            ZeroNoiseModel(),
+            DDPM(timesteps=4),
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            sds_weight=0.0,
+            anchor_targets=[None, None],
+            anchor_masks=[None, None],
+            anchor_weight=0.0,
+            temperature=0.01,
+            tile_overlap=0,
+            vf_targets=torch.tensor([0.5, 0.5]),
+            vf_weight=1.0,
+        )
+
+        self.assertGreater(float(total.detach()), 0.1)
+        self.assertGreater(float(stats["vf"]), 0.1)
+
+    def test_large_slice_batch_anchor_loss_includes_unanchored_slices_in_mean(self):
+        images = torch.zeros(2, 2, 2)
+        target = torch.ones(2, 2)
+
+        _, single_total, _ = _local_prior_objective(
+            images[0],
+            IdentityVAE(),
+            ZeroNoiseModel(),
+            DDPM(timesteps=4),
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            sds_weight=0.0,
+            anchor_target=target,
+            anchor_weight=1.0,
+            temperature=0.5,
+            tile_overlap=0,
+        )
+        _, batch_total, stats = _local_prior_objective_batch(
+            images,
+            IdentityVAE(),
+            ZeroNoiseModel(),
+            DDPM(timesteps=4),
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            sds_weight=0.0,
+            anchor_targets=[target, None],
+            anchor_masks=[None, None],
+            anchor_weight=1.0,
+            temperature=0.5,
+            tile_overlap=0,
+        )
+
+        self.assertTrue(torch.allclose(batch_total, single_total / 2.0))
+        self.assertTrue(torch.allclose(stats["anchor"], single_total.detach() / 2.0))
 
 
 if __name__ == "__main__":

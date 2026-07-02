@@ -7,7 +7,7 @@ from torch.utils.data import Dataset
 from src.data.augment import augment_patch
 from src.data.crop import crop_square
 from src.data.resize import resize_patch
-from src.io import load_image
+from src.io import load_image, load_phase_image
 from src.segment import segment_multi_otsu
 
 
@@ -24,10 +24,13 @@ class PatchDataset(Dataset):
     ) -> None:
         if crop_size <= 0:
             raise ValueError("crop_size must be positive.")
+
         if size <= 0:
             raise ValueError("size must be positive.")
+
         if num_phases < 2:
             raise ValueError("num_phases must be at least 2.")
+
         if num_phases > int(np.iinfo(np.uint8).max) + 1:
             raise ValueError("num_phases must be at most 256 for uint8 images.")
 
@@ -37,6 +40,7 @@ class PatchDataset(Dataset):
         self.augment = augment
         self.segment = segment
         self.image_paths = [Path(image_path) for image_path in image_paths]
+
         if not self.image_paths:
             raise ValueError("image_paths must not be empty.")
 
@@ -48,15 +52,19 @@ class PatchDataset(Dataset):
         image = self._load_image(path)
         patch = crop_square(image, self.crop_size)
         patch = resize_patch(patch, self.size)
+
         if self.augment:
             patch = augment_patch(patch)
+
         patch = self._scale_phase(patch)
         return torch.from_numpy(patch.copy()).unsqueeze(0).float()
 
     def _load_image(self, path: Path) -> np.ndarray:
-        image = load_image(path)
         if self.segment:
+            image = load_image(path)
             return segment_multi_otsu(image, self.num_phases)
+
+        image = load_phase_image(path)
         self._validate_phase_image(image, path)
         return image
 

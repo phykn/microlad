@@ -3,6 +3,7 @@ import unittest
 import torch
 
 from src.predict.sds import anchor_loss
+from src.predict.sds.anchor import masked_anchor_loss
 
 
 class PredictSDSAnchorTest(unittest.TestCase):
@@ -45,6 +46,33 @@ class PredictSDSAnchorTest(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "weight"):
             anchor_loss(torch.zeros(2, 2), torch.zeros(2, 2), num_phases=2, weight=-1.0)
+
+    def test_anchor_losses_reject_non_finite_inputs(self):
+        valid = torch.zeros(2, 2)
+
+        cases = [
+            lambda: anchor_loss(
+                torch.full((2, 2), float("inf")),
+                valid,
+                num_phases=2,
+            ),
+            lambda: anchor_loss(
+                valid,
+                torch.full((2, 2), float("nan")),
+                num_phases=2,
+            ),
+            lambda: masked_anchor_loss(
+                valid,
+                valid,
+                torch.full((2, 2), float("nan")),
+                num_phases=2,
+            ),
+        ]
+
+        for call in cases:
+            with self.subTest(call=call):
+                with self.assertRaisesRegex(ValueError, "finite"):
+                    call()
 
 
 if __name__ == "__main__":

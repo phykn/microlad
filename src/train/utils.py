@@ -20,8 +20,10 @@ def validate_train_settings(
 ) -> None:
     if steps <= 0:
         raise ValueError("steps must be positive.")
+
     if save_every <= 0:
         raise ValueError("save_every must be positive.")
+
     if clip_grad_norm is not None and clip_grad_norm <= 0:
         raise ValueError("clip_grad_norm must be positive or None.")
 
@@ -40,10 +42,12 @@ def setup_run_dirs(
     last_weight_dir = weight_dir / "last"
 
     writer = None
+
     if is_main_process:
         log_dir.mkdir(parents=True, exist_ok=True)
         last_weight_dir.mkdir(parents=True, exist_ok=True)
         writer = SummaryWriter(log_dir=str(log_dir))
+
     return run_path, log_dir, weight_dir, last_weight_dir, writer
 
 
@@ -56,6 +60,7 @@ def loss_stats(loss: torch.Tensor, parts: dict[str, torch.Tensor]) -> dict[str, 
 def log_stats(writer: SummaryWriter | None, stats: dict[str, float], step: int) -> None:
     if writer is None:
         return
+
     for name, value in stats.items():
         writer.add_scalar(f"train/{name}", value, step)
 
@@ -96,10 +101,12 @@ def save_checkpoint(
         "model": unwrap_model(model).state_dict(),
         "optimizer": optimizer.state_dict(),
     }
+
     if step % save_every == 0:
         step_dir = weight_dir / str(step)
         step_dir.mkdir(parents=True, exist_ok=True)
         save_checkpoint_file(checkpoint, step_dir / "model.pt")
+
     save_checkpoint_file(checkpoint, last_weight_dir / "model.pt")
 
 
@@ -122,6 +129,7 @@ def replace_file(source: Path, target: Path) -> None:
         except OSError:
             if attempt == 4:
                 raise
+
             time.sleep(0.1)
 
 
@@ -130,16 +138,20 @@ def model_grad_norm(parameters: Iterable[torch.nn.Parameter]) -> float:
     for parameter in parameters:
         if parameter.grad is None:
             continue
+
         norm = parameter.grad.detach().data.norm(2).item()
         total += norm * norm
+
     return total**0.5
 
 
 def image_from_batch(batch) -> torch.Tensor:
     if isinstance(batch, torch.Tensor):
         return batch
+
     if isinstance(batch, (tuple, list)) and batch and isinstance(batch[0], torch.Tensor):
         return batch[0]
+
     raise TypeError("batch must be a tensor or a tuple/list whose first item is a tensor.")
 
 

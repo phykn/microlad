@@ -149,6 +149,39 @@ class PredictSDSDiffusivityTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "mask"):
             solver(torch.zeros(3, 3))
 
+    def test_solver_rejects_non_finite_or_out_of_range_masks(self):
+        solver = DiffusivitySolver(height=2, width=2)
+
+        with self.assertRaisesRegex(ValueError, "finite"):
+            solver(torch.full((2, 2), float("nan")))
+
+        for mask in (
+            torch.full((2, 2), -0.1),
+            torch.full((2, 2), 1.1),
+        ):
+            with self.subTest(mask=mask):
+                with self.assertRaisesRegex(ValueError, "between 0 and 1"):
+                    solver(mask)
+
+    def test_diffusivity_loss_rejects_non_finite_values_and_targets(self):
+        solver = DiffusivitySolver(height=2, width=2)
+
+        with self.assertRaisesRegex(ValueError, "finite"):
+            diffusivity_loss(
+                torch.full((2, 2), float("nan")),
+                torch.zeros(2),
+                solver=solver,
+                num_phases=2,
+            )
+
+        with self.assertRaisesRegex(ValueError, "finite"):
+            diffusivity_loss(
+                torch.zeros(2, 2),
+                torch.tensor([0.1, float("inf")]),
+                solver=solver,
+                num_phases=2,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

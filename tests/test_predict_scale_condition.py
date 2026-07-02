@@ -39,6 +39,11 @@ class DownsamplingVAE(torch.nn.Module):
         )
 
 
+class NonFiniteVAE(IdentityVAE):
+    def encode(self, image: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        return torch.full_like(image, float("nan")), torch.zeros_like(image)
+
+
 class ScaleConditionTest(unittest.TestCase):
     def test_center_start_places_base_in_middle(self):
         self.assertEqual(center_start(volume_size=192, base_size=64), 64)
@@ -66,8 +71,8 @@ class ScaleConditionTest(unittest.TestCase):
 
     def test_anchor_latents_reject_same_latent_plane_collision(self):
         anchors = [
-            AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=2),
-            AnchorSlice(image=np.ones((2, 2), dtype=np.uint8), axis=0, index=3),
+            AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=0),
+            AnchorSlice(image=np.ones((2, 2), dtype=np.uint8), axis=0, index=1),
         ]
 
         with self.assertRaisesRegex(ValueError, "latent plane"):
@@ -75,6 +80,32 @@ class ScaleConditionTest(unittest.TestCase):
                 DownsamplingVAE(),
                 anchors,
                 volume_size=6,
+                num_phases=2,
+                segment=False,
+                device=torch.device("cpu"),
+            )
+
+    def test_anchor_latents_reject_base_anchor_index_outside_base_volume(self):
+        anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=2)
+
+        with self.assertRaisesRegex(ValueError, "index"):
+            prepare_scale_anchor_latents(
+                IdentityVAE(),
+                [anchor],
+                volume_size=6,
+                num_phases=2,
+                segment=False,
+                device=torch.device("cpu"),
+            )
+
+    def test_anchor_latents_reject_full_anchor_index_outside_full_volume(self):
+        anchor = AnchorSlice(image=np.zeros((4, 4), dtype=np.uint8), axis=0, index=4)
+
+        with self.assertRaisesRegex(ValueError, "index"):
+            prepare_scale_anchor_latents(
+                IdentityVAE(),
+                [anchor],
+                volume_size=4,
                 num_phases=2,
                 segment=False,
                 device=torch.device("cpu"),
@@ -108,6 +139,32 @@ class ScaleConditionTest(unittest.TestCase):
         self.assertEqual(latent.shape, torch.Size([1, 2, 2, 2]))
         self.assertEqual(mask.shape, torch.Size([1, 2, 2, 2]))
 
+    def test_anchor_latents_reject_non_finite_encoded_base_anchor(self):
+        anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=0)
+
+        with self.assertRaisesRegex(ValueError, "encoded anchor latent.*finite"):
+            prepare_scale_anchor_latents(
+                NonFiniteVAE(),
+                [anchor],
+                volume_size=4,
+                num_phases=2,
+                segment=False,
+                device=torch.device("cpu"),
+            )
+
+    def test_anchor_latents_reject_non_finite_encoded_large_anchor(self):
+        anchor = AnchorSlice(image=np.zeros((4, 4), dtype=np.uint8), axis=0, index=0)
+
+        with self.assertRaisesRegex(ValueError, "encoded anchor latent.*finite"):
+            prepare_scale_anchor_latents(
+                NonFiniteVAE(),
+                [anchor],
+                volume_size=4,
+                num_phases=2,
+                segment=False,
+                device=torch.device("cpu"),
+            )
+
     def test_shifted_anchor_slices_move_base_index_to_output_index(self):
         anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=1)
 
@@ -140,6 +197,12 @@ class ScaleConditionTest(unittest.TestCase):
                 base_size=2,
                 downsample_factor=2,
             )
+
+    def test_shifted_anchor_slices_reject_index_outside_base_volume(self):
+        anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=2)
+
+        with self.assertRaisesRegex(ValueError, "index"):
+            shifted_anchor_slices([anchor], volume_size=6, base_size=2)
 
 
 if __name__ == "__main__":

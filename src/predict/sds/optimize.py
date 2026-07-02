@@ -14,8 +14,9 @@ from src.predict.sds.anchor import anchor_loss
 from src.predict.sds.common import prepare_anchor_targets, prepare_inference_module
 from src.predict.sds.core import sds_loss
 from src.predict.sds.diffusivity import DiffusivitySolver
-from src.predict.sds.objective import descriptor_loss
+from src.predict.sds.objective import descriptor_loss, descriptor_loss_per_sample
 from src.predict.types import AnchorSlice
+from src.predict.validation import validate_finite_tensor
 
 
 def optimize_volume(
@@ -85,6 +86,7 @@ def optimize_volume(
 
     updated = volume.clone().float()
     history: dict[str, list[torch.Tensor]] = {}
+
     for step in range(steps):
         axis, indices = select_slice_batch(
             updated,
@@ -92,6 +94,7 @@ def optimize_volume(
             slice_schedule,
             sds_batch_size,
         )
+
         if len(indices) == 1:
             index = indices[0]
             anchor_target = anchor_targets.get((axis, index))
@@ -157,6 +160,7 @@ def optimize_volume(
                 sa_kernel_size=sa_kernel_size,
                 sa_sigma=sa_sigma,
             )
+
         for key, value in step_stats.items():
             history.setdefault(key, []).append(value.detach())
 
@@ -166,6 +170,7 @@ def optimize_volume(
         if values
     }
     stats["steps"] = torch.tensor(steps, device=updated.device)
+
     return updated, stats
 
 
@@ -233,15 +238,21 @@ def optimize_slice(
         int(vae.image_size),
     )
     mu, _ = vae.encode(image)
+
     if mu.ndim != 4:
         raise ValueError("vae.encode must return latent with shape [B, C, H, W].")
+
+    validate_finite_tensor("latent", mu)
+
     latent = mu.detach().clone().requires_grad_(True)
     optimizer = torch.optim.Adam([latent], lr=lr)
 
     stats: dict[str, torch.Tensor] = {}
+
     for _ in range(steps):
         optimizer.zero_grad()
         decoded = _decode_latent(vae, latent)
+
         total, stats = _objective(
             latent,
             decoded,
@@ -272,6 +283,7 @@ def optimize_slice(
     with torch.no_grad():
         decoded = _decode_latent(vae, latent).clamp(-1.0, 1.0)
         replace_slice(updated, axis, index, decoded)
+
     return updated, stats
 
 
@@ -317,15 +329,21 @@ def _optimize_slice_batch(
         raise ValueError("selected slice shape must match vae.image_size.")
 
     latent, _ = vae.encode(images.view(len(indices), 1, image_size, image_size))
+
     if latent.ndim != 4 or latent.shape[0] != len(indices):
         raise ValueError("vae.encode must return latent with shape [B, C, H, W].")
+
+    validate_finite_tensor("latent", latent)
+
     latent = latent.detach().clone().requires_grad_(True)
     optimizer = torch.optim.Adam([latent], lr=lr)
 
     stats: dict[str, torch.Tensor] = {}
+
     for _ in range(steps):
         optimizer.zero_grad()
         decoded = _decode_latent_batch(vae, latent)
+
         total, stats = _objective_batch(
             latent,
             decoded,
@@ -356,6 +374,7 @@ def _optimize_slice_batch(
     with torch.no_grad():
         decoded = _decode_latent_batch(vae, latent).clamp(-1.0, 1.0)
         replace_slice_batch(updated, axis, indices, decoded)
+
     return updated, stats
 
 
@@ -391,6 +410,7 @@ def _objective(
         loss, _ = sds_loss(latent, diffusion_model, ddpm, t_min=t_min, t_max=t_max)
         total = total + sds_weight * loss
         stats["sds"] = (sds_weight * loss).detach()
+
     if anchor_weight > 0.0 and anchor_target is not None:
         loss, _ = anchor_loss(
             decoded,
@@ -401,6 +421,7 @@ def _objective(
         )
         total = total + loss
         stats["anchor"] = loss.detach()
+
     target_total, target_stats = descriptor_loss(
         decoded,
         num_phases=num_phases,
@@ -458,10 +479,13 @@ def _objective_batch(
         stats["sds"] = (sds_weight * loss).detach()
 
     anchor_losses = []
+    has_anchor_target = False
     if anchor_weight > 0.0:
         for decoded_slice, target in zip(decoded, anchor_targets, strict=True):
             if target is None:
+                anchor_losses.append(decoded_slice.sum() * 0.0)
                 continue
+
             loss, _ = anchor_loss(
                 decoded_slice,
                 target,
@@ -470,12 +494,14 @@ def _objective_batch(
                 weight=anchor_weight,
             )
             anchor_losses.append(loss)
-    if anchor_losses:
+            has_anchor_target = True
+
+    if has_anchor_target:
         loss = torch.stack(anchor_losses).mean()
         total = total + loss
         stats["anchor"] = loss.detach()
 
-    target_total, target_stats = descriptor_loss(
+    target_total, target_stats = descriptor_loss_per_sample(
         decoded,
         num_phases=num_phases,
         vf_targets=vf_targets,
@@ -495,24 +521,35 @@ def _objective_batch(
     stats.update(target_stats)
 
     stats["loss"] = total.detach()
+
     return total, stats
 
 
 def _decode_latent(vae: torch.nn.Module, latent: torch.Tensor) -> torch.Tensor:
     decoded = vae.decode(latent)
+
     if decoded.ndim != 4 or decoded.shape[:2] != (1, 1):
         raise ValueError("vae.decode must return shape [1, 1, H, W].")
+
     if decoded.shape[-2:] != (int(vae.image_size), int(vae.image_size)):
         raise ValueError("vae.decode output spatial shape must match vae.image_size.")
+
+    validate_finite_tensor("decoded", decoded)
+
     return decoded[0, 0]
 
 
 def _decode_latent_batch(vae: torch.nn.Module, latent: torch.Tensor) -> torch.Tensor:
     decoded = vae.decode(latent)
+
     if decoded.ndim != 4 or decoded.shape[0] != latent.shape[0] or decoded.shape[1] != 1:
         raise ValueError("vae.decode must return shape [B, 1, H, W].")
+
     if decoded.shape[-2:] != (int(vae.image_size), int(vae.image_size)):
         raise ValueError("vae.decode output spatial shape must match vae.image_size.")
+
+    validate_finite_tensor("decoded", decoded)
+
     return decoded[:, 0]
 
 
@@ -539,12 +576,16 @@ def _validate_inputs(
 ) -> None:
     if volume.ndim != 3:
         raise ValueError("volume must have shape [D, H, W].")
+
     if axis not in (0, 1, 2):
         raise ValueError("axis must be 0, 1, or 2.")
+
     if index < 0 or index >= volume.shape[axis]:
         raise ValueError("index must be inside the selected axis.")
+
     if steps < 0:
         raise ValueError("steps must be non-negative.")
+
     _validate_optimization_contract(
         lr=lr,
         sds_weight=sds_weight,
@@ -587,6 +628,7 @@ def _validate_optimization_contract(
 ) -> None:
     if lr <= 0.0:
         raise ValueError("lr must be positive.")
+
     for name, weight in (
         ("sds_weight", sds_weight),
         ("anchor_weight", anchor_weight),
@@ -597,18 +639,24 @@ def _validate_optimization_contract(
     ):
         if weight < 0.0:
             raise ValueError(f"{name} must be non-negative.")
+
     if require_anchor_target and anchor_weight > 0.0 and anchor_target is None:
         raise ValueError("anchor_target is required when anchor_weight is positive.")
+
     if vf_weight > 0.0 and vf_targets is None:
         raise ValueError("vf_targets is required when vf_weight is positive.")
+
     if tpc_weight > 0.0 and tpc_targets is None:
         raise ValueError("tpc_targets is required when tpc_weight is positive.")
+
     if sa_weight > 0.0 and sa_targets is None:
         raise ValueError("sa_targets is required when sa_weight is positive.")
+
     if diffusivity_weight > 0.0 and diffusivity_targets is None:
         raise ValueError(
             "diffusivity_targets is required when diffusivity_weight is positive."
         )
+
     if diffusivity_weight > 0.0:
         if diffusivity_solver is None:
             raise ValueError("diffusivity_solver is required for diffusivity loss.")
@@ -626,18 +674,25 @@ def _validate_volume_inputs(
 ) -> None:
     if volume.ndim != 3:
         raise ValueError("volume must have shape [D, H, W].")
+
     if any(size <= 0 for size in volume.shape):
         raise ValueError("volume dimensions must be positive.")
+
     if steps < 0:
         raise ValueError("steps must be non-negative.")
+
     if slice_steps < 0:
         raise ValueError("slice_steps must be non-negative.")
+
     if not isinstance(sds_batch_size, int) or isinstance(sds_batch_size, bool):
         raise ValueError("sds_batch_size must be an integer.")
+
     if sds_batch_size <= 0:
         raise ValueError("sds_batch_size must be positive.")
+
     if slice_schedule is not None and len(slice_schedule) < steps * sds_batch_size:
         raise ValueError("slice_schedule must contain one entry per batched slice.")
+
     if anchor_weight > 0.0 and not anchors:
         raise ValueError("anchors are required when anchor_weight is positive.")
 

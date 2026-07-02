@@ -47,7 +47,12 @@ class PredictAnchorTest(unittest.TestCase):
         tensor = prepare_anchor_image(image, num_phases=3, segment=True)
 
         self.assertEqual(tensor.shape, torch.Size([1, 1, 1, 6]))
-        self.assertTrue(torch.equal(torch.unique(tensor), torch.tensor([-1.0, 0.0, 1.0])))
+        self.assertTrue(
+            torch.equal(
+                torch.unique(tensor),
+                torch.tensor([-1.0, 0.0, 1.0]),
+            )
+        )
 
     def test_prepare_anchor_image_rejects_non_2d_image(self):
         image = np.zeros((1, 4, 4), dtype=np.uint8)
@@ -59,6 +64,18 @@ class PredictAnchorTest(unittest.TestCase):
         image = np.array([[0, 2]], dtype=np.uint8)
 
         with self.assertRaisesRegex(ValueError, "0 to 1"):
+            prepare_anchor_image(image, num_phases=2)
+
+    def test_prepare_anchor_image_rejects_non_finite_phase_values(self):
+        image = np.array([[np.nan]], dtype=np.float32)
+
+        with self.assertRaisesRegex(ValueError, "finite"):
+            prepare_anchor_image(image, num_phases=2)
+
+    def test_prepare_anchor_image_rejects_fractional_phase_values(self):
+        image = np.array([[0.5]], dtype=np.float32)
+
+        with self.assertRaisesRegex(ValueError, "integer"):
             prepare_anchor_image(image, num_phases=2)
 
     def test_prepare_anchor_image_rejects_num_phases_above_uint8_range(self):
@@ -146,6 +163,38 @@ class PredictAnchorTest(unittest.TestCase):
         self.assertTrue(torch.equal(latent[:, :, :, 1], torch.ones(2, 1, 2)))
         self.assertTrue(torch.equal(mask[:, :, :, 1], torch.ones(2, 1, 2)))
         self.assertTrue(torch.equal(mask[:, :, :, 0], torch.zeros(2, 1, 2)))
+
+    def test_prepare_anchor_latents_rejects_invalid_axis_directly(self):
+        anchor = AnchorSlice(
+            image=np.ones((2, 2), dtype=np.uint8),
+            axis=3,
+            index=1,
+        )
+
+        with self.assertRaisesRegex(ValueError, "axis"):
+            prepare_anchor_latents(
+                IdentityVAE(),
+                [anchor],
+                num_phases=2,
+                segment=False,
+                device=torch.device("cpu"),
+            )
+
+    def test_prepare_anchor_latents_rejects_invalid_index_directly(self):
+        anchor = AnchorSlice(
+            image=np.ones((2, 2), dtype=np.uint8),
+            axis=0,
+            index=2,
+        )
+
+        with self.assertRaisesRegex(ValueError, "index"):
+            prepare_anchor_latents(
+                IdentityVAE(),
+                [anchor],
+                num_phases=2,
+                segment=False,
+                device=torch.device("cpu"),
+            )
 
 
 if __name__ == "__main__":

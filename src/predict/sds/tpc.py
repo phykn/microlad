@@ -1,9 +1,11 @@
 from collections.abc import Mapping
+from numbers import Integral
 
 import torch
 import torch.nn.functional as F
 
 from src.predict.sds.phase import soft_phase_probability
+from src.predict.validation import validate_finite_tensor
 
 
 def tpc_loss(
@@ -16,14 +18,19 @@ def tpc_loss(
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if values.ndim < 2:
         raise ValueError("values must have at least two spatial dimensions.")
+
     if values.numel() == 0 or values.shape[-2] <= 0 or values.shape[-1] <= 0:
         raise ValueError("values must have non-empty spatial dimensions.")
+
     if values.ndim == 4 and values.shape[1] != 1:
         raise ValueError("values with 4 dimensions must have shape [B, 1, H, W].")
+
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
+
     if temperature <= 0.0:
         raise ValueError("temperature must be positive.")
+
     if weight < 0.0:
         raise ValueError("weight must be non-negative.")
 
@@ -41,12 +48,14 @@ def tpc_loss(
 
     if target_tpc.shape[1] != actual_tpc.shape[1]:
         raise ValueError("targets length must match the predicted TPC length.")
+
     loss = weight * F.mse_loss(actual_tpc, target_tpc)
 
     stats = {
         "actual_tpc": actual_tpc.detach(),
         "target_tpc": target_tpc.detach(),
     }
+
     return loss, stats
 
 
@@ -58,12 +67,16 @@ def compute_tpc(
 ) -> torch.Tensor:
     if values.ndim < 2:
         raise ValueError("values must have at least two spatial dimensions.")
+
     if values.numel() == 0 or values.shape[-2] <= 0 or values.shape[-1] <= 0:
         raise ValueError("values must have non-empty spatial dimensions.")
+
     if values.ndim == 4 and values.shape[1] != 1:
         raise ValueError("values with 4 dimensions must have shape [B, 1, H, W].")
+
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
+
     if temperature <= 0.0:
         raise ValueError("temperature must be positive.")
 
@@ -82,6 +95,7 @@ def compute_tpc(
         temperature=temperature,
         phase_dim=1,
     )
+
     return _phase_tpc(probability, bin_matrix, bin_counts)
 
 
@@ -91,9 +105,11 @@ def _phase_tpc(
     bin_counts: torch.Tensor,
 ) -> torch.Tensor:
     phase_profiles = []
+
     for phase in range(probability.shape[1]):
         tpc = _compute_tpc_batch(probability[:, phase], bin_matrix, bin_counts)
         phase_profiles.append(tpc.mean(dim=0))
+
     return torch.stack(phase_profiles, dim=0)
 
 
@@ -148,18 +164,35 @@ def _target_tensor(
         target = targets.to(device=device, dtype=dtype)
     else:
         expected_keys = set(range(num_phases))
-        if set(int(phase) for phase in targets.keys()) != expected_keys:
+        profiles: dict[int, torch.Tensor] = {}
+
+        for phase, profile in targets.items():
+            if not isinstance(phase, Integral) or isinstance(phase, bool):
+                raise ValueError("targets phase indices must be integers.")
+
+            phase = int(phase)
+            if phase < 0 or phase >= num_phases:
+                raise ValueError("targets must contain phase indices within num_phases.")
+
+            profiles[phase] = torch.as_tensor(profile, device=device, dtype=dtype)
+
+        if set(profiles) != expected_keys:
             raise ValueError("targets must contain one TPC profile per phase.")
-        target = torch.stack(
-            [
-                torch.as_tensor(targets[phase], device=device, dtype=dtype)
-                for phase in range(num_phases)
-            ],
-            dim=0,
-        )
+
+        target = torch.stack([profiles[phase] for phase in range(num_phases)], dim=0)
 
     if target.ndim != 2 or target.shape[0] != num_phases:
         raise ValueError("targets must have shape [num_phases, num_bins].")
+
     if target.shape[1] < 1:
         raise ValueError("targets must contain at least one TPC bin.")
+
+    validate_finite_tensor("targets", target)
+
+    if torch.any(target < 0):
+        raise ValueError("targets must be non-negative.")
+
+    if torch.any(target > 1):
+        raise ValueError("targets values must be between 0 and 1.")
+
     return target

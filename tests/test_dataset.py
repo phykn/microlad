@@ -96,6 +96,29 @@ class PatchDatasetTest(unittest.TestCase):
         self.assertEqual(patch.shape, torch.Size([1, 4, 4]))
         self.assertEqual(sorted(torch.unique(patch).tolist()), [-1.0, 0.0, 1.0])
 
+    def test_segment_false_rejects_normalized_float_intensity_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image_dir = Path(tmp)
+            pixels = np.array(
+                [
+                    [0.0, 0.5],
+                    [1.0, 0.5],
+                ],
+                dtype=np.float32,
+            )
+            Image.fromarray(pixels).save(image_dir / "gray-float.tif")
+
+            dataset = PatchDataset(
+                [image_dir / "gray-float.tif"],
+                crop_size=2,
+                size=2,
+                num_phases=3,
+                segment=False,
+            )
+
+            with self.assertRaisesRegex(ValueError, "integer"):
+                dataset[0]
+
     def test_four_phase_scaling_uses_even_steps_from_minus_one_to_one(self):
         with tempfile.TemporaryDirectory() as tmp:
             image_dir = Path(tmp)

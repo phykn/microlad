@@ -46,6 +46,10 @@ class PredictSDSObjectiveTest(unittest.TestCase):
         self.assertTrue(torch.allclose(loss, torch.tensor(0.0)))
         self.assertEqual(stats, {})
 
+    def test_descriptor_loss_rejects_non_finite_decoded_values(self):
+        with self.assertRaisesRegex(ValueError, "finite"):
+            descriptor_loss(torch.full((2, 2), float("nan")), num_phases=2)
+
 
 if __name__ == "__main__":
     unittest.main()

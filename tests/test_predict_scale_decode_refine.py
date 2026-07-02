@@ -32,6 +32,29 @@ class BadDecodeVAE(DecodeValueVAE):
         return torch.zeros(1, 2, self.image_size, self.image_size)
 
 
+class NonFiniteDecodeVAE(DecodeValueVAE):
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        return torch.full(
+            (latent.shape[0], 1, self.image_size, self.image_size),
+            float("nan"),
+            dtype=latent.dtype,
+            device=latent.device,
+        )
+
+
+class InconsistentScaleVAE(DecodeValueVAE):
+    image_size = 3
+    latent_size = 2
+    downsample_factor = 2
+
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        return torch.ones(
+            (latent.shape[0], 1, self.image_size, self.image_size),
+            dtype=latent.dtype,
+            device=latent.device,
+        )
+
+
 class ShiftRefineVAE(torch.nn.Module):
     image_size = 2
 
@@ -54,6 +77,18 @@ class ShiftRefineVAE(torch.nn.Module):
 class BadRefineVAE(ShiftRefineVAE):
     def decode(self, latent: torch.Tensor) -> torch.Tensor:
         return torch.zeros(1, 2, self.image_size, self.image_size)
+
+
+class NonFiniteEncodeRefineVAE(ShiftRefineVAE):
+    def encode(self, image: torch.Tensor):
+        self.encode_grad_enabled.append(torch.is_grad_enabled())
+        return torch.full_like(image, float("nan")), torch.zeros_like(image)
+
+
+class NonFiniteDecodeRefineVAE(ShiftRefineVAE):
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        self.decode_grad_enabled.append(torch.is_grad_enabled())
+        return torch.full_like(latent, float("nan"))
 
 
 class PredictScaleDecodeRefineTest(unittest.TestCase):
@@ -83,6 +118,38 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "decode"):
             decode_large_latent_volume(
                 BadDecodeVAE(),
+                torch.zeros(1, 2, 2, 2),
+                tile_overlap=0,
+            )
+
+    def test_decode_large_latent_volume_rejects_non_floating_latent(self):
+        with self.assertRaisesRegex(ValueError, "floating"):
+            decode_large_latent_volume(
+                DecodeValueVAE(),
+                torch.zeros(1, 2, 2, 2, dtype=torch.int64),
+                tile_overlap=0,
+            )
+
+    def test_decode_large_latent_volume_rejects_non_finite_latent(self):
+        with self.assertRaisesRegex(ValueError, "latent volume.*finite"):
+            decode_large_latent_volume(
+                DecodeValueVAE(),
+                torch.full((1, 2, 2, 2), float("nan")),
+                tile_overlap=0,
+            )
+
+    def test_decode_large_latent_volume_rejects_non_finite_decode_output(self):
+        with self.assertRaisesRegex(ValueError, "decoded.*finite"):
+            decode_large_latent_volume(
+                NonFiniteDecodeVAE(),
+                torch.zeros(1, 2, 2, 2),
+                tile_overlap=0,
+            )
+
+    def test_decode_large_latent_volume_rejects_inconsistent_vae_scale(self):
+        with self.assertRaisesRegex(ValueError, "image_size"):
+            decode_large_latent_volume(
+                InconsistentScaleVAE(),
                 torch.zeros(1, 2, 2, 2),
                 tile_overlap=0,
             )
@@ -119,6 +186,51 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
             refine_large_volume(
                 torch.zeros(2, 2, 2),
                 BadRefineVAE(),
+                steps=1,
+                tile_overlap=0,
+            )
+
+    def test_refine_large_volume_rejects_non_floating_volume(self):
+        with self.assertRaisesRegex(ValueError, "floating"):
+            refine_large_volume(
+                torch.zeros(2, 2, 2, dtype=torch.int64),
+                ShiftRefineVAE(),
+                steps=1,
+                tile_overlap=0,
+            )
+
+    def test_refine_large_volume_rejects_non_finite_volume(self):
+        with self.assertRaisesRegex(ValueError, "volume.*finite"):
+            refine_large_volume(
+                torch.full((2, 2, 2), float("nan")),
+                ShiftRefineVAE(),
+                steps=1,
+                tile_overlap=0,
+            )
+
+    def test_refine_large_volume_rejects_empty_volume(self):
+        with self.assertRaisesRegex(ValueError, "positive"):
+            refine_large_volume(
+                torch.empty(0, 0, 0),
+                ShiftRefineVAE(),
+                steps=1,
+                tile_overlap=0,
+            )
+
+    def test_refine_large_volume_rejects_non_finite_encoded_latent(self):
+        with self.assertRaisesRegex(ValueError, "encoded.*finite"):
+            refine_large_volume(
+                torch.zeros(2, 2, 2),
+                NonFiniteEncodeRefineVAE(),
+                steps=1,
+                tile_overlap=0,
+            )
+
+    def test_refine_large_volume_rejects_non_finite_decoded_tile(self):
+        with self.assertRaisesRegex(ValueError, "decoded.*finite"):
+            refine_large_volume(
+                torch.zeros(2, 2, 2),
+                NonFiniteDecodeRefineVAE(),
                 steps=1,
                 tile_overlap=0,
             )

@@ -20,16 +20,22 @@ def vae_loss(
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if recon.shape != target.shape:
         raise ValueError("recon and target must have the same shape.")
+
     if recon.numel() == 0:
         raise ValueError("recon and target must not be empty.")
+
     if mu.shape != logvar.shape:
         raise ValueError("mu and logvar must have the same shape.")
+
     if mu.ndim == 0 or mu.shape[0] != recon.shape[0]:
         raise ValueError("mu and logvar batch size must match recon batch size.")
+
     if beta < 0:
         raise ValueError("beta must be non-negative.")
+
     if ssim_weight < 0:
         raise ValueError("ssim_weight must be non-negative.")
+
     if phase_weight < 0:
         raise ValueError("phase_weight must be non-negative.")
 
@@ -65,12 +71,16 @@ class VAELoss(nn.Module):
         phase_temperature: float = 0.1,
     ) -> None:
         super().__init__()
+
         if beta < 0:
             raise ValueError("beta must be non-negative.")
+
         if ssim_weight < 0:
             raise ValueError("ssim_weight must be non-negative.")
+
         if phase_weight < 0:
             raise ValueError("phase_weight must be non-negative.")
+
         self.beta = beta
         self.ssim_weight = ssim_weight
         self.phase_weight = phase_weight

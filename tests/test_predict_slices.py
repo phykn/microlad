@@ -7,6 +7,7 @@ from src.predict.slices import (
     extract_slice_batch,
     replace_slice,
     replace_slice_batch,
+    select_slice,
     select_slice_batch,
 )
 
@@ -18,11 +19,35 @@ class PredictSlicesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "axis"):
             extract_slice(volume, axis=99, index=0)
 
+        with self.assertRaisesRegex(ValueError, "axis.*integer"):
+            extract_slice(volume, axis=True, index=0)
+
+    def test_extract_slice_rejects_out_of_range_index(self):
+        volume = torch.zeros(2, 3, 4)
+
+        with self.assertRaisesRegex(ValueError, "index"):
+            extract_slice(volume, axis=0, index=2)
+
+        with self.assertRaisesRegex(ValueError, "index.*integer"):
+            extract_slice(volume, axis=0, index=1.0)
+
     def test_replace_slice_rejects_invalid_axis(self):
         volume = torch.zeros(2, 3, 4)
 
         with self.assertRaisesRegex(ValueError, "axis"):
             replace_slice(volume, axis=99, index=0, image=torch.zeros(2, 3))
+
+    def test_replace_slice_rejects_out_of_range_index(self):
+        volume = torch.zeros(2, 3, 4)
+
+        with self.assertRaisesRegex(ValueError, "index"):
+            replace_slice(volume, axis=1, index=3, image=torch.zeros(2, 4))
+
+    def test_replace_slice_rejects_image_shape_mismatch(self):
+        volume = torch.zeros(2, 3, 4)
+
+        with self.assertRaisesRegex(ValueError, "shape"):
+            replace_slice(volume, axis=1, index=0, image=torch.zeros(3, 4))
 
     def test_extract_slice_batch_keeps_batch_first_for_each_axis(self):
         volume = torch.arange(27).view(3, 3, 3)
@@ -50,9 +75,33 @@ class PredictSlicesTest(unittest.TestCase):
         self.assertTrue(torch.equal(volume[:, 2, :], images[1]))
         self.assertTrue(torch.equal(volume[:, 1, :], torch.zeros(3, 3)))
 
+    def test_replace_slice_batch_rejects_image_spatial_shape_mismatch(self):
+        with self.assertRaisesRegex(ValueError, "image shape"):
+            replace_slice_batch(
+                torch.zeros(3, 3, 3),
+                axis=1,
+                indices=[0, 2],
+                images=torch.zeros(2, 4, 3),
+            )
+
     def test_extract_slice_batch_rejects_out_of_range_indices(self):
         with self.assertRaisesRegex(ValueError, "indices"):
             extract_slice_batch(torch.zeros(3, 3, 3), axis=0, indices=[3])
+
+    def test_select_slice_rejects_non_integer_schedule_entries(self):
+        with self.assertRaisesRegex(ValueError, "axis.*integer"):
+            select_slice(
+                torch.zeros(3, 3, 3),
+                step=0,
+                slice_schedule=[(0.0, 1)],
+            )
+
+        with self.assertRaisesRegex(ValueError, "index.*integer"):
+            select_slice(
+                torch.zeros(3, 3, 3),
+                step=0,
+                slice_schedule=[(0, "1")],
+            )
 
     def test_select_slice_batch_rejects_cross_axis_schedule(self):
         with self.assertRaisesRegex(ValueError, "same axis"):
@@ -60,6 +109,23 @@ class PredictSlicesTest(unittest.TestCase):
                 torch.zeros(3, 3, 3),
                 step=0,
                 slice_schedule=[(0, 0), (1, 1)],
+                batch_size=2,
+            )
+
+    def test_select_slice_batch_rejects_non_integer_schedule_entries(self):
+        with self.assertRaisesRegex(ValueError, "axis.*integer"):
+            select_slice_batch(
+                torch.zeros(3, 3, 3),
+                step=0,
+                slice_schedule=[(0, 0), (1.0, 1)],
+                batch_size=2,
+            )
+
+        with self.assertRaisesRegex(ValueError, "index.*integer"):
+            select_slice_batch(
+                torch.zeros(3, 3, 3),
+                step=0,
+                slice_schedule=[(0, 0), (0, True)],
                 batch_size=2,
             )
 

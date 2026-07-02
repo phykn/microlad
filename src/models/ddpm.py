@@ -21,10 +21,13 @@ class DDPM:
     ) -> None:
         if timesteps <= 0:
             raise ValueError("timesteps must be positive.")
+
         if beta_start <= 0.0:
             raise ValueError("beta_start must be positive.")
+
         if beta_end >= 1.0:
             raise ValueError("beta_end must be smaller than 1.")
+
         if beta_start >= beta_end:
             raise ValueError("beta_start must be smaller than beta_end.")
 
@@ -50,6 +53,7 @@ class DDPM:
     ) -> torch.Tensor:
         if batch_size <= 0:
             raise ValueError("batch_size must be positive.")
+
         device = self.device if device is None else torch.device(device)
         return torch.randint(0, self.num_timesteps, (batch_size,), device=device)
 
@@ -69,8 +73,10 @@ class DDPM:
     ) -> torch.Tensor:
         self._match_device(x_start.device)
         self._validate_timesteps(t, x_start.shape[0])
+
         if noise is None:
             noise = torch.randn_like(x_start)
+
         if noise.shape != x_start.shape:
             raise ValueError("noise must have the same shape as x_start.")
 
@@ -105,7 +111,9 @@ class DDPM:
     def _match_device(self, device: torch.device) -> None:
         if self.device == device:
             return
+
         self.device = device
+
         for name in SCHEDULE_TENSORS:
             setattr(self, name, getattr(self, name).to(device))
 
@@ -116,9 +124,12 @@ class DDPM:
     def _validate_timesteps(self, t: torch.Tensor, batch_size: int) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be positive.")
+
         if t.ndim != 1 or t.shape[0] != batch_size:
             raise ValueError("timesteps must have shape [B].")
+
         if t.dtype != torch.long:
             raise ValueError("timesteps must be integer tensors.")
+
         if t.min().item() < 0 or t.max().item() >= self.num_timesteps:
             raise ValueError("timestep values must be within the DDPM schedule.")

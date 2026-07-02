@@ -1,6 +1,7 @@
 import torch
 
 from src.predict.scale.tiles import tile_grid
+from src.predict.validation import validate_finite_tensor, validate_floating_dtype
 
 
 @torch.no_grad()
@@ -60,11 +61,18 @@ def decode_large_latent_volume(
 def _validate_latent_volume(vae: torch.nn.Module, latent: torch.Tensor) -> None:
     if latent.ndim != 4:
         raise ValueError("latent volume must have shape [C, D, H, W].")
+
+    validate_floating_dtype("latent volume dtype", latent.dtype)
+    validate_finite_tensor("latent volume", latent)
+
     if latent.shape[0] != int(vae.latent_ch):
         raise ValueError("latent channel count must match vae.latent_ch.")
+
     latent_size = int(vae.latent_size)
     if any(size < latent_size for size in latent.shape[1:]):
         raise ValueError("latent spatial shape must be at least vae.latent_size.")
+
+    _downsample_factor(vae)
 
 
 def _decode_tiled_plane(
@@ -100,10 +108,14 @@ def _decode_tiled_plane(
             col : col + tile_size,
         ].unsqueeze(0)
         decoded = vae.decode(latent_tile)
+
         if decoded.ndim != 4 or decoded.shape[0] != 1 or decoded.shape[1] != 1:
             raise ValueError("decode output must have shape [1, 1, H, W].")
+
         if decoded.shape[-2:] != (image_size, image_size):
             raise ValueError("decode output spatial shape must match vae.image_size.")
+
+        validate_finite_tensor("decoded", decoded)
 
         out_row = row * factor
         out_col = col * factor
@@ -120,10 +132,20 @@ def _decode_tiled_plane(
 
 
 def _downsample_factor(vae: torch.nn.Module) -> int:
-    return int(
+    factor = int(
         getattr(
             vae,
             "downsample_factor",
             int(vae.image_size) // int(vae.latent_size),
         )
     )
+
+    if factor <= 0:
+        raise ValueError("VAE downsample factor must be positive.")
+
+    if int(vae.latent_size) * factor != int(vae.image_size):
+        raise ValueError(
+            "vae.image_size must equal vae.latent_size * downsample_factor."
+        )
+
+    return factor

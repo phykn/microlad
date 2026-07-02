@@ -17,10 +17,13 @@ def volume_fraction_loss(
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if values.numel() == 0:
         raise ValueError("values must be non-empty.")
+
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
+
     if temperature <= 0.0:
         raise ValueError("temperature must be positive.")
+
     if weight < 0.0:
         raise ValueError("weight must be non-negative.")
 
@@ -37,12 +40,14 @@ def volume_fraction_loss(
         label="fraction",
         require_sum_one=True,
     )
+
     loss = weight * F.mse_loss(actual_vf, target)
 
     stats = {
         "actual_vf": actual_vf.detach(),
         "target_vf": target.detach(),
     }
+
     return loss, stats
 
 
@@ -54,8 +59,10 @@ def compute_volume_fraction(
 ) -> torch.Tensor:
     if values.numel() == 0:
         raise ValueError("values must be non-empty.")
+
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
+
     if temperature <= 0.0:
         raise ValueError("temperature must be positive.")
 
@@ -65,4 +72,5 @@ def compute_volume_fraction(
         temperature=temperature,
         phase_dim=0,
     )
+
     return probability.mean(dim=1)

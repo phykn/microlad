@@ -72,8 +72,10 @@ class VAETrainer:
         loss, parts = self.loss_fn(recon, image, mu, logvar)
         loss.backward()
         grad_norm = self.grad_norm()
+
         if self.clip_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
+
         self.optimizer.step()
 
         stats = loss_stats(loss, parts)
@@ -91,9 +93,11 @@ class VAETrainer:
             desc="vae",
             disable=not self.is_main_process,
         )
+
         for _ in progress:
             stats = self.train_step()
             progress.set_postfix(progress_postfix(stats))
+
         return stats
 
     def log_step_stats(self, stats: dict[str, float]) -> None:
