@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 import torch
 
 from src.models import DDPM
+from src.predict.blend import blend_window
 from src.predict.slices import (
     extract_slice,
     extract_slice_batch,
@@ -439,7 +440,12 @@ def _local_prior_objective(
     tile_size = int(vae.image_size)
     height, width = int(image.shape[0]), int(image.shape[1])
     out = image.new_zeros(image.shape)
-    count = image.detach().new_zeros(image.shape)
+    weight_sum = image.detach().new_zeros(image.shape)
+    window = _tile_blend_window(
+        tile_size,
+        tile_overlap,
+        reference=image,
+    )
     total = image.sum() * 0.0
     tile_count = 0
     history: dict[str, list[torch.Tensor]] = {}
@@ -466,10 +472,10 @@ def _local_prior_objective(
 
         decoded = _decode_latent(vae, mu)
         out[row : row + tile_size, col : col + tile_size] = (
-            out[row : row + tile_size, col : col + tile_size] + decoded
+            out[row : row + tile_size, col : col + tile_size] + decoded * window
         )
-        count[row : row + tile_size, col : col + tile_size] = (
-            count[row : row + tile_size, col : col + tile_size] + 1
+        weight_sum[row : row + tile_size, col : col + tile_size] = (
+            weight_sum[row : row + tile_size, col : col + tile_size] + window
         )
 
         stats: dict[str, torch.Tensor] = {}
@@ -530,7 +536,11 @@ def _local_prior_objective(
         stats.update(target_stats)
         _record_stats(history, stats)
 
-    return out / count.clamp_min(1), total / max(tile_count, 1), _mean_stats(history)
+    return (
+        _weighted_average(out, weight_sum),
+        total / max(tile_count, 1),
+        _mean_stats(history),
+    )
 
 
 def _local_prior_objective_batch(
@@ -563,7 +573,12 @@ def _local_prior_objective_batch(
     width = int(images.shape[2])
     tile_size = int(vae.image_size)
     out = images.new_zeros(images.shape)
-    count = images.detach().new_zeros(images.shape)
+    weight_sum = images.detach().new_zeros(images.shape)
+    window = _tile_blend_window(
+        tile_size,
+        tile_overlap,
+        reference=images,
+    )
     total = images.sum() * 0.0
     tile_count = 0
     history: dict[str, list[torch.Tensor]] = {}
@@ -599,10 +614,10 @@ def _local_prior_objective_batch(
 
         decoded = _decode_latent_batch(vae, mu)
         out[:, row : row + tile_size, col : col + tile_size] = (
-            out[:, row : row + tile_size, col : col + tile_size] + decoded
+            out[:, row : row + tile_size, col : col + tile_size] + decoded * window
         )
-        count[:, row : row + tile_size, col : col + tile_size] = (
-            count[:, row : row + tile_size, col : col + tile_size] + 1
+        weight_sum[:, row : row + tile_size, col : col + tile_size] = (
+            weight_sum[:, row : row + tile_size, col : col + tile_size] + window
         )
 
         stats: dict[str, torch.Tensor] = {}
@@ -684,7 +699,11 @@ def _local_prior_objective_batch(
 
         _record_stats(history, stats)
 
-    return out / count.clamp_min(1), total / max(tile_count, 1), _mean_stats(history)
+    return (
+        _weighted_average(out, weight_sum),
+        total / max(tile_count, 1),
+        _mean_stats(history),
+    )
 
 
 def _decode_tiled_image(
@@ -696,7 +715,12 @@ def _decode_tiled_image(
     tile_size = int(vae.image_size)
     height, width = int(image.shape[0]), int(image.shape[1])
     out = image.new_zeros(image.shape)
-    count = image.new_zeros(image.shape)
+    weight_sum = image.new_zeros(image.shape)
+    window = _tile_blend_window(
+        tile_size,
+        tile_overlap,
+        reference=image,
+    )
 
     for row, col in tile_grid(
         height,
@@ -719,13 +743,13 @@ def _decode_tiled_image(
 
         decoded = _decode_latent(vae, mu)
         out[row : row + tile_size, col : col + tile_size] = (
-            out[row : row + tile_size, col : col + tile_size] + decoded
+            out[row : row + tile_size, col : col + tile_size] + decoded * window
         )
-        count[row : row + tile_size, col : col + tile_size] = (
-            count[row : row + tile_size, col : col + tile_size] + 1
+        weight_sum[row : row + tile_size, col : col + tile_size] = (
+            weight_sum[row : row + tile_size, col : col + tile_size] + window
         )
 
-    return out / count.clamp_min(1)
+    return _weighted_average(out, weight_sum)
 
 
 def _decode_tiled_image_batch(
@@ -739,7 +763,12 @@ def _decode_tiled_image_batch(
     height = int(images.shape[1])
     width = int(images.shape[2])
     out = images.new_zeros(images.shape)
-    count = images.new_zeros(images.shape)
+    weight_sum = images.new_zeros(images.shape)
+    window = _tile_blend_window(
+        tile_size,
+        tile_overlap,
+        reference=images,
+    )
 
     for row, col in tile_grid(
         height,
@@ -762,13 +791,34 @@ def _decode_tiled_image_batch(
 
         decoded = _decode_latent_batch(vae, mu)
         out[:, row : row + tile_size, col : col + tile_size] = (
-            out[:, row : row + tile_size, col : col + tile_size] + decoded
+            out[:, row : row + tile_size, col : col + tile_size] + decoded * window
         )
-        count[:, row : row + tile_size, col : col + tile_size] = (
-            count[:, row : row + tile_size, col : col + tile_size] + 1
+        weight_sum[:, row : row + tile_size, col : col + tile_size] = (
+            weight_sum[:, row : row + tile_size, col : col + tile_size] + window
         )
 
-    return out / count.clamp_min(1)
+    return _weighted_average(out, weight_sum)
+
+
+def _tile_blend_window(
+    tile_size: int,
+    tile_overlap: int,
+    *,
+    reference: torch.Tensor,
+) -> torch.Tensor:
+    if tile_overlap == 0:
+        return reference.new_ones((tile_size, tile_size))
+
+    return blend_window(
+        tile_size,
+        tile_size,
+        device=reference.device,
+        dtype=reference.dtype,
+    )
+
+
+def _weighted_average(out: torch.Tensor, weight_sum: torch.Tensor) -> torch.Tensor:
+    return out / weight_sum.clamp_min(torch.finfo(weight_sum.dtype).tiny)
 
 
 def _record_stats(

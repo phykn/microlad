@@ -5,8 +5,15 @@ import torch
 
 from src.models import DDPM
 from src.predict import AnchorSlice
+from src.predict.blend import blend_window
 from src.predict.scale import optimize_large_volume
-from src.predict.scale.sds import _local_prior_objective, _local_prior_objective_batch
+from src.predict.scale.sds import (
+    _decode_tiled_image,
+    _decode_tiled_image_batch,
+    _local_prior_objective,
+    _local_prior_objective_batch,
+)
+from src.predict.scale.tiles import tile_grid
 
 
 class IdentityVAE(torch.nn.Module):
@@ -34,6 +41,28 @@ class NonFiniteEncodeVAE(IdentityVAE):
 class NonFiniteDecodeVAE(IdentityVAE):
     def decode(self, latent: torch.Tensor) -> torch.Tensor:
         return torch.full_like(latent, float("nan"))
+
+
+class LocalPatternVAE(torch.nn.Module):
+    image_size = 3
+    latent_size = 3
+    latent_ch = 1
+
+    def encode(self, image: torch.Tensor):
+        return image.clone(), torch.zeros_like(image)
+
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        rows = torch.arange(
+            self.image_size,
+            dtype=latent.dtype,
+            device=latent.device,
+        ).view(1, 1, self.image_size, 1)
+        cols = torch.arange(
+            self.image_size,
+            dtype=latent.dtype,
+            device=latent.device,
+        ).view(1, 1, 1, self.image_size)
+        return (rows * 10.0 + cols).expand(latent.shape[0], 1, -1, -1)
 
 
 class ZeroNoiseModel(torch.nn.Module):
@@ -339,6 +368,108 @@ class PredictScaleSDSTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(batch_total, single_total / 2.0))
         self.assertTrue(torch.allclose(stats["anchor"], single_total.detach() / 2.0))
+
+    def test_local_prior_objective_uses_weighted_tile_stitching(self):
+        vae = LocalPatternVAE()
+
+        decoded, total, stats = _local_prior_objective(
+            torch.zeros(4, 4),
+            vae,
+            ZeroNoiseModel(),
+            DDPM(timesteps=4),
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            sds_weight=0.0,
+            anchor_target=None,
+            anchor_weight=0.0,
+            temperature=0.5,
+            tile_overlap=2,
+        )
+
+        expected = _expected_local_pattern_stitch(vae, torch.zeros(4, 4))
+
+        self.assertTrue(torch.allclose(decoded, expected))
+        self.assertTrue(torch.equal(total.detach(), torch.tensor(0.0)))
+        self.assertEqual(stats, {})
+
+    def test_local_prior_objective_batch_uses_weighted_tile_stitching(self):
+        vae = LocalPatternVAE()
+
+        decoded, _, _ = _local_prior_objective_batch(
+            torch.zeros(2, 4, 4),
+            vae,
+            ZeroNoiseModel(),
+            DDPM(timesteps=4),
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            sds_weight=0.0,
+            anchor_targets=[None, None],
+            anchor_masks=[None, None],
+            anchor_weight=0.0,
+            temperature=0.5,
+            tile_overlap=2,
+        )
+
+        expected = _expected_local_pattern_stitch(vae, torch.zeros(4, 4))
+
+        self.assertTrue(
+            torch.allclose(
+                decoded,
+                expected.unsqueeze(0).expand(2, -1, -1),
+            )
+        )
+
+    def test_decode_tiled_image_uses_weighted_tile_stitching(self):
+        vae = LocalPatternVAE()
+
+        decoded = _decode_tiled_image(torch.zeros(4, 4), vae, tile_overlap=2)
+
+        expected = _expected_local_pattern_stitch(vae, torch.zeros(4, 4))
+
+        self.assertTrue(torch.allclose(decoded, expected))
+
+    def test_decode_tiled_image_batch_uses_weighted_tile_stitching(self):
+        vae = LocalPatternVAE()
+
+        decoded = _decode_tiled_image_batch(torch.zeros(2, 4, 4), vae, tile_overlap=2)
+
+        expected = _expected_local_pattern_stitch(vae, torch.zeros(4, 4))
+
+        self.assertTrue(
+            torch.allclose(
+                decoded,
+                expected.unsqueeze(0).expand(2, -1, -1),
+            )
+        )
+
+
+def _expected_local_pattern_stitch(
+    vae: LocalPatternVAE,
+    image: torch.Tensor,
+) -> torch.Tensor:
+    tile_size = int(vae.image_size)
+    out = image.new_zeros(image.shape)
+    weight_sum = image.new_zeros(image.shape)
+    window = blend_window(
+        tile_size,
+        tile_size,
+        device=image.device,
+        dtype=image.dtype,
+    )
+    pattern = vae.decode(torch.zeros(1, 1, tile_size, tile_size))[0, 0]
+
+    for row, col in tile_grid(
+        int(image.shape[0]),
+        int(image.shape[1]),
+        tile_size=tile_size,
+        overlap=2,
+    ):
+        out[row : row + tile_size, col : col + tile_size] += pattern * window
+        weight_sum[row : row + tile_size, col : col + tile_size] += window
+
+    return out / weight_sum
 
 
 if __name__ == "__main__":
