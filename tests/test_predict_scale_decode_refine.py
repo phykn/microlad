@@ -2,7 +2,11 @@ import unittest
 
 import torch
 
+from src.predict.blend import blend_window
 from src.predict.scale import decode_large_latent_volume, refine_large_volume
+from src.predict.scale.decode import _decode_tiled_plane
+from src.predict.scale.refine import _refine_tiled_plane
+from src.predict.scale.tiles import tile_grid
 
 
 class DecodeValueVAE(torch.nn.Module):
@@ -40,6 +44,16 @@ class NonFiniteDecodeVAE(DecodeValueVAE):
             dtype=latent.dtype,
             device=latent.device,
         )
+
+
+class MeanDecodeVAE(DecodeValueVAE):
+    image_size = 3
+    latent_size = 3
+    downsample_factor = 1
+
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        mean = latent.mean(dim=(1, 2, 3), keepdim=True)
+        return mean.expand(latent.shape[0], 1, self.image_size, self.image_size)
 
 
 class InconsistentScaleVAE(DecodeValueVAE):
@@ -89,6 +103,43 @@ class NonFiniteDecodeRefineVAE(ShiftRefineVAE):
     def decode(self, latent: torch.Tensor) -> torch.Tensor:
         self.decode_grad_enabled.append(torch.is_grad_enabled())
         return torch.full_like(latent, float("nan"))
+
+
+class AffineRefineVAE(torch.nn.Module):
+    image_size = 3
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.encode_batch_sizes: list[int] = []
+        self.decode_batch_sizes: list[int] = []
+
+    def encode(self, image: torch.Tensor):
+        self.encode_batch_sizes.append(int(image.shape[0]))
+        return image + 0.25, torch.zeros_like(image)
+
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        self.decode_batch_sizes.append(int(latent.shape[0]))
+        return latent * 0.5
+
+
+class LocalPatternRefineVAE(torch.nn.Module):
+    image_size = 3
+
+    def encode(self, image: torch.Tensor):
+        return image, torch.zeros_like(image)
+
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        rows = torch.arange(
+            self.image_size,
+            dtype=latent.dtype,
+            device=latent.device,
+        ).view(1, 1, self.image_size, 1)
+        cols = torch.arange(
+            self.image_size,
+            dtype=latent.dtype,
+            device=latent.device,
+        ).view(1, 1, 1, self.image_size)
+        return (rows * 10.0 + cols).expand(latent.shape[0], 1, -1, -1)
 
 
 class PredictScaleDecodeRefineTest(unittest.TestCase):
@@ -154,6 +205,29 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
                 tile_overlap=0,
             )
 
+    def test_decode_tiled_plane_uses_image_space_weighted_blending(self):
+        vae = MeanDecodeVAE()
+        latent_plane = torch.arange(16, dtype=torch.float32).view(1, 4, 4)
+
+        decoded = _decode_tiled_plane(vae, latent_plane, tile_overlap=2)
+
+        expected = torch.zeros(4, 4)
+        weight_sum = torch.zeros_like(expected)
+        window = blend_window(
+            vae.image_size,
+            vae.image_size,
+            device=latent_plane.device,
+            dtype=latent_plane.dtype,
+        )
+
+        for row, col in tile_grid(4, 4, tile_size=3, overlap=2):
+            tile = latent_plane[:, row : row + 3, col : col + 3]
+            decoded_tile = torch.full((3, 3), float(tile.mean()))
+            expected[row : row + 3, col : col + 3] += decoded_tile * window
+            weight_sum[row : row + 3, col : col + 3] += window
+
+        self.assertTrue(torch.allclose(decoded, expected / weight_sum))
+
     def test_refine_large_volume_runs_three_axis_refinement_without_gradients(self):
         vae = ShiftRefineVAE()
         vae.train()
@@ -180,6 +254,69 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
         self.assertTrue(vae.decode_grad_enabled)
         self.assertTrue(all(enabled is False for enabled in vae.encode_grad_enabled))
         self.assertTrue(all(enabled is False for enabled in vae.decode_grad_enabled))
+
+    def test_refine_large_volume_batches_tiles_without_changing_chunk_result(self):
+        volume = torch.linspace(-0.5, 0.5, steps=64).view(4, 4, 4)
+
+        single = refine_large_volume(
+            volume,
+            AffineRefineVAE(),
+            steps=1,
+            tile_overlap=2,
+            tile_batch_size=1,
+        )
+        batched_vae = AffineRefineVAE()
+        batched = refine_large_volume(
+            volume,
+            batched_vae,
+            steps=1,
+            tile_overlap=2,
+            tile_batch_size=3,
+        )
+
+        expected = volume * 0.5 + 0.125
+
+        self.assertTrue(torch.allclose(single, batched))
+        self.assertTrue(torch.allclose(batched, expected))
+        self.assertIn(3, batched_vae.encode_batch_sizes)
+        self.assertLessEqual(max(batched_vae.encode_batch_sizes), 3)
+        self.assertEqual(batched_vae.encode_batch_sizes, batched_vae.decode_batch_sizes)
+
+    def test_refine_large_volume_rejects_invalid_tile_batch_size(self):
+        with self.assertRaisesRegex(ValueError, "tile_batch_size"):
+            refine_large_volume(
+                torch.zeros(4, 4, 4),
+                AffineRefineVAE(),
+                steps=1,
+                tile_overlap=2,
+                tile_batch_size=0,
+            )
+
+    def test_refine_tiled_plane_uses_weighted_blending(self):
+        vae = LocalPatternRefineVAE()
+
+        refined = _refine_tiled_plane(
+            torch.zeros(4, 4),
+            vae,
+            tile_overlap=2,
+            tile_batch_size=2,
+        )
+
+        expected = torch.zeros(4, 4)
+        weight_sum = torch.zeros_like(expected)
+        window = blend_window(
+            vae.image_size,
+            vae.image_size,
+            device=refined.device,
+            dtype=refined.dtype,
+        )
+        pattern = vae.decode(torch.zeros(1, 1, 3, 3))[0, 0]
+
+        for row, col in tile_grid(4, 4, tile_size=3, overlap=2):
+            expected[row : row + 3, col : col + 3] += pattern * window
+            weight_sum[row : row + 3, col : col + 3] += window
+
+        self.assertTrue(torch.allclose(refined, expected / weight_sum))
 
     def test_refine_large_volume_rejects_bad_decode_shape(self):
         with self.assertRaisesRegex(ValueError, "decode"):

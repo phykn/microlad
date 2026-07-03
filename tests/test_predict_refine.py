@@ -12,6 +12,7 @@ class CountingVAE(torch.nn.Module):
         self.encode_inputs: list[torch.Tensor] = []
         self.decode_inputs: list[torch.Tensor] = []
         self.grad_enabled: list[bool] = []
+        self.decoded_slices = 0
 
     def encode(self, image: torch.Tensor):
         self.encode_inputs.append(image.detach().clone())
@@ -20,8 +21,15 @@ class CountingVAE(torch.nn.Module):
 
     def decode(self, latent: torch.Tensor) -> torch.Tensor:
         self.decode_inputs.append(latent.detach().clone())
-        value = float(len(self.decode_inputs))
-        return torch.full_like(latent, value)
+        batch_size = latent.shape[0]
+        values = torch.arange(
+            self.decoded_slices + 1,
+            self.decoded_slices + batch_size + 1,
+            dtype=latent.dtype,
+            device=latent.device,
+        ).view(batch_size, 1, 1, 1)
+        self.decoded_slices += batch_size
+        return torch.ones_like(latent) * values
 
 
 class NonFiniteEncodeVAE(CountingVAE):
@@ -55,8 +63,12 @@ class PredictRefineTest(unittest.TestCase):
 
         self.assertEqual(refined.shape, torch.Size([2, 2, 2]))
         self.assertTrue(torch.allclose(refined, expected.clamp(-1.0, 1.0)))
-        self.assertEqual(len(vae.encode_inputs), 6)
-        self.assertEqual(len(vae.decode_inputs), 6)
+        self.assertEqual(len(vae.encode_inputs), 3)
+        self.assertEqual(len(vae.decode_inputs), 3)
+        self.assertEqual(
+            [tuple(image.shape) for image in vae.encode_inputs],
+            [(2, 1, 2, 2), (2, 1, 2, 2), (2, 1, 2, 2)],
+        )
 
     def test_three_axis_refinement_runs_without_gradients_and_sets_eval(self):
         vae = CountingVAE()
@@ -65,7 +77,7 @@ class PredictRefineTest(unittest.TestCase):
         three_axis_refinement(torch.zeros(2, 2, 2), vae, steps=1)
 
         self.assertFalse(vae.training)
-        self.assertEqual(vae.grad_enabled, [False] * 6)
+        self.assertEqual(vae.grad_enabled, [False] * 3)
 
     def test_three_axis_refinement_zero_steps_returns_clamped_input(self):
         vae = CountingVAE()

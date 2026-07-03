@@ -1,5 +1,6 @@
 import torch
 
+from src.predict.blend import blend_window
 from src.predict.validation import validate_finite_tensor
 
 
@@ -22,7 +23,23 @@ def reconstruct_anchor_target(
         return _reconstruct_patch(vae, image)
 
     out = torch.zeros_like(image)
-    count = torch.zeros_like(image)
+    weight_sum = torch.zeros_like(image)
+    if tile_overlap == 0:
+        window = torch.ones(
+            1,
+            1,
+            image_size,
+            image_size,
+            dtype=image.dtype,
+            device=image.device,
+        )
+    else:
+        window = blend_window(
+            image_size,
+            image_size,
+            device=image.device,
+            dtype=image.dtype,
+        ).view(1, 1, image_size, image_size)
 
     for row, col in _tile_grid(
         height,
@@ -32,10 +49,12 @@ def reconstruct_anchor_target(
     ):
         patch = image[:, :, row : row + image_size, col : col + image_size]
         recon = _reconstruct_patch(vae, patch)
-        out[:, :, row : row + image_size, col : col + image_size] += recon
-        count[:, :, row : row + image_size, col : col + image_size] += 1
+        out[:, :, row : row + image_size, col : col + image_size] += recon * window
+        weight_sum[:, :, row : row + image_size, col : col + image_size] += window
 
-    return (out / count.clamp_min(1)).clamp(-1.0, 1.0).detach()
+    return (
+        out / weight_sum.clamp_min(torch.finfo(weight_sum.dtype).tiny)
+    ).clamp(-1.0, 1.0).detach()
 
 
 def _reconstruct_patch(vae: torch.nn.Module, image: torch.Tensor) -> torch.Tensor:

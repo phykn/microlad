@@ -31,40 +31,52 @@ def _refine_once(volume: torch.Tensor, vae: torch.nn.Module) -> torch.Tensor:
     depth, height, width = volume.shape
     new_volume = torch.zeros_like(volume)
 
-    for z in range(depth):
-        decoded = _encode_decode_slice(vae, volume[z].view(1, 1, height, width))
-        new_volume[z, :, :] += decoded
+    decoded = _encode_decode_batch(
+        vae,
+        volume.reshape(depth, 1, height, width),
+    )
+    new_volume += decoded[:, 0, :, :]
 
-    for y in range(height):
-        decoded = _encode_decode_slice(vae, volume[:, y, :].view(1, 1, depth, width))
-        new_volume[:, y, :] += decoded
+    decoded = _encode_decode_batch(
+        vae,
+        volume.permute(1, 0, 2).contiguous().view(height, 1, depth, width),
+    )
+    new_volume += decoded[:, 0, :, :].permute(1, 0, 2)
 
-    for x in range(width):
-        decoded = _encode_decode_slice(vae, volume[:, :, x].view(1, 1, depth, height))
-        new_volume[:, :, x] += decoded
+    decoded = _encode_decode_batch(
+        vae,
+        volume.permute(2, 0, 1).contiguous().view(width, 1, depth, height),
+    )
+    new_volume += decoded[:, 0, :, :].permute(1, 2, 0)
 
     return (new_volume / 3.0).clamp(-1.0, 1.0).float()
 
 
-def _encode_decode_slice(vae: torch.nn.Module, image: torch.Tensor) -> torch.Tensor:
-    mu, _ = vae.encode(image)
+def _encode_decode_batch(vae: torch.nn.Module, images: torch.Tensor) -> torch.Tensor:
+    if images.ndim != 4 or images.shape[1] != 1:
+        raise ValueError("images must have shape [B, 1, H, W].")
+
+    mu, _ = vae.encode(images)
 
     if mu.ndim != 4:
         raise ValueError("encode output must have shape [B, C, H, W].")
+
+    if mu.shape[0] != images.shape[0]:
+        raise ValueError("encode output batch size must match the input batch.")
 
     validate_finite_tensor("encoded latent", mu)
 
     decoded = vae.decode(mu)
 
-    if decoded.ndim != 4 or decoded.shape[:2] != (1, 1):
-        raise ValueError("decode output must have shape [1, 1, H, W].")
+    if decoded.ndim != 4 or decoded.shape[:2] != (images.shape[0], 1):
+        raise ValueError("decode output must have shape [B, 1, H, W].")
 
-    if decoded.shape[-2:] != image.shape[-2:]:
+    if decoded.shape[-2:] != images.shape[-2:]:
         raise ValueError("decode output spatial shape must match the input slice.")
 
     validate_finite_tensor("decoded slice", decoded)
 
-    return decoded[0, 0].float()
+    return decoded.float()
 
 
 def _validate_volume(volume: torch.Tensor, vae: torch.nn.Module) -> None:

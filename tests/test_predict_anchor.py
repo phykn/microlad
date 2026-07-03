@@ -3,8 +3,14 @@ import unittest
 import numpy as np
 import torch
 
+from src.predict.blend import blend_window
 from src.predict import AnchorSlice
-from src.predict.anchor import prepare_anchor_image, validate_anchor, validate_anchors
+from src.predict.anchor import (
+    prepare_anchor_image,
+    reconstruct_anchor_target,
+    validate_anchor,
+    validate_anchors,
+)
 from src.predict.anchor.latent import prepare_anchor_latents
 
 
@@ -27,6 +33,26 @@ class DownsamplingVAE(torch.nn.Module):
     def encode(self, image: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         latent = torch.nn.functional.avg_pool2d(image, kernel_size=2)
         return latent, torch.zeros_like(latent)
+
+
+class LocalPatternAnchorVAE(torch.nn.Module):
+    image_size = 3
+
+    def encode(self, image: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        return image, torch.zeros_like(image)
+
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        rows = torch.arange(
+            self.image_size,
+            dtype=latent.dtype,
+            device=latent.device,
+        ).view(1, 1, self.image_size, 1)
+        cols = torch.arange(
+            self.image_size,
+            dtype=latent.dtype,
+            device=latent.device,
+        ).view(1, 1, 1, self.image_size)
+        return (rows * 10.0 + cols).expand(latent.shape[0], 1, -1, -1)
 
 
 class PredictAnchorTest(unittest.TestCase):
@@ -195,6 +221,30 @@ class PredictAnchorTest(unittest.TestCase):
                 segment=False,
                 device=torch.device("cpu"),
             )
+
+    def test_reconstruct_anchor_target_uses_weighted_tile_blending(self):
+        vae = LocalPatternAnchorVAE()
+        image = torch.zeros(1, 1, 4, 4)
+
+        recon = reconstruct_anchor_target(vae, image, tile_overlap=2)
+
+        expected = torch.zeros_like(image)
+        weight_sum = torch.zeros_like(image)
+        window = blend_window(
+            vae.image_size,
+            vae.image_size,
+            device=image.device,
+            dtype=image.dtype,
+        ).view(1, 1, 3, 3)
+        pattern = vae.decode(torch.zeros(1, 1, 3, 3)).clamp(-1.0, 1.0)
+
+        for row, col in [(0, 0), (0, 1), (1, 0), (1, 1)]:
+            expected[:, :, row : row + 3, col : col + 3] += pattern * window
+            weight_sum[:, :, row : row + 3, col : col + 3] += window
+
+        expected = (expected / weight_sum).clamp(-1.0, 1.0)
+
+        self.assertTrue(torch.allclose(recon, expected))
 
 
 if __name__ == "__main__":

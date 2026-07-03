@@ -1,5 +1,6 @@
 import torch
 
+from src.predict.blend import blend_window
 from src.predict.scale.tiles import tile_grid
 from src.predict.validation import validate_finite_tensor, validate_floating_dtype
 
@@ -11,10 +12,12 @@ def refine_large_volume(
     *,
     steps: int,
     tile_overlap: int = 0,
+    tile_batch_size: int = 16,
 ) -> torch.Tensor:
     if steps < 0:
         raise ValueError("steps must be non-negative.")
 
+    _validate_tile_batch_size(tile_batch_size)
     _validate_volume(volume)
 
     refined = volume.clamp(-1.0, 1.0).float()
@@ -23,7 +26,12 @@ def refine_large_volume(
 
     vae.eval()
     for _ in range(steps):
-        refined = _refine_once(refined, vae, tile_overlap=tile_overlap)
+        refined = _refine_once(
+            refined,
+            vae,
+            tile_overlap=tile_overlap,
+            tile_batch_size=tile_batch_size,
+        )
 
     return refined
 
@@ -33,6 +41,7 @@ def _refine_once(
     vae: torch.nn.Module,
     *,
     tile_overlap: int,
+    tile_batch_size: int,
 ) -> torch.Tensor:
     depth, height, width = volume.shape
     out = torch.zeros_like(volume)
@@ -43,6 +52,7 @@ def _refine_once(
             volume[index, :, :],
             vae,
             tile_overlap=tile_overlap,
+            tile_batch_size=tile_batch_size,
         )
         out[index, :, :] += refined
         count[index, :, :] += 1
@@ -52,6 +62,7 @@ def _refine_once(
             volume[:, index, :],
             vae,
             tile_overlap=tile_overlap,
+            tile_batch_size=tile_batch_size,
         )
         out[:, index, :] += refined
         count[:, index, :] += 1
@@ -61,6 +72,7 @@ def _refine_once(
             volume[:, :, index],
             vae,
             tile_overlap=tile_overlap,
+            tile_batch_size=tile_batch_size,
         )
         out[:, :, index] += refined
         count[:, :, index] += 1
@@ -73,47 +85,83 @@ def _refine_tiled_plane(
     vae: torch.nn.Module,
     *,
     tile_overlap: int,
+    tile_batch_size: int,
 ) -> torch.Tensor:
     if image.ndim != 2:
         raise ValueError("image must have shape [H, W].")
 
+    _validate_tile_batch_size(tile_batch_size)
+
     tile_size = int(vae.image_size)
     height, width = int(image.shape[0]), int(image.shape[1])
     out = torch.zeros_like(image, dtype=torch.float32)
-    count = torch.zeros_like(image, dtype=torch.float32)
-
-    for row, col in tile_grid(
-        height,
-        width,
-        tile_size=tile_size,
-        overlap=tile_overlap,
-    ):
-        tile = image[row : row + tile_size, col : col + tile_size].view(
-            1,
-            1,
+    weight_sum = torch.zeros_like(image, dtype=torch.float32)
+    if tile_overlap == 0:
+        window = torch.ones(
             tile_size,
             tile_size,
+            dtype=out.dtype,
+            device=out.device,
         )
-        mu, _ = vae.encode(tile)
+    else:
+        window = blend_window(
+            tile_size,
+            tile_size,
+            device=out.device,
+            dtype=out.dtype,
+        )
 
-        if mu.ndim != 4:
-            raise ValueError("encode output must have shape [B, C, H, W].")
+    positions = list(
+        tile_grid(
+            height,
+            width,
+            tile_size=tile_size,
+            overlap=tile_overlap,
+        )
+    )
+    for start in range(0, len(positions), tile_batch_size):
+        chunk = positions[start : start + tile_batch_size]
+        batch = torch.stack(
+            [
+                image[row : row + tile_size, col : col + tile_size]
+                for row, col in chunk
+            ],
+            dim=0,
+        ).view(len(chunk), 1, tile_size, tile_size)
+        decoded = _encode_decode_tiles(vae, batch, tile_size)
 
-        validate_finite_tensor("encoded latent", mu)
+        for tile, (row, col) in zip(decoded[:, 0], chunk):
+            out[row : row + tile_size, col : col + tile_size] += tile * window
+            weight_sum[row : row + tile_size, col : col + tile_size] += window
 
-        decoded = vae.decode(mu)
-        if decoded.ndim != 4 or decoded.shape[:2] != (1, 1):
-            raise ValueError("decode output must have shape [1, 1, H, W].")
+    return out / weight_sum.clamp_min(torch.finfo(weight_sum.dtype).tiny)
 
-        if decoded.shape[-2:] != (tile_size, tile_size):
-            raise ValueError("decode output spatial shape must match vae.image_size.")
 
-        validate_finite_tensor("decoded tile", decoded)
+def _encode_decode_tiles(
+    vae: torch.nn.Module,
+    tiles: torch.Tensor,
+    tile_size: int,
+) -> torch.Tensor:
+    mu, _ = vae.encode(tiles)
 
-        out[row : row + tile_size, col : col + tile_size] += decoded[0, 0].float()
-        count[row : row + tile_size, col : col + tile_size] += 1
+    if mu.ndim != 4:
+        raise ValueError("encode output must have shape [B, C, H, W].")
 
-    return out / count.clamp_min(1)
+    if mu.shape[0] != tiles.shape[0]:
+        raise ValueError("encode output batch size must match input tiles.")
+
+    validate_finite_tensor("encoded latent", mu)
+
+    decoded = vae.decode(mu)
+    if decoded.ndim != 4 or decoded.shape[:2] != (tiles.shape[0], 1):
+        raise ValueError("decode output must have shape [B, 1, H, W].")
+
+    if decoded.shape[-2:] != (tile_size, tile_size):
+        raise ValueError("decode output spatial shape must match vae.image_size.")
+
+    validate_finite_tensor("decoded tile", decoded)
+
+    return decoded.float()
 
 
 def _validate_volume(volume: torch.Tensor) -> None:
@@ -129,3 +177,11 @@ def _validate_volume(volume: torch.Tensor) -> None:
 
     if depth != height or depth != width:
         raise ValueError("large volume refinement requires a cubic volume.")
+
+
+def _validate_tile_batch_size(tile_batch_size: int) -> None:
+    if not isinstance(tile_batch_size, int) or isinstance(tile_batch_size, bool):
+        raise ValueError("tile_batch_size must be an integer.")
+
+    if tile_batch_size <= 0:
+        raise ValueError("tile_batch_size must be positive.")

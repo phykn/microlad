@@ -3,9 +3,11 @@ from unittest.mock import patch
 
 import torch
 
+from src.predict.blend import blend_window
 from src.predict.scale.denoise import denoise_tiled_plane
 from src.predict.sampler import DiffusionSampler
 from src.predict.scale.sampler import sample_large_lmpdd
+from src.predict.scale.tiles import tile_grid
 
 
 class IdentityDDPM:
@@ -359,6 +361,42 @@ class ScaleSamplerTest(unittest.TestCase):
         self.assertTrue(torch.allclose(denoised, expected))
         self.assertEqual(ddpm.calls, 4)
         self.assertEqual(randn.call_count, 1)
+
+    def test_denoise_tiled_plane_weight_blends_means_before_noise(self):
+        ddpm = MeanOnlyDDPM()
+        planes = torch.zeros(1, 1, 4, 4)
+        timesteps = torch.tensor([0], dtype=torch.long)
+
+        with patch("torch.randn_like", return_value=torch.full_like(planes, 99.0)):
+            denoised = denoise_tiled_plane(
+                ZeroModel(),
+                ddpm,
+                planes,
+                timesteps,
+                tile_size=3,
+                overlap=2,
+            )
+
+        expected = torch.zeros_like(planes)
+        weight_sum = torch.zeros_like(planes)
+        window = blend_window(
+            3,
+            3,
+            device=planes.device,
+            dtype=planes.dtype,
+        ).view(1, 1, 3, 3)
+
+        for value, (row, col) in enumerate(
+            tile_grid(4, 4, tile_size=3, overlap=2),
+            start=1,
+        ):
+            expected[:, :, row : row + 3, col : col + 3] += value * window
+            weight_sum[:, :, row : row + 3, col : col + 3] += window
+
+        expected = expected / weight_sum
+
+        self.assertTrue(torch.allclose(denoised, expected))
+        self.assertLess(float(denoised[0, 0, 1, 1]), 2.5)
 
 
 if __name__ == "__main__":

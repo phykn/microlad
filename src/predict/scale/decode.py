@@ -1,5 +1,6 @@
 import torch
 
+from src.predict.blend import blend_window
 from src.predict.scale.tiles import tile_grid
 from src.predict.validation import validate_finite_tensor, validate_floating_dtype
 
@@ -94,7 +95,21 @@ def _decode_tiled_plane(
         dtype=torch.float32,
         device=latent_plane.device,
     )
-    count = torch.zeros_like(out)
+    weight_sum = torch.zeros_like(out)
+    if tile_overlap == 0:
+        window = torch.ones(
+            image_size,
+            image_size,
+            dtype=out.dtype,
+            device=out.device,
+        )
+    else:
+        window = blend_window(
+            image_size,
+            image_size,
+            device=out.device,
+            dtype=out.dtype,
+        )
 
     for row, col in tile_grid(
         height,
@@ -122,13 +137,13 @@ def _decode_tiled_plane(
         out[
             out_row : out_row + image_size,
             out_col : out_col + image_size,
-        ] += decoded[0, 0].float()
-        count[
+        ] += decoded[0, 0].float() * window
+        weight_sum[
             out_row : out_row + image_size,
             out_col : out_col + image_size,
-        ] += 1
+        ] += window
 
-    return out / count.clamp_min(1)
+    return out / weight_sum.clamp_min(torch.finfo(weight_sum.dtype).tiny)
 
 
 def _downsample_factor(vae: torch.nn.Module) -> int:
