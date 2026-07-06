@@ -22,6 +22,59 @@ class DownsampleShapeTest(unittest.TestCase):
 
 
 class PatchVAETest(unittest.TestCase):
+    def test_bottleneck_attention_runs_in_encoder_and_decoder(self):
+        model = PatchVAE(image_size=64, latent_size=16, base_ch=8, max_ch=32)
+        attention_blocks = [
+            module
+            for module in model.modules()
+            if type(module).__name__ == "AttentionBlock"
+        ]
+        calls = []
+
+        self.assertEqual(len(attention_blocks), 2)
+
+        for module in attention_blocks:
+            module.register_forward_hook(
+                lambda _module, _inputs, _output: calls.append(_module)
+            )
+
+        model(torch.randn(1, 1, 64, 64))
+
+        self.assertEqual(calls, attention_blocks)
+
+    def test_down_and_up_blocks_run_two_residual_blocks_before_resampling(self):
+        model = PatchVAE(image_size=64, latent_size=16, base_ch=8, max_ch=32)
+
+        for block in [*model.down_blocks, *model.up_blocks]:
+            residual_blocks = [
+                module
+                for module in block.modules()
+                if type(module).__name__ == "ResidualBlock"
+            ]
+            self.assertEqual(len(residual_blocks), 2)
+
+        first_down_shapes = []
+        first_up_shapes = []
+        for module in model.down_blocks[0].modules():
+            if type(module).__name__ == "ResidualBlock":
+                module.register_forward_hook(
+                    lambda _module, inputs, _output: first_down_shapes.append(
+                        tuple(inputs[0].shape[-2:])
+                    )
+                )
+        for module in model.up_blocks[0].modules():
+            if type(module).__name__ == "ResidualBlock":
+                module.register_forward_hook(
+                    lambda _module, inputs, _output: first_up_shapes.append(
+                        tuple(inputs[0].shape[-2:])
+                    )
+                )
+
+        model(torch.randn(1, 1, 64, 64))
+
+        self.assertEqual(first_down_shapes, [(64, 64), (64, 64)])
+        self.assertEqual(first_up_shapes, [(16, 16), (16, 16)])
+
     def test_default_image_size_matches_original_repo_size(self):
         model = PatchVAE(base_ch=8, max_ch=32)
 

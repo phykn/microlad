@@ -40,9 +40,31 @@ class ResidualBlock(nn.Module):
         return self.act(x + h)
 
 
+class AttentionBlock(nn.Module):
+    def __init__(self, channels: int) -> None:
+        super().__init__()
+        self.norm = nn.GroupNorm(norm_groups(channels), channels)
+        self.qkv = nn.Conv2d(channels, channels * 3, kernel_size=1)
+        self.proj_out = nn.Conv2d(channels, channels, kernel_size=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch, channels, height, width = x.shape
+        q, k, v = self.qkv(self.norm(x)).chunk(3, dim=1)
+        q = q.view(batch, channels, -1).permute(0, 2, 1)
+        k = k.view(batch, channels, -1)
+        v = v.view(batch, channels, -1).permute(0, 2, 1)
+
+        attn = torch.softmax(torch.bmm(q, k) * (channels**-0.5), dim=-1)
+        out = torch.bmm(attn, v).permute(0, 2, 1)
+        out = out.reshape(batch, channels, height, width)
+        return x + self.proj_out(out)
+
+
 class DownBlock(nn.Module):
     def __init__(self, in_ch: int, out_ch: int) -> None:
         super().__init__()
+        self.res1 = ResidualBlock(in_ch)
+        self.res2 = ResidualBlock(in_ch)
         self.down = ConvBlock(
             in_ch,
             out_ch,
@@ -50,15 +72,18 @@ class DownBlock(nn.Module):
             stride=2,
             padding=1,
         )
-        self.res = ResidualBlock(out_ch)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.res(self.down(x))
+        x = self.res1(x)
+        x = self.res2(x)
+        return self.down(x)
 
 
 class UpBlock(nn.Module):
     def __init__(self, in_ch: int, out_ch: int) -> None:
         super().__init__()
+        self.res1 = ResidualBlock(in_ch)
+        self.res2 = ResidualBlock(in_ch)
         self.up = nn.ConvTranspose2d(
             in_ch,
             out_ch,
@@ -68,11 +93,12 @@ class UpBlock(nn.Module):
         )
         self.norm = nn.GroupNorm(norm_groups(out_ch), out_ch)
         self.act = nn.SiLU(inplace=True)
-        self.res = ResidualBlock(out_ch)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.res1(x)
+        x = self.res2(x)
         x = self.act(self.norm(self.up(x)))
-        return self.res(x)
+        return x
 
 
 class PatchVAE(nn.Module):
@@ -111,12 +137,20 @@ class PatchVAE(nn.Module):
             DownBlock(channels[i], channels[i + 1])
             for i in range(self.downsample_steps)
         )
-        self.enc_mid = ResidualBlock(channels[-1])
+        self.enc_mid = nn.Sequential(
+            ResidualBlock(channels[-1]),
+            AttentionBlock(channels[-1]),
+            ResidualBlock(channels[-1]),
+        )
         self.to_mu = nn.Conv2d(channels[-1], latent_ch, kernel_size=1)
         self.to_logvar = nn.Conv2d(channels[-1], latent_ch, kernel_size=1)
 
         self.from_latent = ConvBlock(latent_ch, channels[-1])
-        self.dec_mid = ResidualBlock(channels[-1])
+        self.dec_mid = nn.Sequential(
+            ResidualBlock(channels[-1]),
+            AttentionBlock(channels[-1]),
+            ResidualBlock(channels[-1]),
+        )
         self.up_blocks = nn.ModuleList(
             UpBlock(channels[i], channels[i - 1])
             for i in range(len(channels) - 1, 0, -1)

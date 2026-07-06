@@ -96,6 +96,39 @@ class DDPMTest(unittest.TestCase):
 
 
 class TimeUNetTest(unittest.TestCase):
+    def test_attention_runs_at_each_latent_scale(self):
+        model = TimeUNet(latent_ch=4, base_ch=8, time_dim=16)
+        attention_blocks = [
+            module
+            for module in model.modules()
+            if type(module).__name__ == "SelfAttention"
+        ]
+        calls = []
+
+        self.assertEqual(len(attention_blocks), 3)
+
+        for module in attention_blocks:
+            module.register_forward_hook(
+                lambda _module, _inputs, _output: calls.append(_module)
+            )
+
+        model(torch.randn(1, 4, 16, 16), torch.tensor([0], dtype=torch.long))
+
+        self.assertEqual(calls, attention_blocks)
+
+    def test_each_unet_level_uses_two_time_residual_blocks(self):
+        model = TimeUNet(latent_ch=4, base_ch=8, time_dim=16)
+
+        for name in ("enc1", "enc2", "mid", "dec2", "dec1"):
+            with self.subTest(level=name):
+                residual_blocks = [
+                    module
+                    for module in getattr(model, name).modules()
+                    if type(module).__name__ == "TimeResidualBlock"
+                ]
+
+                self.assertEqual(len(residual_blocks), 2)
+
     def test_forward_predicts_noise_with_same_shape_as_latent(self):
         model = TimeUNet(latent_ch=4, base_ch=8, time_dim=16)
         x = torch.randn(2, 4, 16, 16)

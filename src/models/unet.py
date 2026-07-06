@@ -52,6 +52,37 @@ class TimeResidualBlock(nn.Module):
         return h + self.skip(x)
 
 
+class TimeResidualStack(nn.Module):
+    def __init__(self, in_ch: int, out_ch: int, time_dim: int) -> None:
+        super().__init__()
+        self.block1 = TimeResidualBlock(in_ch, out_ch, time_dim)
+        self.block2 = TimeResidualBlock(out_ch, out_ch, time_dim)
+
+    def forward(self, x: torch.Tensor, time_emb: torch.Tensor) -> torch.Tensor:
+        x = self.block1(x, time_emb)
+        return self.block2(x, time_emb)
+
+
+class SelfAttention(nn.Module):
+    def __init__(self, channels: int) -> None:
+        super().__init__()
+        self.norm = nn.GroupNorm(norm_groups(channels), channels)
+        self.qkv = nn.Conv2d(channels, channels * 3, kernel_size=1)
+        self.proj_out = nn.Conv2d(channels, channels, kernel_size=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch, channels, height, width = x.shape
+        q, k, v = self.qkv(self.norm(x)).chunk(3, dim=1)
+        q = q.view(batch, channels, -1).permute(0, 2, 1)
+        k = k.view(batch, channels, -1)
+        v = v.view(batch, channels, -1).permute(0, 2, 1)
+
+        attn = torch.softmax(q @ k / math.sqrt(channels), dim=-1)
+        out = (attn @ v).permute(0, 2, 1)
+        out = out.reshape(batch, channels, height, width)
+        return x + self.proj_out(out)
+
+
 class TimeUNet(nn.Module):
     def __init__(
         self,
@@ -75,9 +106,11 @@ class TimeUNet(nn.Module):
         self.time_dim = time_dim
 
         self.time_emb = TimeEmbedding(time_dim)
-        self.enc1 = TimeResidualBlock(latent_ch, base_ch, time_dim)
+        self.enc1 = TimeResidualStack(latent_ch, base_ch, time_dim)
+        self.attn1 = SelfAttention(base_ch)
         self.down1 = nn.Conv2d(base_ch, base_ch * 2, kernel_size=4, stride=2, padding=1)
-        self.enc2 = TimeResidualBlock(base_ch * 2, base_ch * 2, time_dim)
+        self.enc2 = TimeResidualStack(base_ch * 2, base_ch * 2, time_dim)
+        self.attn2 = SelfAttention(base_ch * 2)
         self.down2 = nn.Conv2d(
             base_ch * 2,
             base_ch * 4,
@@ -85,7 +118,8 @@ class TimeUNet(nn.Module):
             stride=2,
             padding=1,
         )
-        self.mid = TimeResidualBlock(base_ch * 4, base_ch * 4, time_dim)
+        self.mid = TimeResidualStack(base_ch * 4, base_ch * 4, time_dim)
+        self.attn_mid = SelfAttention(base_ch * 4)
         self.up2 = nn.ConvTranspose2d(
             base_ch * 4,
             base_ch * 2,
@@ -93,7 +127,7 @@ class TimeUNet(nn.Module):
             stride=2,
             padding=1,
         )
-        self.dec2 = TimeResidualBlock(base_ch * 4, base_ch * 2, time_dim)
+        self.dec2 = TimeResidualStack(base_ch * 4, base_ch * 2, time_dim)
         self.up1 = nn.ConvTranspose2d(
             base_ch * 2,
             base_ch,
@@ -101,7 +135,7 @@ class TimeUNet(nn.Module):
             stride=2,
             padding=1,
         )
-        self.dec1 = TimeResidualBlock(base_ch * 2, base_ch, time_dim)
+        self.dec1 = TimeResidualStack(base_ch * 2, base_ch, time_dim)
         self.out = nn.Conv2d(base_ch, latent_ch, kernel_size=3, padding=1)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
@@ -120,9 +154,9 @@ class TimeUNet(nn.Module):
             raise ValueError("latent height and width must be divisible by 4.")
 
         time_emb = self.time_emb(t)
-        e1 = self.enc1(x, time_emb)
-        e2 = self.enc2(self.down1(e1), time_emb)
-        h = self.mid(self.down2(e2), time_emb)
+        e1 = self.attn1(self.enc1(x, time_emb))
+        e2 = self.attn2(self.enc2(self.down1(e1), time_emb))
+        h = self.attn_mid(self.mid(self.down2(e2), time_emb))
         h = self.dec2(torch.cat([self.up2(h), e2], dim=1), time_emb)
         h = self.dec1(torch.cat([self.up1(h), e1], dim=1), time_emb)
         return self.out(F.silu(h))
