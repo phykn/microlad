@@ -1,5 +1,6 @@
 import torch
 
+from src.common.validation import require_int
 from src.common.tensors.validation import validate_finite_tensor, validate_floating_dtype
 
 
@@ -15,7 +16,7 @@ def generate_initial_volume(
     if size is None:
         size = int(vae.image_size)
 
-    _validate_integer("size", size)
+    require_int("size", size)
 
     if size != int(vae.image_size):
         raise ValueError("size must match vae.image_size.")
@@ -118,8 +119,3 @@ def _downsample_factor(vae: torch.nn.Module) -> int:
         )
 
     return factor
-
-
-def _validate_integer(name: str, value: int) -> None:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ValueError(f"{name} must be an integer.")

@@ -1,5 +1,3 @@
-import math
-from numbers import Real
 from collections.abc import Sequence
 
 import numpy as np
@@ -10,6 +8,7 @@ from src.pipelines.guidance.descriptors.surface_area import compute_surface_area
 from src.pipelines.guidance.descriptors.two_point_correlation import compute_tpc
 from src.pipelines.guidance.descriptors.volume_fraction import compute_volume_fraction
 from src.common.helpers.segmentation import segment_multi_otsu
+from src.common.validation import require_finite_number, require_int
 from src.modeling.phases.quantization import MAX_UINT8_PHASES
 
 
@@ -169,7 +168,7 @@ def _validate_options(
     diffusivity_size: int | tuple[int, int] | None,
     diffusivity_low_cond: float,
 ) -> None:
-    _validate_integer("num_phases", num_phases)
+    require_int("num_phases", num_phases)
 
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
@@ -181,7 +180,7 @@ def _validate_options(
 
     _validate_positive_scalar("temperature", temperature)
 
-    _validate_integer("sa_kernel_size", sa_kernel_size)
+    require_int("sa_kernel_size", sa_kernel_size)
     if sa_kernel_size <= 0 or sa_kernel_size % 2 == 0:
         raise ValueError("sa_kernel_size must be a positive odd integer.")
 
@@ -190,7 +189,7 @@ def _validate_options(
     if use_diffusivity:
         _diffusivity_shape(diffusivity_size)
 
-    _validate_finite_scalar("diffusivity_low_cond", diffusivity_low_cond)
+    require_finite_number("diffusivity_low_cond", diffusivity_low_cond)
     if diffusivity_low_cond < 0.0 or diffusivity_low_cond > 1.0:
         raise ValueError("diffusivity_low_cond must be between 0 and 1.")
 
@@ -206,8 +205,8 @@ def _diffusivity_shape(size: int | tuple[int, int] | None) -> tuple[int, int]:
     else:
         raise ValueError("diffusivity_size must be an integer or (height, width).")
 
-    _validate_integer("diffusivity_size height", height)
-    _validate_integer("diffusivity_size width", width)
+    require_int("diffusivity_size height", height)
+    require_int("diffusivity_size width", width)
 
     if height < 2:
         raise ValueError("diffusivity_size height must be at least 2.")
@@ -218,21 +217,8 @@ def _diffusivity_shape(size: int | tuple[int, int] | None) -> tuple[int, int]:
     return int(height), int(width)
 
 
-def _validate_integer(name: str, value: int) -> None:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ValueError(f"{name} must be an integer.")
-
-
 def _validate_positive_scalar(name: str, value: float) -> None:
-    _validate_finite_scalar(name, value)
+    require_finite_number(name, value)
 
     if value <= 0.0:
         raise ValueError(f"{name} must be positive.")
-
-
-def _validate_finite_scalar(name: str, value: float) -> None:
-    if not isinstance(value, Real) or isinstance(value, bool):
-        raise ValueError(f"{name} must be a real scalar.")
-
-    if not math.isfinite(float(value)):
-        raise ValueError(f"{name} must be finite.")

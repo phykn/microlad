@@ -4,6 +4,7 @@ import numpy as np
 import torch
 
 from src.app.api.options import AnchorSlice, PredictOptions
+from src.common.validation import require_int
 from src.pipelines.guidance.conditioning.validation import validate_anchors
 from src.pipelines.scaling.conditioning import (
     center_start,
@@ -23,7 +24,7 @@ class PredictionPreparation:
         if volume_size is None:
             return anchor_size if anchor_size is not None else self._image_size()
 
-        _validate_integer("volume_size", volume_size)
+        require_int("volume_size", volume_size)
 
         if volume_size <= 0:
             raise ValueError("volume_size must be positive.")
@@ -306,9 +307,3 @@ class PredictionPreparation:
             or options.sa_weight > 0.0
             or options.diffusivity_weight > 0.0
         )
-
-
-
-def _validate_integer(name: str, value: int) -> None:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ValueError(f"{name} must be an integer.")

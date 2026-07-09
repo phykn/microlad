@@ -1,12 +1,13 @@
 import torch
 
+from src.common.validation import require_int
 from src.pipelines.scaling.blending import blend_window
 
 
 def tile_starts(size: int, *, tile_size: int, overlap: int) -> list[int]:
-    _validate_integer("size", size)
-    _validate_integer("tile_size", tile_size)
-    _validate_integer("overlap", overlap)
+    require_int("size", size)
+    require_int("tile_size", tile_size)
+    require_int("overlap", overlap)
 
     if size <= 0:
         raise ValueError("size must be positive.")
@@ -27,11 +28,6 @@ def tile_starts(size: int, *, tile_size: int, overlap: int) -> list[int]:
         starts.append(last)
 
     return starts
-
-
-def _validate_integer(name: str, value: int) -> None:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ValueError(f"{name} must be an integer.")
 
 
 def tile_grid(

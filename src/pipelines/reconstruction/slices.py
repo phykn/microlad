@@ -2,9 +2,11 @@ from collections.abc import Sequence
 
 import torch
 
+from src.common.validation import require_int
+
 
 def _validate_axis(axis: int) -> None:
-    _validate_integer("axis", axis)
+    require_int("axis", axis)
 
     if axis not in (0, 1, 2):
         raise ValueError("axis must be 0, 1, or 2.")
@@ -15,22 +17,17 @@ def _validate_indices(volume: torch.Tensor, axis: int, indices: Sequence[int]) -
         raise ValueError("indices must be non-empty.")
 
     for index in indices:
-        _validate_integer("index", index)
+        require_int("index", index)
 
     if any(index < 0 or index >= volume.shape[axis] for index in indices):
         raise ValueError("indices must be inside the selected axis.")
 
 
 def _validate_index(volume: torch.Tensor, axis: int, index: int) -> None:
-    _validate_integer("index", index)
+    require_int("index", index)
 
     if index < 0 or index >= volume.shape[axis]:
         raise ValueError("index must be inside the selected axis.")
-
-
-def _validate_integer(name: str, value: int) -> None:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ValueError(f"{name} must be an integer.")
 
 
 def _slice_shape(volume: torch.Tensor, axis: int) -> torch.Size:
