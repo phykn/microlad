@@ -2,6 +2,7 @@ import math
 from collections.abc import Mapping, Sequence
 
 import torch
+import torch.nn.functional as F
 
 from src.diffusion import DDPMProcess
 from src.scaling.blending import blend_window
@@ -18,7 +19,7 @@ from src.guidance.prior import sds_loss
 from src.guidance.physics.diffusivity import DiffusivitySolver
 from src.guidance.objective import descriptor_loss, descriptor_loss_per_sample
 from src.guidance.conditioning.model import AnchorSlice
-from src.scaling.tiles import tile_grid
+from src.scaling.tiles import normalized_tile_weights, tile_grid
 from src.tensors.validation import validate_finite_tensor, validate_floating_dtype
 
 
@@ -441,21 +442,19 @@ def _local_prior_objective(
     height, width = int(image.shape[0]), int(image.shape[1])
     out = image.new_zeros(image.shape)
     weight_sum = image.detach().new_zeros(image.shape)
-    window = _tile_blend_window(
-        tile_size,
-        tile_overlap,
-        reference=image,
+    placements = normalized_tile_weights(
+        height,
+        width,
+        tile_size=tile_size,
+        overlap=tile_overlap,
+        device=image.device,
+        dtype=image.dtype,
     )
     total = image.sum() * 0.0
     tile_count = 0
     history: dict[str, list[torch.Tensor]] = {}
 
-    for row, col in tile_grid(
-        height,
-        width,
-        tile_size=tile_size,
-        overlap=tile_overlap,
-    ):
+    for row, col, ownership in placements:
         tile_count += 1
         patch = image[row : row + tile_size, col : col + tile_size].reshape(
             1,
@@ -472,51 +471,39 @@ def _local_prior_objective(
 
         decoded = _decode_latent(vae, mu)
         out[row : row + tile_size, col : col + tile_size] = (
-            out[row : row + tile_size, col : col + tile_size] + decoded * window
+            out[row : row + tile_size, col : col + tile_size]
+            + decoded * ownership
         )
         weight_sum[row : row + tile_size, col : col + tile_size] = (
-            weight_sum[row : row + tile_size, col : col + tile_size] + window
+            weight_sum[row : row + tile_size, col : col + tile_size] + ownership
         )
 
         stats: dict[str, torch.Tensor] = {}
         if sds_weight > 0.0:
-            loss, _ = sds_loss(mu, diffusion_model, ddpm, t_min=t_min, t_max=t_max)
+            latent_weight = F.interpolate(
+                ownership.view(1, 1, tile_size, tile_size),
+                size=mu.shape[-2:],
+                mode="area",
+            )[0, 0]
+            global_latent_pixels = (
+                height
+                * width
+                * mu.shape[-2]
+                * mu.shape[-1]
+                / (tile_size * tile_size)
+            )
+            loss, _ = sds_loss(
+                mu,
+                diffusion_model,
+                ddpm,
+                t_min=t_min,
+                t_max=t_max,
+                spatial_weight=latent_weight,
+                spatial_normalizer=global_latent_pixels / len(placements),
+            )
             weighted = sds_weight * loss
             total = total + weighted
             stats["sds"] = weighted.detach()
-
-        if anchor_weight > 0.0 and anchor_target is not None:
-            target_patch = anchor_target[row : row + tile_size, col : col + tile_size]
-            mask_patch = (
-                None
-                if anchor_mask is None
-                else anchor_mask[row : row + tile_size, col : col + tile_size]
-            )
-            has_anchor_pixels = (
-                mask_patch is None or bool((mask_patch > 0).any().item())
-            )
-
-            if has_anchor_pixels:
-                if mask_patch is None:
-                    loss, _ = anchor_loss(
-                        decoded,
-                        target_patch,
-                        num_phases=num_phases,
-                        temperature=temperature,
-                        weight=anchor_weight,
-                    )
-                else:
-                    loss, _ = masked_anchor_loss(
-                        decoded,
-                        target_patch,
-                        mask_patch,
-                        num_phases=num_phases,
-                        temperature=temperature,
-                        weight=anchor_weight,
-                    )
-
-                total = total + loss
-                stats["anchor"] = loss.detach()
 
         target_total, target_stats = descriptor_loss(
             decoded,
@@ -536,11 +523,36 @@ def _local_prior_objective(
         stats.update(target_stats)
         _record_stats(history, stats)
 
-    return (
-        _weighted_average(out, weight_sum),
-        total / max(tile_count, 1),
-        _mean_stats(history),
-    )
+    stitched = _weighted_average(out, weight_sum)
+    total = total / max(tile_count, 1)
+    mean_stats = _mean_stats(history)
+
+    if anchor_weight > 0.0 and anchor_target is not None:
+        has_anchor_pixels = (
+            anchor_mask is None or bool((anchor_mask > 0).any().item())
+        )
+        if has_anchor_pixels:
+            if anchor_mask is None:
+                anchor_total, _ = anchor_loss(
+                    stitched,
+                    anchor_target,
+                    num_phases=num_phases,
+                    temperature=temperature,
+                    weight=anchor_weight,
+                )
+            else:
+                anchor_total, _ = masked_anchor_loss(
+                    stitched,
+                    anchor_target,
+                    anchor_mask,
+                    num_phases=num_phases,
+                    temperature=temperature,
+                    weight=anchor_weight,
+                )
+            total = total + anchor_total
+            mean_stats["anchor"] = anchor_total.detach()
+
+    return stitched, total, mean_stats
 
 
 def _local_prior_objective_batch(
@@ -574,10 +586,13 @@ def _local_prior_objective_batch(
     tile_size = int(vae.image_size)
     out = images.new_zeros(images.shape)
     weight_sum = images.detach().new_zeros(images.shape)
-    window = _tile_blend_window(
-        tile_size,
-        tile_overlap,
-        reference=images,
+    placements = normalized_tile_weights(
+        height,
+        width,
+        tile_size=tile_size,
+        overlap=tile_overlap,
+        device=images.device,
+        dtype=images.dtype,
     )
     total = images.sum() * 0.0
     tile_count = 0
@@ -592,12 +607,7 @@ def _local_prior_objective_batch(
         for mask in anchor_masks
     ]
 
-    for row, col in tile_grid(
-        height,
-        width,
-        tile_size=tile_size,
-        overlap=tile_overlap,
-    ):
+    for row, col, ownership in placements:
         tile_count += 1
         patches = images[:, row : row + tile_size, col : col + tile_size].reshape(
             batch_size,
@@ -614,71 +624,40 @@ def _local_prior_objective_batch(
 
         decoded = _decode_latent_batch(vae, mu)
         out[:, row : row + tile_size, col : col + tile_size] = (
-            out[:, row : row + tile_size, col : col + tile_size] + decoded * window
+            out[:, row : row + tile_size, col : col + tile_size]
+            + decoded * ownership
         )
         weight_sum[:, row : row + tile_size, col : col + tile_size] = (
-            weight_sum[:, row : row + tile_size, col : col + tile_size] + window
+            weight_sum[:, row : row + tile_size, col : col + tile_size]
+            + ownership
         )
 
         stats: dict[str, torch.Tensor] = {}
         if sds_weight > 0.0:
-            loss, _ = sds_loss(mu, diffusion_model, ddpm, t_min=t_min, t_max=t_max)
+            latent_weight = F.interpolate(
+                ownership.view(1, 1, tile_size, tile_size),
+                size=mu.shape[-2:],
+                mode="area",
+            )[0, 0]
+            global_latent_pixels = (
+                height
+                * width
+                * mu.shape[-2]
+                * mu.shape[-1]
+                / (tile_size * tile_size)
+            )
+            loss, _ = sds_loss(
+                mu,
+                diffusion_model,
+                ddpm,
+                t_min=t_min,
+                t_max=t_max,
+                spatial_weight=latent_weight,
+                spatial_normalizer=global_latent_pixels / len(placements),
+            )
             weighted = sds_weight * loss
             total = total + weighted
             stats["sds"] = weighted.detach()
-
-        anchor_losses = []
-        has_active_anchor_pixels = False
-        if anchor_weight > 0.0:
-            for slice_index, decoded_slice in enumerate(decoded):
-                target_image = target_images[slice_index]
-                if target_image is None:
-                    anchor_losses.append(decoded_slice.sum() * 0.0)
-                    continue
-
-                target_patch = target_image[
-                    row : row + tile_size,
-                    col : col + tile_size,
-                ]
-                mask_image = mask_images[slice_index]
-                mask_patch = (
-                    None
-                    if mask_image is None
-                    else mask_image[row : row + tile_size, col : col + tile_size]
-                )
-                slice_has_anchor_pixels = (
-                    mask_patch is None or bool((mask_patch > 0).any().item())
-                )
-
-                if not slice_has_anchor_pixels:
-                    anchor_losses.append(decoded_slice.sum() * 0.0)
-                    continue
-
-                if mask_patch is None:
-                    loss, _ = anchor_loss(
-                        decoded_slice,
-                        target_patch,
-                        num_phases=num_phases,
-                        temperature=temperature,
-                        weight=anchor_weight,
-                    )
-                else:
-                    loss, _ = masked_anchor_loss(
-                        decoded_slice,
-                        target_patch,
-                        mask_patch,
-                        num_phases=num_phases,
-                        temperature=temperature,
-                        weight=anchor_weight,
-                    )
-
-                anchor_losses.append(loss)
-                has_active_anchor_pixels = True
-
-        if has_active_anchor_pixels:
-            loss = torch.stack(anchor_losses).mean()
-            total = total + loss
-            stats["anchor"] = loss.detach()
 
         target_total, target_stats = descriptor_loss_per_sample(
             decoded,
@@ -699,11 +678,53 @@ def _local_prior_objective_batch(
 
         _record_stats(history, stats)
 
-    return (
-        _weighted_average(out, weight_sum),
-        total / max(tile_count, 1),
-        _mean_stats(history),
-    )
+    stitched = _weighted_average(out, weight_sum)
+    total = total / max(tile_count, 1)
+    mean_stats = _mean_stats(history)
+
+    anchor_losses = []
+    has_active_anchor_pixels = False
+    if anchor_weight > 0.0:
+        for slice_index, decoded_slice in enumerate(stitched):
+            target_image = target_images[slice_index]
+            if target_image is None:
+                anchor_losses.append(decoded_slice.sum() * 0.0)
+                continue
+
+            mask_image = mask_images[slice_index]
+            slice_has_anchor_pixels = (
+                mask_image is None or bool((mask_image > 0).any().item())
+            )
+            if not slice_has_anchor_pixels:
+                anchor_losses.append(decoded_slice.sum() * 0.0)
+                continue
+
+            if mask_image is None:
+                anchor_total, _ = anchor_loss(
+                    decoded_slice,
+                    target_image,
+                    num_phases=num_phases,
+                    temperature=temperature,
+                    weight=anchor_weight,
+                )
+            else:
+                anchor_total, _ = masked_anchor_loss(
+                    decoded_slice,
+                    target_image,
+                    mask_image,
+                    num_phases=num_phases,
+                    temperature=temperature,
+                    weight=anchor_weight,
+                )
+            anchor_losses.append(anchor_total)
+            has_active_anchor_pixels = True
+
+    if has_active_anchor_pixels:
+        anchor_total = torch.stack(anchor_losses).mean()
+        total = total + anchor_total
+        mean_stats["anchor"] = anchor_total.detach()
+
+    return stitched, total, mean_stats
 
 
 def _decode_tiled_image(

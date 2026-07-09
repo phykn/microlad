@@ -88,7 +88,7 @@ def test_center_start_is_symmetric_and_integral():
     assert center_start(volume_size=7, base_size=3) == 2
 
 
-def test_local_tile_loss_gradient_is_weighted_by_tile_coverage():
+def test_local_tile_loss_gradient_is_normalized_by_tile_coverage():
     image = torch.full((4, 4), 0.5, requires_grad=True)
     target = torch.zeros(4, 4)
 
@@ -111,4 +111,4 @@ def test_local_tile_loss_gradient_is_weighted_by_tile_coverage():
     corner = gradient[0, 0].abs()
     center = gradient[1, 1].abs()
     assert corner > 0
-    assert torch.allclose(center / corner, torch.tensor(4.0))
+    assert torch.allclose(center, corner, atol=1e-6, rtol=1e-6)

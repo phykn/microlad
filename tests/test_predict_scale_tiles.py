@@ -1,9 +1,27 @@
 import unittest
 
-from src.scaling.tiles import tile_grid, tile_starts
+import torch
+
+from src.scaling.tiles import normalized_tile_weights, tile_grid, tile_starts
 
 
 class PredictScaleTilesTest(unittest.TestCase):
+    def test_normalized_tile_weights_sum_to_one_per_pixel(self):
+        placements = normalized_tile_weights(
+            4,
+            4,
+            tile_size=3,
+            overlap=2,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+        total = torch.zeros(4, 4)
+
+        for row, col, weight in placements:
+            total[row : row + 3, col : col + 3] += weight
+
+        self.assertTrue(torch.allclose(total, torch.ones_like(total)))
+
     def test_tile_starts_covers_tail_when_stride_does_not_divide_extent(self):
         self.assertEqual(
             tile_starts(5, tile_size=2, overlap=0),

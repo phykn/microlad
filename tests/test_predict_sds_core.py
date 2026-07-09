@@ -63,6 +63,31 @@ class PredictSDSCoreTest(unittest.TestCase):
         self.assertTrue(torch.allclose(latent.grad, expected_grad))
         self.assertTrue(torch.all(latent.detach() - latent.grad > latent.detach()))
 
+    def test_sds_loss_spatial_weight_limits_gradient_support(self):
+        ddpm = DDPMProcess(timesteps=4, beta_start=0.1, beta_end=0.2)
+        model = ConstantNoiseModel(value=0.25)
+        latent = torch.full((1, 1, 2, 2), 0.5, requires_grad=True)
+        noise = torch.full_like(latent, 1.25)
+        timestep = torch.tensor([2], dtype=torch.long)
+        spatial_weight = torch.tensor([[1.0, 0.0], [0.0, 0.0]])
+
+        loss, _ = sds_loss(
+            latent,
+            model,
+            ddpm,
+            t=timestep,
+            noise=noise,
+            t_min=1,
+            t_max=3,
+            spatial_weight=spatial_weight,
+            spatial_normalizer=1.0,
+        )
+        loss.backward()
+
+        self.assertNotEqual(float(latent.grad[0, 0, 0, 0]), 0.0)
+        self.assertTrue(torch.equal(latent.grad[0, 0, 0, 1:], torch.zeros(1)))
+        self.assertTrue(torch.equal(latent.grad[0, 0, 1], torch.zeros(2)))
+
     def test_sds_loss_does_not_backpropagate_through_model(self):
         ddpm = DDPMProcess(timesteps=4)
         model = ConstantNoiseModel(value=0.0)

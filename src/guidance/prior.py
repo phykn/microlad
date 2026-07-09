@@ -13,6 +13,8 @@ def sds_loss(
     t_max: int,
     t: torch.Tensor | None = None,
     noise: torch.Tensor | None = None,
+    spatial_weight: torch.Tensor | None = None,
+    spatial_normalizer: float | torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if latent.ndim != 4:
         raise ValueError("latent must have shape [B, C, H, W].")
@@ -55,7 +57,31 @@ def sds_loss(
         (latent.shape[0],) + (1,) * (latent.ndim - 1)
     )
     target = pred_noise.detach() - noise
-    loss = (sigma.pow(2) * latent * target).mean()
+    value = sigma.pow(2) * latent * target
+    if spatial_weight is None:
+        loss = value.mean()
+    else:
+        spatial_weight = spatial_weight.to(device=latent.device, dtype=latent.dtype)
+        if spatial_weight.shape != latent.shape[-2:]:
+            raise ValueError("spatial_weight must match latent spatial shape.")
+        validate_finite_tensor("spatial_weight", spatial_weight)
+        if torch.any(spatial_weight < 0):
+            raise ValueError("spatial_weight must be non-negative.")
+
+        if spatial_normalizer is None:
+            normalizer = spatial_weight.sum()
+        else:
+            normalizer = torch.as_tensor(
+                spatial_normalizer,
+                device=latent.device,
+                dtype=latent.dtype,
+            )
+        if not torch.isfinite(normalizer) or normalizer <= 0:
+            raise ValueError("spatial_normalizer must be positive and finite.")
+
+        weight = spatial_weight.view(1, 1, *spatial_weight.shape)
+        channel_count = latent.shape[0] * latent.shape[1]
+        loss = (value * weight).sum() / (channel_count * normalizer)
 
     return loss, {"sds": loss.detach(), "t": t.detach()}
 
