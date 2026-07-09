@@ -1,6 +1,6 @@
 import unittest
 
-from src.predict.scale.tiles import tile_grid, tile_starts
+from src.scaling.tiles import tile_grid, tile_starts
 
 
 class PredictScaleTilesTest(unittest.TestCase):

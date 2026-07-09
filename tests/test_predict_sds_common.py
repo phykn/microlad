@@ -3,9 +3,9 @@ import unittest
 import numpy as np
 import torch
 
-from src.predict import AnchorSlice
-from src.predict.anchor import prepare_anchor_image
-from src.predict.sds.common import prepare_anchor_targets
+from src.api import AnchorSlice
+from src.guidance.conditioning.images import prepare_anchor_image
+from src.guidance.preparation import prepare_anchor_targets
 
 
 class ShiftDecodeVAE(torch.nn.Module):

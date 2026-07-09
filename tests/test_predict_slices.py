@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.predict.slices import (
+from src.reconstruction.slices import (
     extract_slice,
     extract_slice_batch,
     replace_slice,

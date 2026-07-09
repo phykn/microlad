@@ -13,7 +13,7 @@ from torch.nn.parallel import DistributedDataParallel
 from src.data import PatchDataset
 from src.diffusion import DDPMProcess, DiffusionLoss, TimeUNet
 from src.vae import PatchVAE, VAELoss
-from src.predict import Predictor
+from src.api import Predictor
 from src.train import DiffusionTrainer, VAETrainer
 from src.train.utils import freeze_module
 

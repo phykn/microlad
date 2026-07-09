@@ -4,16 +4,16 @@ import numpy as np
 import torch
 
 from src.diffusion import DDPMProcess
-from src.predict import AnchorSlice
-from src.predict.blend import blend_window
-from src.predict.scale import optimize_large_volume
-from src.predict.scale.sds import (
+from src.api import AnchorSlice
+from src.scaling.blending import blend_window
+from src.scaling.optimization import optimize_large_volume
+from src.scaling.optimization import (
     _decode_tiled_image,
     _decode_tiled_image_batch,
     _local_prior_objective,
     _local_prior_objective_batch,
 )
-from src.predict.scale.tiles import tile_grid
+from src.scaling.tiles import tile_grid
 
 
 class IdentityVAE(torch.nn.Module):

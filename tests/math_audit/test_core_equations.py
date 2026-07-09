@@ -3,7 +3,7 @@ import torch
 from src.phases import logits_to_relaxed_labels, phase_logits
 from src.vae import kl_divergence
 from src.diffusion import DDPMProcess
-from src.predict.sds.phase import soft_phase_probability
+from src.phases.relaxation import soft_phase_probability
 
 
 class FixedNoise(torch.nn.Module):

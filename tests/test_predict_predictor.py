@@ -4,7 +4,7 @@ from unittest.mock import patch
 import numpy as np
 import torch
 
-from src.predict import AnchorSlice, PredictOptions, Predictor
+from src.api import AnchorSlice, PredictOptions, Predictor
 
 
 class IdentityDDPM:

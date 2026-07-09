@@ -34,7 +34,7 @@ from src.build import (
 from src.data import PatchDataset
 from src.diffusion import DDPMProcess, TimeUNet
 from src.vae import PatchVAE
-from src.predict import PredictOptions, Predictor
+from src.api import PredictOptions, Predictor
 from src.train import DiffusionTrainer, VAETrainer
 
 

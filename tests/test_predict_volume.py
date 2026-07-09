@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.predict.volume import decode_latent_volume, generate_initial_volume
+from src.reconstruction.volume import decode_latent_volume, generate_initial_volume
 
 
 class FakeSampler:

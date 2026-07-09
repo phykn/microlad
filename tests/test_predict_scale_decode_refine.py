@@ -2,11 +2,12 @@ import unittest
 
 import torch
 
-from src.predict.blend import blend_window
-from src.predict.scale import decode_large_latent_volume, refine_large_volume
-from src.predict.scale.decode import _decode_tiled_plane
-from src.predict.scale.refine import _refine_tiled_plane
-from src.predict.scale.tiles import tile_grid
+from src.scaling.blending import blend_window
+from src.scaling.decoding import decode_large_latent_volume
+from src.scaling.refinement import refine_large_volume
+from src.scaling.decoding import _decode_tiled_plane
+from src.scaling.refinement import _refine_tiled_plane
+from src.scaling.tiles import tile_grid
 
 
 class DecodeValueVAE(torch.nn.Module):

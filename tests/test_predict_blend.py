@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.predict.blend import blend_window
+from src.scaling.blending import blend_window
 
 
 class PredictBlendTest(unittest.TestCase):

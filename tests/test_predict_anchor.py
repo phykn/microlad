@@ -3,15 +3,12 @@ import unittest
 import numpy as np
 import torch
 
-from src.predict.blend import blend_window
-from src.predict import AnchorSlice
-from src.predict.anchor import (
-    prepare_anchor_image,
-    reconstruct_anchor_target,
-    validate_anchor,
-    validate_anchors,
-)
-from src.predict.anchor.latent import prepare_anchor_latents
+from src.scaling.blending import blend_window
+from src.api import AnchorSlice
+from src.guidance.conditioning.images import prepare_anchor_image
+from src.guidance.conditioning.reconstruction import reconstruct_anchor_target
+from src.guidance.conditioning.validation import validate_anchor, validate_anchors
+from src.guidance.conditioning.latents import prepare_anchor_latents
 
 
 class IdentityVAE(torch.nn.Module):

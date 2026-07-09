@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.predict.sds.targets import phase_vector_target
+from src.guidance.target_values import phase_vector_target
 
 
 class PredictSDSTargetsTest(unittest.TestCase):

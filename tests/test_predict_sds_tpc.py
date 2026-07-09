@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.predict.sds import tpc_loss
+from src.guidance.descriptors.two_point_correlation import tpc_loss
 
 
 class PredictSDSTPCTest(unittest.TestCase):

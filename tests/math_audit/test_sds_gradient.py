@@ -1,7 +1,7 @@
 import torch
 
 from src.diffusion import DDPMProcess
-from src.predict.sds.core import sds_loss
+from src.guidance.prior import sds_loss
 from tests.math_audit.helpers import cosine_similarity
 
 

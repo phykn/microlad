@@ -2,8 +2,8 @@ import unittest
 
 import torch
 
-from src.predict.sds.diffusivity import DiffusivitySolver
-from src.predict.sds.objective import descriptor_loss
+from src.guidance.physics.diffusivity import DiffusivitySolver
+from src.guidance.objective import descriptor_loss
 
 
 class PredictSDSObjectiveTest(unittest.TestCase):

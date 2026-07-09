@@ -5,9 +5,10 @@ import torch
 from torch import nn
 
 from src.diffusion import DDPMProcess
-from src.predict import AnchorSlice
-from src.predict.sds import DiffusivitySolver, optimize_slice, optimize_volume
-from src.predict.sds.optimize import _objective, _objective_batch
+from src.api import AnchorSlice
+from src.guidance.optimization import optimize_slice, optimize_volume
+from src.guidance.physics.diffusivity import DiffusivitySolver
+from src.guidance.optimization import _objective, _objective_batch
 
 
 class IdentityVAE(nn.Module):

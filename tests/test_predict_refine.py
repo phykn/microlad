@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.predict.refine import three_axis_refinement
+from src.reconstruction.refinement import three_axis_refinement
 
 
 class CountingVAE(torch.nn.Module):

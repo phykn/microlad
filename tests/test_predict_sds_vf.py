@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.predict.sds import volume_fraction_loss
+from src.guidance.descriptors.volume_fraction import volume_fraction_loss
 
 
 class PredictSDSVolumeFractionTest(unittest.TestCase):
