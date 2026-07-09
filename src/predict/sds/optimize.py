@@ -16,7 +16,7 @@ from src.predict.sds.core import sds_loss
 from src.predict.sds.diffusivity import DiffusivitySolver
 from src.predict.sds.objective import descriptor_loss, descriptor_loss_per_sample
 from src.predict.types import AnchorSlice
-from src.predict.validation import validate_finite_tensor
+from src.tensors.validation import validate_finite_tensor
 
 
 def optimize_volume(

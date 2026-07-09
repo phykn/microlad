@@ -3,7 +3,7 @@ from collections.abc import Sequence
 import torch
 
 from src.predict.scale.denoise import denoise_tiled_plane
-from src.predict.validation import validate_finite_tensor
+from src.tensors.validation import validate_finite_tensor
 
 
 @torch.no_grad()

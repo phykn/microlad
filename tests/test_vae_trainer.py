@@ -4,8 +4,7 @@ from unittest.mock import patch
 
 import torch
 
-from src.loss import VAELoss
-from src.models import PatchVAE
+from src.vae import PatchVAE, VAELoss
 from src.train import VAETrainer
 from src.train.distributed import unwrap_model
 

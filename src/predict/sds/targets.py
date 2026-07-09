@@ -3,7 +3,7 @@ from numbers import Integral
 
 import torch
 
-from src.predict.validation import validate_finite_tensor, validate_floating_dtype
+from src.tensors.validation import validate_finite_tensor, validate_floating_dtype
 
 
 def phase_vector_target(

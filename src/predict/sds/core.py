@@ -1,7 +1,7 @@
 import torch
 
 from src.models import DDPM
-from src.predict.validation import validate_finite_tensor
+from src.tensors.validation import validate_finite_tensor
 
 
 def sds_loss(

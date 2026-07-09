@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from src.segment import segment_multi_otsu
+from src.phases import segment_multi_otsu
 
 
 class MultiOtsuSegmentationTest(unittest.TestCase):

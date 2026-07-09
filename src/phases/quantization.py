@@ -1,8 +1,10 @@
 import numpy as np
 import torch
 
-from src.predict.types import MAX_UINT8_PHASES
-from src.predict.validation import validate_finite_tensor, validate_floating_dtype
+from src.tensors.validation import validate_finite_tensor, validate_floating_dtype
+
+
+MAX_UINT8_PHASES = int(np.iinfo(np.uint8).max) + 1
 
 
 def _validate_num_phases(num_phases: int) -> None:

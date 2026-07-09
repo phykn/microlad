@@ -1,7 +1,7 @@
 import torch
 
-from src.loss.phase import phase_levels
-from src.predict.validation import validate_finite_tensor
+from src.phases.representation import phase_levels
+from src.tensors.validation import validate_finite_tensor
 
 
 def soft_phase_probability(

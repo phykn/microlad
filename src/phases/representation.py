@@ -79,7 +79,7 @@ def phase_cross_entropy(
     return F.cross_entropy(logits, phase_target_indices(target, num_phases))
 
 
-def logits_to_phase_values(logits: torch.Tensor, num_phases: int) -> torch.Tensor:
+def _validate_phase_logits(logits: torch.Tensor, num_phases: int) -> None:
     _validate_num_phases(num_phases)
 
     if logits.ndim != 4:
@@ -91,12 +91,31 @@ def logits_to_phase_values(logits: torch.Tensor, num_phases: int) -> torch.Tenso
     if any(size <= 0 for size in logits.shape):
         raise ValueError("logits must not be empty.")
 
+
+def logits_to_probabilities(
+    logits: torch.Tensor,
+    num_phases: int,
+) -> torch.Tensor:
+    _validate_phase_logits(logits, num_phases)
+    return torch.softmax(logits, dim=1)
+
+
+def logits_to_relaxed_labels(
+    logits: torch.Tensor,
+    num_phases: int,
+) -> torch.Tensor:
+    probabilities = logits_to_probabilities(logits, num_phases)
+
     levels = phase_levels(num_phases, device=logits.device, dtype=logits.dtype)
-    probability = torch.softmax(logits, dim=1)
-    return (probability * levels.view(1, num_phases, 1, 1)).sum(
+    return (probabilities * levels.view(1, num_phases, 1, 1)).sum(
         dim=1,
         keepdim=True,
     )
+
+
+def logits_to_labels(logits: torch.Tensor, num_phases: int) -> torch.Tensor:
+    _validate_phase_logits(logits, num_phases)
+    return logits.argmax(dim=1, keepdim=True)
 
 
 def phase_loss(

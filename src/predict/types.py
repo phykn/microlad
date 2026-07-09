@@ -4,8 +4,7 @@ from numbers import Real
 
 import numpy as np
 
-
-MAX_UINT8_PHASES = int(np.iinfo(np.uint8).max) + 1
+from src.phases.quantization import MAX_UINT8_PHASES
 
 
 @dataclass(frozen=True)

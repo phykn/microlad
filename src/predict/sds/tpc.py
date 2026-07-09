@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 
 from src.predict.sds.phase import soft_phase_probability
-from src.predict.validation import validate_finite_tensor
+from src.tensors.validation import validate_finite_tensor
 
 
 def tpc_loss(

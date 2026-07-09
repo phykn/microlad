@@ -6,7 +6,7 @@ from src.predict.sds.diffusivity import DiffusivitySolver, diffusivity_loss
 from src.predict.sds.sa import surface_area_loss
 from src.predict.sds.tpc import tpc_loss
 from src.predict.sds.vf import volume_fraction_loss
-from src.predict.validation import validate_finite_tensor
+from src.tensors.validation import validate_finite_tensor
 
 
 def _validate_descriptor_inputs(name: str, weight: float, targets) -> None:

@@ -7,7 +7,7 @@ from torch import nn
 
 from src.predict.sds.phase import soft_phase_probability
 from src.predict.sds.targets import phase_vector_target
-from src.predict.validation import validate_finite_tensor
+from src.tensors.validation import validate_finite_tensor
 
 
 LOW_COND_FLOOR = 0.001

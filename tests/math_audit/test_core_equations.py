@@ -1,7 +1,7 @@
 import torch
 
-from src.loss.kl import kl_divergence
-from src.loss.phase import logits_to_phase_values, phase_logits
+from src.phases import logits_to_relaxed_labels, phase_logits
+from src.vae import kl_divergence
 from src.models.ddpm import DDPM
 from src.predict.sds.phase import soft_phase_probability
 
@@ -44,7 +44,7 @@ def test_distance_logits_decode_symmetrically_between_adjacent_phases():
     value = torch.tensor([[[[0.5]]]], dtype=torch.float64)
 
     logits = phase_logits(value, num_phases=2, temperature=0.1)
-    decoded = logits_to_phase_values(logits, num_phases=2)
+    decoded = logits_to_relaxed_labels(logits, num_phases=2)
 
     assert torch.allclose(decoded, value)
 
@@ -53,7 +53,7 @@ def test_scalar_phase_expectation_can_turn_bimodal_uncertainty_into_other_phase(
     logits = torch.tensor([[[[0.0]], [[-100.0]], [[0.0]]]])
     categorical = torch.softmax(logits, dim=1)[0, :, 0, 0]
 
-    scalar_value = logits_to_phase_values(logits, num_phases=3)
+    scalar_value = logits_to_relaxed_labels(logits, num_phases=3)
     recovered = soft_phase_probability(
         scalar_value.reshape(-1),
         num_phases=3,

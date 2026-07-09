@@ -1,7 +1,7 @@
 import torch
 
 from src.predict.blend import blend_window
-from src.predict.validation import validate_finite_tensor
+from src.tensors.validation import validate_finite_tensor
 
 
 @torch.no_grad()

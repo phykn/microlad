@@ -1,4 +1,4 @@
-from src.predict.postprocess import (
+from src.phases.quantization import (
     model_output_to_phase,
     phase_to_numpy,
     quantize_phase,

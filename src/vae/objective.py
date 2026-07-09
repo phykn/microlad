@@ -1,8 +1,18 @@
 import torch
 import torch.nn as nn
 
-from src.loss.kl import kl_divergence
-from src.loss.phase import phase_cross_entropy
+from src.phases.representation import phase_cross_entropy
+
+
+def kl_divergence(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+    """Return KL divergence averaged over every latent element."""
+    if mu.shape != logvar.shape:
+        raise ValueError("mu and logvar must have the same shape.")
+
+    if mu.numel() == 0:
+        raise ValueError("mu and logvar must be non-empty.")
+
+    return -0.5 * torch.mean(1.0 + logvar - mu.pow(2) - logvar.exp())
 
 
 def vae_loss(

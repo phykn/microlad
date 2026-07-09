@@ -3,7 +3,8 @@ import unittest
 import torch
 import torch.nn as nn
 
-from src.models import PatchVAE, downsample_steps, reparameterize
+from src.neural import downsample_steps
+from src.vae import PatchVAE, reparameterize
 
 
 class DownsampleShapeTest(unittest.TestCase):

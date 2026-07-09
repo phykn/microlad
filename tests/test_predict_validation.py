@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.predict.validation import validate_finite_tensor
+from src.tensors.validation import validate_finite_tensor
 
 
 class PredictValidationTest(unittest.TestCase):

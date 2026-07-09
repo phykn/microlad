@@ -19,7 +19,7 @@ from src.predict.sds.diffusivity import DiffusivitySolver
 from src.predict.sds.objective import descriptor_loss, descriptor_loss_per_sample
 from src.predict.types import AnchorSlice
 from src.predict.scale.tiles import tile_grid
-from src.predict.validation import validate_finite_tensor, validate_floating_dtype
+from src.tensors.validation import validate_finite_tensor, validate_floating_dtype
 
 
 def optimize_large_volume(

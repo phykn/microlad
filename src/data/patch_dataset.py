@@ -8,7 +8,7 @@ from src.data.augment import augment_patch
 from src.data.crop import crop_square
 from src.data.resize import resize_patch
 from src.io import load_image, load_phase_image
-from src.segment import segment_multi_otsu
+from src.phases.segmentation import segment_multi_otsu
 
 
 class PatchDataset(Dataset):

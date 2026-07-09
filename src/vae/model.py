@@ -1,9 +1,12 @@
 import torch
 import torch.nn as nn
 
-from src.loss.phase import logits_to_phase_values
-from src.models.norm import norm_groups
-from src.models.shape import downsample_steps
+from src.neural.normalization import norm_groups
+from src.neural.spatial import downsample_steps
+from src.phases.representation import (
+    logits_to_probabilities,
+    logits_to_relaxed_labels,
+)
 
 
 class ConvBlock(nn.Module):
@@ -195,9 +198,16 @@ class PatchVAE(nn.Module):
             h = block(h)
         return self.conv_out(h)
 
-    def decode(self, z: torch.Tensor) -> torch.Tensor:
+    def decode_probabilities(self, z: torch.Tensor) -> torch.Tensor:
         logits = self.decode_logits(z)
-        return logits_to_phase_values(logits, self.num_phases)
+        return logits_to_probabilities(logits, self.num_phases)
+
+    def decode_relaxed_labels(self, z: torch.Tensor) -> torch.Tensor:
+        logits = self.decode_logits(z)
+        return logits_to_relaxed_labels(logits, self.num_phases)
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        return self.decode_relaxed_labels(z)
 
     def forward(
         self, x: torch.Tensor

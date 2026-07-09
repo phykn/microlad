@@ -11,8 +11,9 @@ import yaml
 from torch.nn.parallel import DistributedDataParallel
 
 from src.data import PatchDataset
-from src.loss import DiffusionLoss, VAELoss
-from src.models import DDPM, PatchVAE, TimeUNet
+from src.loss import DiffusionLoss
+from src.models import DDPM, TimeUNet
+from src.vae import PatchVAE, VAELoss
 from src.predict import Predictor
 from src.train import DiffusionTrainer, VAETrainer
 from src.train.utils import freeze_module

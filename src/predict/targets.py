@@ -10,7 +10,7 @@ from src.predict.sds.sa import compute_surface_area
 from src.predict.sds.tpc import compute_tpc
 from src.predict.sds.vf import compute_volume_fraction
 from src.predict.types import MAX_UINT8_PHASES
-from src.segment import segment_multi_otsu
+from src.phases.segmentation import segment_multi_otsu
 
 
 def build_sds_targets(

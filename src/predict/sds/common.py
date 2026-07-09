@@ -8,7 +8,7 @@ from src.predict.anchor import (
     validate_anchors,
 )
 from src.predict.types import AnchorSlice
-from src.predict.validation import validate_floating_dtype
+from src.tensors.validation import validate_floating_dtype
 
 
 def prepare_anchor_targets(

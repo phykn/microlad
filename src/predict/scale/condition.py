@@ -11,7 +11,7 @@ from src.predict.anchor import (
 )
 from src.predict.scale.tiles import tile_grid
 from src.predict.types import AnchorSlice
-from src.predict.validation import validate_finite_tensor
+from src.tensors.validation import validate_finite_tensor
 
 
 def center_start(*, volume_size: int, base_size: int) -> int:

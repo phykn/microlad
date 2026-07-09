@@ -3,7 +3,7 @@ from collections.abc import Sequence
 import numpy as np
 import torch
 
-from src.predict.postprocess import quantize_phase
+from src.phases.quantization import quantize_phase
 from src.predict.refine import three_axis_refinement
 from src.predict.sampler import DiffusionSampler
 from src.predict.anchor import validate_anchors

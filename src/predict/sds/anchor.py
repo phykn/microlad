@@ -1,8 +1,8 @@
 import torch
 import torch.nn.functional as F
 
-from src.loss.phase import phase_loss
-from src.predict.validation import validate_finite_tensor
+from src.phases.representation import phase_loss
+from src.tensors.validation import validate_finite_tensor
 
 
 def anchor_loss(

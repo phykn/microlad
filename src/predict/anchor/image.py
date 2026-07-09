@@ -2,7 +2,7 @@ import numpy as np
 import torch
 
 from src.predict.types import MAX_UINT8_PHASES
-from src.segment import segment_multi_otsu
+from src.phases.segmentation import segment_multi_otsu
 
 
 def prepare_anchor_image(

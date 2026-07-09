@@ -11,7 +11,7 @@ from PIL import Image
 import torch
 
 from src.build import save_run_config
-from src.models import PatchVAE
+from src.vae import PatchVAE
 
 
 def load_script():

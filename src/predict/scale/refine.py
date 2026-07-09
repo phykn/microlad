@@ -2,7 +2,7 @@ import torch
 
 from src.predict.blend import blend_window
 from src.predict.scale.tiles import tile_grid
-from src.predict.validation import validate_finite_tensor, validate_floating_dtype
+from src.tensors.validation import validate_finite_tensor, validate_floating_dtype
 
 
 @torch.no_grad()

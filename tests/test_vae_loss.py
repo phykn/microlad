@@ -3,17 +3,15 @@ import unittest
 import torch
 import torch.nn.functional as F
 
-from src.loss import (
-    VAELoss,
-    kl_divergence,
-    logits_to_phase_values,
+from src.phases import (
+    logits_to_relaxed_labels,
     phase_cross_entropy,
     phase_levels,
     phase_logits,
     phase_loss,
     phase_target_indices,
-    vae_loss,
 )
+from src.vae import VAELoss, kl_divergence, vae_loss
 
 
 class VAELossTest(unittest.TestCase):
@@ -75,7 +73,7 @@ class VAELossTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(loss, expected))
 
-    def test_logits_to_phase_values_returns_soft_expected_phase_index_image(self):
+    def test_logits_to_relaxed_labels_returns_soft_expected_phase_index_image(self):
         logits = torch.tensor(
             [
                 [
@@ -86,7 +84,7 @@ class VAELossTest(unittest.TestCase):
             ]
         )
 
-        values = logits_to_phase_values(logits, num_phases=3)
+        values = logits_to_relaxed_labels(logits, num_phases=3)
 
         self.assertEqual(values.shape, torch.Size([1, 1, 1, 2]))
         self.assertLess(abs(values[0, 0, 0, 0].item()), 0.01)
