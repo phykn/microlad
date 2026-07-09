@@ -10,7 +10,7 @@ import numpy as np
 from PIL import Image
 import torch
 
-from src.build import save_run_config
+from src.runtime import save_run_config
 from src.vae import PatchVAE
 
 
