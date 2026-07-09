@@ -389,4 +389,3 @@ def _optimize_slice_batch(
         replace_slice_batch(updated, axis, indices, decoded)
 
     return updated, stats
-

@@ -146,5 +146,3 @@ def load_predictor(
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     return build_predictor_from_run(run_dir, device=torch.device(device))
-
-

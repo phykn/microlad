@@ -421,4 +421,3 @@ def _optimize_large_slice_batch(
         )
 
     return decoded, _mean_stats(history)
-

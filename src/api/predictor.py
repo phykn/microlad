@@ -342,4 +342,3 @@ class Predictor(PredictionPreparation):
             )
 
         return factor
-

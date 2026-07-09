@@ -484,5 +484,3 @@ def _decode_latent_batch(vae: torch.nn.Module, latent: torch.Tensor) -> torch.Te
     validate_finite_tensor("decoded", decoded)
 
     return decoded[:, 0]
-
-

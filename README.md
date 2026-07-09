@@ -8,6 +8,13 @@ The active implementation is in `src`. Legacy reference folders and removed inte
 A small sample image is checked in under `data/` so the default config can build a dataset without external files.
 Real training datasets and model checkpoints are not checked in.
 
+The source tree is grouped by responsibility:
+
+- `phases`, `vae`, `diffusion`: mathematical representation and learned models
+- `reconstruction`, `guidance`, `scaling`: 3D generation, controlled objectives, and large-volume tiling
+- `api`, `runtime`: prediction facade, configuration, loading, and object construction
+- `data`, `io`, `training`: external data boundaries and training lifecycle
+
 ## Install
 
 ```sh
@@ -16,7 +23,7 @@ python -m pip install -r requirements.txt
 
 Run training and prediction examples from the repository root. For scripts or
 interactive sessions launched elsewhere, add the checkout root to `PYTHONPATH` so imports
-such as `from src.build import load_predictor` resolve.
+such as `from src.runtime import load_predictor` resolve.
 
 ## Config
 
@@ -92,8 +99,8 @@ run/<timestamp>/
 Load a trained run folder and call `predict`:
 
 ```python
-from src.build import load_predictor
-from src.predict import AnchorSlice, PredictOptions
+from src.api import AnchorSlice, PredictOptions
+from src.runtime import load_predictor
 
 predictor = load_predictor("run/20260628-xxxxxx", device="cuda")
 

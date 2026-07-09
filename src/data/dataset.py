@@ -72,4 +72,3 @@ class PatchDataset(Dataset):
             raise ValueError(
                 f"phase image {path} must contain values from 0 to {self.num_phases - 1}."
             )
-

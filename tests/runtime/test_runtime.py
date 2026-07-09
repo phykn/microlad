@@ -512,7 +512,7 @@ class BuildTest(unittest.TestCase):
             self.assertTrue((target / "weight" / "vae" / "last" / "model.pt").is_file())
             self.assertFalse((target / "weight" / "vae" / "1").exists())
 
-    def test_build_ddpm_uses_diffusion_config(self):
+    def test_build_diffusion_process_uses_diffusion_config(self):
         args = argparse.Namespace(timesteps=8, beta_start=0.01, beta_end=0.02)
 
         ddpm = build_diffusion_process(args, device=torch.device("cpu"))

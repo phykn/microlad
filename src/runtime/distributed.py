@@ -39,5 +39,3 @@ def wrap_distributed(
         return DistributedDataParallel(model, device_ids=[local_rank])
 
     return DistributedDataParallel(model)
-
-

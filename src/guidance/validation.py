@@ -148,4 +148,3 @@ def _validate_volume_inputs(
 
     if anchor_weight > 0.0 and not anchors:
         raise ValueError("anchors are required when anchor_weight is positive.")
-

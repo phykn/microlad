@@ -157,5 +157,3 @@ def fill_diffusion_defaults_from_run(args: argparse.Namespace) -> argparse.Names
         raise ValueError("latent_size must be divisible by 4 for diffusion.")
 
     return args
-
-
