@@ -1,7 +1,7 @@
 import argparse
 import os
 
-from src.runtime import (
+from src.app.runtime import (
     build_dataset,
     build_diffusion_model,
     build_diffusion_trainer,

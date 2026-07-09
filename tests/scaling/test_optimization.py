@@ -3,17 +3,17 @@ import unittest
 import numpy as np
 import torch
 
-from src.diffusion import DDPMProcess
-from src.api import AnchorSlice
-from src.scaling.blending import blend_window
-from src.scaling.optimization import optimize_large_volume
-from src.scaling.local_objective import (
+from src.modeling.diffusion import DDPMProcess
+from src.app.api import AnchorSlice
+from src.pipelines.scaling.blending import blend_window
+from src.pipelines.scaling.optimization import optimize_large_volume
+from src.pipelines.scaling.local_objective import (
     _decode_tiled_image,
     _decode_tiled_image_batch,
     _local_prior_objective,
     _local_prior_objective_batch,
 )
-from src.scaling.tiles import tile_grid
+from src.pipelines.scaling.tiles import tile_grid
 
 
 class IdentityVAE(torch.nn.Module):

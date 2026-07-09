@@ -4,9 +4,9 @@ from unittest.mock import patch
 
 import torch
 
-from src.vae import PatchVAE, VAELoss
-from src.training import VAETrainer
-from src.training.distributed import unwrap_model
+from src.modeling.vae import PatchVAE, VAELoss
+from src.pipelines.training import VAETrainer
+from src.pipelines.training.distributed import unwrap_model
 
 
 def infinite_batches():
@@ -172,7 +172,7 @@ class VAETrainerTest(unittest.TestCase):
             trainer = self._make_trainer(tmp, steps=2, save_every=2)
             FakeProgress.instances = []
 
-            with patch("src.training.vae.tqdm", FakeProgress):
+            with patch("src.pipelines.training.vae.tqdm", FakeProgress):
                 stats = trainer.train()
             trainer.close()
 

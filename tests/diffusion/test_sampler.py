@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import torch
 
-from src.diffusion import DDPMProcess, DiffusionSampler
+from src.modeling.diffusion import DDPMProcess, DiffusionSampler
 
 
 class RecordingDenoiser(torch.nn.Module):

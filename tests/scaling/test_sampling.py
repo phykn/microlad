@@ -3,11 +3,11 @@ from unittest.mock import patch
 
 import torch
 
-from src.scaling.blending import blend_window
-from src.scaling.denoising import denoise_tiled_plane
-from src.diffusion import DiffusionSampler
-from src.scaling.sampling import sample_large_lmpdd
-from src.scaling.tiles import tile_grid
+from src.pipelines.scaling.blending import blend_window
+from src.pipelines.scaling.denoising import denoise_tiled_plane
+from src.modeling.diffusion import DiffusionSampler
+from src.pipelines.scaling.sampling import sample_large_lmpdd
+from src.pipelines.scaling.tiles import tile_grid
 
 
 class IdentityDDPM:

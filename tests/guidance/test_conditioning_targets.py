@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import torch
 
-from src.guidance.conditioning.targets import build_sds_targets
+from src.pipelines.guidance.conditioning.targets import build_sds_targets
 
 
 class PredictTargetsTest(unittest.TestCase):

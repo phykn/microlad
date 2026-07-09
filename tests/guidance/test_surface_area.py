@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.guidance.descriptors.surface_area import compute_surface_area, surface_area_loss
+from src.pipelines.guidance.descriptors.surface_area import compute_surface_area, surface_area_loss
 
 
 class PredictSDSSurfaceAreaTest(unittest.TestCase):

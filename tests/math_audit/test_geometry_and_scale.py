@@ -1,10 +1,10 @@
 import torch
 
-from src.scaling.conditioning import center_start
-from src.scaling.denoising import denoise_tiled_plane
-from src.scaling.local_objective import _local_prior_objective
-from src.scaling.tiles import tile_grid
-from src.reconstruction.slices import extract_slice_batch, replace_slice_batch
+from src.pipelines.scaling.conditioning import center_start
+from src.pipelines.scaling.denoising import denoise_tiled_plane
+from src.pipelines.scaling.local_objective import _local_prior_objective
+from src.pipelines.scaling.tiles import tile_grid
+from src.pipelines.reconstruction.slices import extract_slice_batch, replace_slice_batch
 
 
 class IdentityDDPM:

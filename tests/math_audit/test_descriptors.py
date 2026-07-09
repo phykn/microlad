@@ -1,9 +1,9 @@
 import torch
 
-from src.guidance.physics.diffusivity import DiffusivitySolver
-from src.guidance.descriptors.surface_area import compute_surface_area
-from src.guidance.descriptors.two_point_correlation import compute_tpc
-from src.guidance.descriptors.volume_fraction import compute_volume_fraction
+from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver
+from src.pipelines.guidance.descriptors.surface_area import compute_surface_area
+from src.pipelines.guidance.descriptors.two_point_correlation import compute_tpc
+from src.pipelines.guidance.descriptors.volume_fraction import compute_volume_fraction
 
 
 def test_volume_fraction_sums_to_one():

@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.diffusion import DDPMProcess, TimeUNet
+from src.modeling.diffusion import DDPMProcess, TimeUNet
 
 
 class DDPMTest(unittest.TestCase):

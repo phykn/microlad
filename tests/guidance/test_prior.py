@@ -2,8 +2,8 @@ import unittest
 
 import torch
 
-from src.diffusion import DDPMProcess
-from src.guidance.prior import sds_loss
+from src.modeling.diffusion import DDPMProcess
+from src.pipelines.guidance.prior import sds_loss
 
 
 class ConstantNoiseModel(torch.nn.Module):

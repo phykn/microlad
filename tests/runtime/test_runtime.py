@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 import torch
 
-from src.runtime import (
+from src.app.runtime import (
     build_dataset,
     build_diffusion_process,
     build_diffusion_model,
@@ -31,11 +31,11 @@ from src.runtime import (
     setup_device,
     wrap_distributed,
 )
-from src.data import PatchDataset
-from src.diffusion import DDPMProcess, TimeUNet
-from src.vae import PatchVAE
-from src.api import PredictOptions, Predictor
-from src.training import DiffusionTrainer, VAETrainer
+from src.pipelines.data import PatchDataset
+from src.modeling.diffusion import DDPMProcess, TimeUNet
+from src.modeling.vae import PatchVAE
+from src.app.api import PredictOptions, Predictor
+from src.pipelines.training import DiffusionTrainer, VAETrainer
 
 
 def save_image(path: Path, pixels: np.ndarray) -> None:
@@ -535,8 +535,8 @@ class BuildTest(unittest.TestCase):
     def test_setup_device_uses_plain_device_without_distributed_env(self):
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch("src.runtime.distributed.torch.cuda.is_available", return_value=False),
-            patch("src.runtime.distributed.dist.init_process_group") as init_process_group,
+            patch("src.app.runtime.distributed.torch.cuda.is_available", return_value=False),
+            patch("src.app.runtime.distributed.dist.init_process_group") as init_process_group,
         ):
             device, local_rank, distributed = setup_device()
 
@@ -552,8 +552,8 @@ class BuildTest(unittest.TestCase):
                 {"RANK": "1", "WORLD_SIZE": "2", "LOCAL_RANK": "1"},
                 clear=True,
             ),
-            patch("src.runtime.distributed.torch.cuda.is_available", return_value=False),
-            patch("src.runtime.distributed.dist.init_process_group") as init_process_group,
+            patch("src.app.runtime.distributed.torch.cuda.is_available", return_value=False),
+            patch("src.app.runtime.distributed.dist.init_process_group") as init_process_group,
         ):
             device, local_rank, distributed = setup_device()
 
@@ -565,7 +565,7 @@ class BuildTest(unittest.TestCase):
     def test_wrap_distributed_uses_ddp_without_cpu_device_ids(self):
         model = torch.nn.Linear(1, 1)
 
-        with patch("src.runtime.distributed.DistributedDataParallel") as ddp:
+        with patch("src.app.runtime.distributed.DistributedDataParallel") as ddp:
             ddp.return_value = "wrapped"
             wrapped = wrap_distributed(model, local_rank=1, distributed=True)
 
@@ -574,9 +574,9 @@ class BuildTest(unittest.TestCase):
 
     def test_cleanup_distributed_destroys_initialized_process_group(self):
         with (
-            patch("src.runtime.distributed.dist.is_available", return_value=True),
-            patch("src.runtime.distributed.dist.is_initialized", return_value=True),
-            patch("src.runtime.distributed.dist.destroy_process_group") as destroy,
+            patch("src.app.runtime.distributed.dist.is_available", return_value=True),
+            patch("src.app.runtime.distributed.dist.is_initialized", return_value=True),
+            patch("src.app.runtime.distributed.dist.destroy_process_group") as destroy,
         ):
             cleanup_distributed(enabled=True)
 

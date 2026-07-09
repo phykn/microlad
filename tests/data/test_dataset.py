@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image
 import torch
 
-from src.data import PatchDataset
+from src.pipelines.data import PatchDataset
 
 
 def save_image(path: Path, pixels: np.ndarray) -> None:

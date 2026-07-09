@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.scaling.tiles import normalized_tile_weights, tile_grid, tile_starts
+from src.pipelines.scaling.tiles import normalized_tile_weights, tile_grid, tile_starts
 
 
 class PredictScaleTilesTest(unittest.TestCase):

@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.reconstruction.slices import (
+from src.pipelines.reconstruction.slices import (
     extract_slice,
     extract_slice_batch,
     replace_slice,

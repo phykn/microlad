@@ -4,11 +4,11 @@ import numpy as np
 import torch
 from torch import nn
 
-from src.diffusion import DDPMProcess
-from src.api import AnchorSlice
-from src.guidance.optimization import optimize_slice, optimize_volume
-from src.guidance.physics.diffusivity import DiffusivitySolver
-from src.guidance.evaluation import _objective, _objective_batch
+from src.modeling.diffusion import DDPMProcess
+from src.app.api import AnchorSlice
+from src.pipelines.guidance.optimization import optimize_slice, optimize_volume
+from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver
+from src.pipelines.guidance.evaluation import _objective, _objective_batch
 
 
 class IdentityVAE(nn.Module):

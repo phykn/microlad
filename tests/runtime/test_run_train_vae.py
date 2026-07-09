@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 import torch
 
-from src.runtime import load_frozen_vae_from_run
+from src.app.runtime import load_frozen_vae_from_run
 
 
 def load_script():

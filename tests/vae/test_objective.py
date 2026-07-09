@@ -3,7 +3,7 @@ import unittest
 import torch
 import torch.nn.functional as F
 
-from src.phases import (
+from src.modeling.phases import (
     logits_to_relaxed_labels,
     phase_cross_entropy,
     phase_levels,
@@ -11,7 +11,7 @@ from src.phases import (
     phase_loss,
     phase_target_indices,
 )
-from src.vae import VAELoss, kl_divergence, vae_loss
+from src.modeling.vae import VAELoss, kl_divergence, vae_loss
 
 
 class VAELossTest(unittest.TestCase):

@@ -1,7 +1,7 @@
 import argparse
 import os
 
-from src.runtime import (
+from src.app.runtime import (
     build_dataset,
     build_loader,
     build_vae,

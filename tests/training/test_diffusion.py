@@ -5,9 +5,9 @@ from unittest.mock import patch
 
 import torch
 
-from src.diffusion import DDPMProcess, DiffusionLoss
-from src.training import DiffusionTrainer
-from src.training.distributed import unwrap_model
+from src.modeling.diffusion import DDPMProcess, DiffusionLoss
+from src.pipelines.training import DiffusionTrainer
+from src.pipelines.training.distributed import unwrap_model
 
 
 def infinite_batches():
@@ -186,7 +186,7 @@ class DiffusionTrainerTest(unittest.TestCase):
             trainer = self._make_trainer(tmp, steps=2, save_every=2)
             FakeProgress.instances = []
 
-            with patch("src.training.diffusion.tqdm", FakeProgress):
+            with patch("src.pipelines.training.diffusion.tqdm", FakeProgress):
                 stats = trainer.train()
             trainer.close()
 

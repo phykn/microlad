@@ -3,13 +3,13 @@ import unittest
 import numpy as np
 import torch
 
-from src.scaling.conditioning import (
+from src.pipelines.scaling.conditioning import (
     center_start,
     prepare_scale_anchor_latents,
     prepare_scale_anchor_targets,
     shifted_anchor_slices,
 )
-from src.api.options import AnchorSlice
+from src.app.api.options import AnchorSlice
 
 
 class IdentityVAE(torch.nn.Module):

@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.diffusion import DDPMProcess, DiffusionLoss, TimeUNet, diffusion_loss
+from src.modeling.diffusion import DDPMProcess, DiffusionLoss, TimeUNet, diffusion_loss
 
 
 class FixedNoiseModel(torch.nn.Module):

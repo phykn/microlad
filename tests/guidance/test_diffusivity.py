@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.guidance.physics.diffusivity import DiffusivitySolver, diffusivity_loss
+from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver, diffusivity_loss
 
 
 class PredictSDSDiffusivityTest(unittest.TestCase):

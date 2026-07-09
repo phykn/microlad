@@ -1,9 +1,9 @@
 import torch
 
-from src.phases import logits_to_relaxed_labels, phase_logits
-from src.vae import kl_divergence
-from src.diffusion import DDPMProcess
-from src.phases.relaxation import soft_phase_probability
+from src.modeling.phases import logits_to_relaxed_labels, phase_logits
+from src.modeling.vae import kl_divergence
+from src.modeling.diffusion import DDPMProcess
+from src.modeling.phases.relaxation import soft_phase_probability
 
 
 class FixedNoise(torch.nn.Module):

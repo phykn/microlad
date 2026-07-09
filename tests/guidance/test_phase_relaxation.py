@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.phases.relaxation import soft_phase_probability
+from src.modeling.phases.relaxation import soft_phase_probability
 
 
 class PredictSDSPhaseTest(unittest.TestCase):

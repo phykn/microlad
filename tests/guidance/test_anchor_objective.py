@@ -2,8 +2,8 @@ import unittest
 
 import torch
 
-from src.guidance.anchor_objective import anchor_loss
-from src.guidance.anchor_objective import masked_anchor_loss
+from src.pipelines.guidance.anchor_objective import anchor_loss
+from src.pipelines.guidance.anchor_objective import masked_anchor_loss
 
 
 class PredictSDSAnchorTest(unittest.TestCase):

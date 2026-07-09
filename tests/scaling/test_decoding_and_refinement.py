@@ -2,12 +2,12 @@ import unittest
 
 import torch
 
-from src.scaling.blending import blend_window
-from src.scaling.decoding import decode_large_latent_volume
-from src.scaling.refinement import refine_large_volume
-from src.scaling.decoding import _decode_tiled_plane
-from src.scaling.refinement import _refine_tiled_plane
-from src.scaling.tiles import tile_grid
+from src.pipelines.scaling.blending import blend_window
+from src.pipelines.scaling.decoding import decode_large_latent_volume
+from src.pipelines.scaling.refinement import refine_large_volume
+from src.pipelines.scaling.decoding import _decode_tiled_plane
+from src.pipelines.scaling.refinement import _refine_tiled_plane
+from src.pipelines.scaling.tiles import tile_grid
 
 
 class DecodeValueVAE(torch.nn.Module):
