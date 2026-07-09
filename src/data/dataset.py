@@ -7,8 +7,8 @@ from torch.utils.data import Dataset
 from src.data.transforms import augment_patch
 from src.data.transforms import crop_square
 from src.data.transforms import resize_patch
-from src.io import load_image, load_phase_image
-from src.phases.segmentation import segment_multi_otsu
+from src.helpers.images import load_image, load_phase_image
+from src.helpers.segmentation import segment_multi_otsu
 
 
 class PatchDataset(Dataset):

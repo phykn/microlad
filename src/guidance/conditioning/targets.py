@@ -9,8 +9,8 @@ from src.guidance.physics.diffusivity import DiffusivitySolver, compute_diffusiv
 from src.guidance.descriptors.surface_area import compute_surface_area
 from src.guidance.descriptors.two_point_correlation import compute_tpc
 from src.guidance.descriptors.volume_fraction import compute_volume_fraction
+from src.helpers.segmentation import segment_multi_otsu
 from src.phases.quantization import MAX_UINT8_PHASES
-from src.phases.segmentation import segment_multi_otsu
 
 
 def build_sds_targets(

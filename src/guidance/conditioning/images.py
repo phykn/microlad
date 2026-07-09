@@ -1,8 +1,8 @@
 import numpy as np
 import torch
 
+from src.helpers.segmentation import segment_multi_otsu
 from src.phases.quantization import MAX_UINT8_PHASES
-from src.phases.segmentation import segment_multi_otsu
 
 
 def prepare_anchor_image(

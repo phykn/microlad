@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from src.io.images import load_image, load_phase_image
+from src.helpers.images import load_image, load_phase_image
 
 
 class ImageLoaderTest(unittest.TestCase):
