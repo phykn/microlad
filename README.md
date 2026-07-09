@@ -8,12 +8,12 @@ The active implementation is in `src`. Legacy reference folders and removed inte
 A small sample image is checked in under `data/` so the default config can build a dataset without external files.
 Real training datasets and model checkpoints are not checked in.
 
-The source tree is grouped by responsibility:
+The source tree has four ownership layers:
 
-- `phases`, `vae`, `diffusion`: mathematical representation and learned models
-- `reconstruction`, `guidance`, `scaling`: 3D generation, controlled objectives, and large-volume tiling
-- `api`, `runtime`: prediction facade, configuration, loading, and object construction
-- `data`, `io`, `training`: external data boundaries and training lifecycle
+- `common`: shared image, neural, and tensor utilities
+- `modeling`: phase representation, VAE, and diffusion models
+- `pipelines`: data, training, reconstruction, guidance, and scale-up workflows
+- `app`: prediction API, configuration, loading, and object construction
 
 ## Install
 
@@ -23,7 +23,7 @@ python -m pip install -r requirements.txt
 
 Run training and prediction examples from the repository root. For scripts or
 interactive sessions launched elsewhere, add the checkout root to `PYTHONPATH` so imports
-such as `from src.runtime import load_predictor` resolve.
+such as `from src.app.runtime import load_predictor` resolve.
 
 ## Config
 
@@ -42,7 +42,7 @@ The default training configs are full-length examples. For a bounded smoke
 check, run the focused entrypoint tests instead:
 
 ```sh
-python -m pytest tests/test_run_train_vae.py tests/test_run_train_diffusion.py -q
+python -m pytest tests/app/runtime/test_run_train_vae.py tests/app/runtime/test_run_train_diffusion.py -q
 ```
 
 ```sh
@@ -99,8 +99,8 @@ run/<timestamp>/
 Load a trained run folder and call `predict`:
 
 ```python
-from src.api import AnchorSlice, PredictOptions
-from src.runtime import load_predictor
+from src.app.api import AnchorSlice, PredictOptions
+from src.app.runtime import load_predictor
 
 predictor = load_predictor("run/20260628-xxxxxx", device="cuda")
 
