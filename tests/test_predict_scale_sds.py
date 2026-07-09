@@ -7,7 +7,7 @@ from src.diffusion import DDPMProcess
 from src.api import AnchorSlice
 from src.scaling.blending import blend_window
 from src.scaling.optimization import optimize_large_volume
-from src.scaling.optimization import (
+from src.scaling.local_objective import (
     _decode_tiled_image,
     _decode_tiled_image_batch,
     _local_prior_objective,

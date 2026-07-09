@@ -8,7 +8,7 @@ from src.diffusion import DDPMProcess
 from src.api import AnchorSlice
 from src.guidance.optimization import optimize_slice, optimize_volume
 from src.guidance.physics.diffusivity import DiffusivitySolver
-from src.guidance.optimization import _objective, _objective_batch
+from src.guidance.evaluation import _objective, _objective_batch
 
 
 class IdentityVAE(nn.Module):
