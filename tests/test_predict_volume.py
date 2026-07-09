@@ -80,7 +80,7 @@ class PredictVolumeTest(unittest.TestCase):
                     expected[z, y, x] = (d_value + h_value + w_value) / 3.0
 
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
-        self.assertTrue(torch.allclose(volume, expected.clamp(-1.0, 1.0)))
+        self.assertTrue(torch.allclose(volume, expected))
         self.assertGreater(len(vae.decode_shapes), 0)
         self.assertTrue(
             all(shape[1:] == torch.Size([1, 2, 2]) for shape in vae.decode_shapes)

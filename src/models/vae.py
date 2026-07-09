@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 
+from src.loss.phase import logits_to_phase_values
 from src.models.norm import norm_groups
 from src.models.shape import downsample_steps
 
@@ -107,6 +108,7 @@ class PatchVAE(nn.Module):
         image_size: int = 64,
         latent_size: int = 16,
         latent_ch: int = 4,
+        num_phases: int = 3,
         base_ch: int = 64,
         max_ch: int = 512,
     ) -> None:
@@ -121,9 +123,13 @@ class PatchVAE(nn.Module):
         if max_ch < base_ch:
             raise ValueError("max_ch must be greater than or equal to base_ch.")
 
+        if num_phases < 2:
+            raise ValueError("num_phases must be at least 2.")
+
         self.image_size = image_size
         self.latent_size = latent_size
         self.latent_ch = latent_ch
+        self.num_phases = num_phases
         self.downsample_steps = downsample_steps(image_size, latent_size)
         self.downsample_factor = image_size // latent_size
 
@@ -155,7 +161,7 @@ class PatchVAE(nn.Module):
             UpBlock(channels[i], channels[i - 1])
             for i in range(len(channels) - 1, 0, -1)
         )
-        self.conv_out = nn.Conv2d(channels[0], 1, kernel_size=3, padding=1)
+        self.conv_out = nn.Conv2d(channels[0], num_phases, kernel_size=3, padding=1)
 
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if x.ndim != 4 or x.shape[1] != 1:
@@ -172,7 +178,7 @@ class PatchVAE(nn.Module):
         h = self.enc_mid(h)
         return self.to_mu(h), self.to_logvar(h)
 
-    def decode(self, z: torch.Tensor) -> torch.Tensor:
+    def decode_logits(self, z: torch.Tensor) -> torch.Tensor:
         if z.ndim != 4 or z.shape[1] != self.latent_ch:
             raise ValueError(
                 f"latent must have shape [B, {self.latent_ch}, H, W]."
@@ -189,12 +195,16 @@ class PatchVAE(nn.Module):
             h = block(h)
         return self.conv_out(h)
 
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        logits = self.decode_logits(z)
+        return logits_to_phase_values(logits, self.num_phases)
+
     def forward(
         self, x: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         mu, logvar = self.encode(x)
         z = reparameterize(mu, logvar)
-        return self.decode(z), mu, logvar
+        return self.decode_logits(z), mu, logvar
 
 
 def reparameterize(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:

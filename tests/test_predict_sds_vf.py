@@ -7,7 +7,7 @@ from src.predict.sds import volume_fraction_loss
 
 class PredictSDSVolumeFractionTest(unittest.TestCase):
     def test_volume_fraction_loss_matches_each_phase_fraction_directly(self):
-        values = torch.tensor([[-1.0, 0.0, 1.0]])
+        values = torch.tensor([[0.0, 1.0, 2.0]])
         targets = {0: 1.0 / 3.0, 1: 1.0 / 3.0, 2: 1.0 / 3.0}
 
         loss, stats = volume_fraction_loss(
@@ -33,7 +33,7 @@ class PredictSDSVolumeFractionTest(unittest.TestCase):
         )
 
     def test_volume_fraction_loss_handles_more_than_three_phases(self):
-        values = torch.tensor([-1.0, -1.0 / 3.0, 1.0 / 3.0, 1.0])
+        values = torch.tensor([0.0, 1.0, 2.0, 3.0])
         targets = torch.tensor([0.25, 0.25, 0.25, 0.25])
 
         loss, stats = volume_fraction_loss(
@@ -53,7 +53,7 @@ class PredictSDSVolumeFractionTest(unittest.TestCase):
         )
 
     def test_volume_fraction_loss_is_differentiable(self):
-        values = torch.tensor([[[-0.5, 0.5], [0.25, -0.25]]], requires_grad=True)
+        values = torch.tensor([[[0.25, 0.75], [0.5, 0.1]]], requires_grad=True)
 
         loss, _ = volume_fraction_loss(
             values,

@@ -54,7 +54,7 @@ def reconstruct_anchor_target(
 
     return (
         out / weight_sum.clamp_min(torch.finfo(weight_sum.dtype).tiny)
-    ).clamp(-1.0, 1.0).detach()
+    ).detach()
 
 
 def _reconstruct_patch(vae: torch.nn.Module, image: torch.Tensor) -> torch.Tensor:
@@ -68,7 +68,7 @@ def _reconstruct_patch(vae: torch.nn.Module, image: torch.Tensor) -> torch.Tenso
 
     validate_finite_tensor("reconstructed anchor target", recon)
 
-    return recon.clamp(-1.0, 1.0).detach()
+    return recon.detach()
 
 
 def _tile_grid(

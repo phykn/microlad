@@ -216,7 +216,7 @@ class ScaleConditionTest(unittest.TestCase):
         target = targets[(0, 3)]
         mask = masks[(0, 3)]
 
-        self.assertTrue(torch.allclose(target[2:4, 2:4], torch.full((2, 2), -0.75)))
+        self.assertTrue(torch.allclose(target[2:4, 2:4], torch.full((2, 2), 0.25)))
         self.assertTrue(torch.equal(mask[2:4, 2:4], torch.ones(2, 2)))
         self.assertTrue(torch.equal(mask[:2, :], torch.zeros(2, 6)))
 

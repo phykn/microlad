@@ -25,4 +25,4 @@ training:
 
 output:
   vae_run_dir:
-  run_root: run
+  run_root: run/20260706-145958-609474

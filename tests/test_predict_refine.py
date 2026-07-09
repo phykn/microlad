@@ -62,7 +62,7 @@ class PredictRefineTest(unittest.TestCase):
                     expected[z, y, x] = (z_value + y_value + x_value) / 3.0
 
         self.assertEqual(refined.shape, torch.Size([2, 2, 2]))
-        self.assertTrue(torch.allclose(refined, expected.clamp(-1.0, 1.0)))
+        self.assertTrue(torch.allclose(refined, expected))
         self.assertEqual(len(vae.encode_inputs), 3)
         self.assertEqual(len(vae.decode_inputs), 3)
         self.assertEqual(
@@ -85,7 +85,7 @@ class PredictRefineTest(unittest.TestCase):
 
         refined = three_axis_refinement(volume, vae, steps=0)
 
-        self.assertTrue(torch.equal(refined, volume.clamp(-1.0, 1.0)))
+        self.assertTrue(torch.equal(refined, volume.float()))
         self.assertEqual(vae.encode_inputs, [])
 
     def test_three_axis_refinement_rejects_invalid_volume_shape(self):

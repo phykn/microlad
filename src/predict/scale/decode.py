@@ -56,7 +56,7 @@ def decode_large_latent_volume(
         volume[:, :, start : start + factor] += decoded.unsqueeze(2)
         count[:, :, start : start + factor] += 1
 
-    return (volume / count.clamp_min(1)).clamp(-1.0, 1.0).float()
+    return (volume / count.clamp_min(1)).float()
 
 
 def _validate_latent_volume(vae: torch.nn.Module, latent: torch.Tensor) -> None:

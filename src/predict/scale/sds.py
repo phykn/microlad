@@ -289,7 +289,7 @@ def _optimize_large_slice(
         total.backward()
         optimizer.step()
         with torch.no_grad():
-            image_param.clamp_(-1.0, 1.0)
+            image_param.clamp_(0.0, float(num_phases - 1))
         _record_stats(history, stats)
 
     with torch.no_grad():
@@ -297,7 +297,7 @@ def _optimize_large_slice(
             image_param.detach(),
             vae,
             tile_overlap=tile_overlap,
-        ).clamp(-1.0, 1.0)
+        )
     return decoded, _mean_stats(history)
 
 
@@ -398,7 +398,7 @@ def _optimize_large_slice_batch(
         optimizer.step()
 
         with torch.no_grad():
-            image_param.clamp_(-1.0, 1.0)
+            image_param.clamp_(0.0, float(num_phases - 1))
 
         _record_stats(history, stats)
 
@@ -407,7 +407,7 @@ def _optimize_large_slice_batch(
             image_param.detach(),
             vae,
             tile_overlap=tile_overlap,
-        ).clamp(-1.0, 1.0)
+        )
 
     return decoded, _mean_stats(history)
 

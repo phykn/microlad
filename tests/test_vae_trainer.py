@@ -12,7 +12,7 @@ from src.train.distributed import unwrap_model
 
 def infinite_batches():
     while True:
-        yield torch.randn(2, 1, 64, 64)
+        yield torch.randint(0, 3, (2, 1, 64, 64), dtype=torch.float32)
 
 
 class WrappedModule(torch.nn.Module):
@@ -42,7 +42,6 @@ class BigGradLoss(torch.nn.Module):
         parts = {
             "reconstruction": loss.detach(),
             "ssim": torch.zeros((), device=recon.device),
-            "phase": torch.zeros((), device=recon.device),
             "kl": torch.zeros((), device=recon.device),
         }
         return loss, parts
@@ -68,7 +67,7 @@ class VAETrainerTest(unittest.TestCase):
     def test_train_step_updates_model_and_returns_loss_parts(self):
         with tempfile.TemporaryDirectory() as tmp:
             model = PatchVAE(image_size=64, latent_size=16, base_ch=8, max_ch=16)
-            loss_fn = VAELoss(beta=0.0, ssim_weight=0.0, phase_weight=0.0)
+            loss_fn = VAELoss(beta=0.0, ssim_weight=0.0)
             optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
             trainer = VAETrainer(
                 model=model,
@@ -92,7 +91,7 @@ class VAETrainerTest(unittest.TestCase):
         self.assertEqual(trainer.step, 1)
         self.assertEqual(
             set(stats.keys()),
-            {"loss", "reconstruction", "ssim", "phase", "kl", "grad_norm"},
+            {"loss", "reconstruction", "ssim", "kl", "grad_norm"},
         )
         self.assertGreaterEqual(stats["loss"], 0.0)
         self.assertGreater(stats["grad_norm"], 0.0)
@@ -102,7 +101,7 @@ class VAETrainerTest(unittest.TestCase):
             model = WrappedModule(
                 PatchVAE(image_size=64, latent_size=16, base_ch=8, max_ch=16)
             )
-            loss_fn = VAELoss(beta=0.0, ssim_weight=0.0, phase_weight=0.0)
+            loss_fn = VAELoss(beta=0.0, ssim_weight=0.0)
             optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
             trainer = VAETrainer(
                 model=model,
@@ -159,7 +158,7 @@ class VAETrainerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             trainer = self._make_trainer(
                 tmp,
-                dataloader=[torch.randn(2, 1, 64, 64)],
+                dataloader=[torch.randint(0, 3, (2, 1, 64, 64), dtype=torch.float32)],
                 steps=2,
                 save_every=2,
             )
@@ -187,7 +186,7 @@ class VAETrainerTest(unittest.TestCase):
         self.assertEqual(len(progress.postfixes), 2)
         self.assertEqual(
             set(progress.postfixes[-1]),
-            {"loss", "reconstruction", "ssim", "phase", "kl", "grad_norm"},
+            {"loss", "reconstruction", "ssim", "kl", "grad_norm"},
         )
         self.assertIn("loss", stats)
 
@@ -231,7 +230,7 @@ class VAETrainerTest(unittest.TestCase):
     def test_train_rejects_non_positive_steps(self):
         with tempfile.TemporaryDirectory() as tmp:
             model = PatchVAE(image_size=64, latent_size=16, base_ch=8, max_ch=16)
-            loss_fn = VAELoss(beta=0.0, ssim_weight=0.0, phase_weight=0.0)
+            loss_fn = VAELoss(beta=0.0, ssim_weight=0.0)
             optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
             with self.assertRaisesRegex(ValueError, "steps"):
@@ -248,7 +247,7 @@ class VAETrainerTest(unittest.TestCase):
     def test_trainer_rejects_non_positive_save_every(self):
         with tempfile.TemporaryDirectory() as tmp:
             model = PatchVAE(image_size=64, latent_size=16, base_ch=8, max_ch=16)
-            loss_fn = VAELoss(beta=0.0, ssim_weight=0.0, phase_weight=0.0)
+            loss_fn = VAELoss(beta=0.0, ssim_weight=0.0)
             optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
             with self.assertRaisesRegex(ValueError, "save_every"):
@@ -271,7 +270,7 @@ class VAETrainerTest(unittest.TestCase):
         dataloader=None,
     ) -> VAETrainer:
         model = PatchVAE(image_size=64, latent_size=16, base_ch=8, max_ch=16)
-        loss_fn = VAELoss(beta=0.0, ssim_weight=0.0, phase_weight=0.0)
+        loss_fn = VAELoss(beta=0.0, ssim_weight=0.0)
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
         return VAETrainer(
             model=model,

@@ -73,6 +73,7 @@ def write_vae_run(run_dir: Path) -> None:
         image_size=vae_args.image_size,
         latent_size=vae_args.latent_size,
         latent_ch=vae_args.latent_ch,
+        num_phases=vae_args.num_phases,
         base_ch=vae_args.base_ch,
         max_ch=vae_args.max_ch,
     )

@@ -127,8 +127,7 @@ def _prepare_images(
 
         phases.append(phase)
 
-    array = np.stack(phases).astype(np.float32)
-    values = array / (num_phases - 1) * 2.0 - 1.0
+    values = np.stack(phases).astype(np.float32)
     return torch.from_numpy(values.copy()).float()
 
 

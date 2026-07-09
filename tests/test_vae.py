@@ -94,18 +94,38 @@ class PatchVAETest(unittest.TestCase):
                     image_size=image_size,
                     latent_size=16,
                     latent_ch=4,
+                    num_phases=3,
                     base_ch=8,
                     max_ch=32,
                 )
                 x = torch.randn(1, 1, image_size, image_size)
 
-                recon, mu, logvar = model(x)
+                logits, mu, logvar = model(x)
 
-                self.assertEqual(recon.shape, x.shape)
+                self.assertEqual(logits.shape, torch.Size([1, 3, image_size, image_size]))
                 self.assertEqual(mu.shape, torch.Size([1, 4, 16, 16]))
                 self.assertEqual(logvar.shape, torch.Size([1, 4, 16, 16]))
                 self.assertEqual(model.downsample_factor, image_size // 16)
                 self.assertEqual(model.downsample_steps, downsample_steps(image_size, 16))
+
+    def test_decode_logits_returns_phase_channels_and_decode_returns_expected_phase_image(self):
+        model = PatchVAE(
+            image_size=64,
+            latent_size=16,
+            latent_ch=4,
+            num_phases=4,
+            base_ch=8,
+            max_ch=32,
+        )
+        latent = torch.randn(2, 4, 16, 16)
+
+        logits = model.decode_logits(latent)
+        decoded = model.decode(latent)
+
+        self.assertEqual(logits.shape, torch.Size([2, 4, 64, 64]))
+        self.assertEqual(decoded.shape, torch.Size([2, 1, 64, 64]))
+        self.assertTrue(torch.all(decoded >= 0.0))
+        self.assertTrue(torch.all(decoded <= 3.0))
 
     def test_output_has_no_tanh_activation(self):
         model = PatchVAE(image_size=64, latent_size=16, base_ch=8, max_ch=32)

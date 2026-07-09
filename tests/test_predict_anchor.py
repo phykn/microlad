@@ -56,7 +56,7 @@ class LocalPatternAnchorVAE(torch.nn.Module):
 
 
 class PredictAnchorTest(unittest.TestCase):
-    def test_prepare_anchor_image_scales_phase_image_to_tensor(self):
+    def test_prepare_anchor_image_converts_phase_image_to_float_tensor(self):
         image = np.array([[0, 1, 2]], dtype=np.uint8)
 
         tensor = prepare_anchor_image(image, num_phases=3)
@@ -64,7 +64,7 @@ class PredictAnchorTest(unittest.TestCase):
         self.assertEqual(tensor.shape, torch.Size([1, 1, 1, 3]))
         self.assertEqual(tensor.dtype, torch.float32)
         self.assertTrue(
-            torch.allclose(tensor[0, 0, 0], torch.tensor([-1.0, 0.0, 1.0]))
+            torch.allclose(tensor[0, 0, 0], torch.tensor([0.0, 1.0, 2.0]))
         )
 
     def test_prepare_anchor_image_can_segment_grayscale_image(self):
@@ -76,7 +76,7 @@ class PredictAnchorTest(unittest.TestCase):
         self.assertTrue(
             torch.equal(
                 torch.unique(tensor),
-                torch.tensor([-1.0, 0.0, 1.0]),
+                torch.tensor([0.0, 1.0, 2.0]),
             )
         )
 
@@ -236,13 +236,13 @@ class PredictAnchorTest(unittest.TestCase):
             device=image.device,
             dtype=image.dtype,
         ).view(1, 1, 3, 3)
-        pattern = vae.decode(torch.zeros(1, 1, 3, 3)).clamp(-1.0, 1.0)
+        pattern = vae.decode(torch.zeros(1, 1, 3, 3))
 
         for row, col in [(0, 0), (0, 1), (1, 0), (1, 1)]:
             expected[:, :, row : row + 3, col : col + 3] += pattern * window
             weight_sum[:, :, row : row + 3, col : col + 3] += window
 
-        expected = (expected / weight_sum).clamp(-1.0, 1.0)
+        expected = expected / weight_sum
 
         self.assertTrue(torch.allclose(recon, expected))
 

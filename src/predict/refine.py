@@ -14,7 +14,7 @@ def three_axis_refinement(
 
     _validate_volume(volume, vae)
 
-    refined = volume.clamp(-1.0, 1.0).float()
+    refined = volume.float()
 
     if steps == 0:
         return refined
@@ -49,7 +49,7 @@ def _refine_once(volume: torch.Tensor, vae: torch.nn.Module) -> torch.Tensor:
     )
     new_volume += decoded[:, 0, :, :].permute(1, 2, 0)
 
-    return (new_volume / 3.0).clamp(-1.0, 1.0).float()
+    return (new_volume / 3.0).float()
 
 
 def _encode_decode_batch(vae: torch.nn.Module, images: torch.Tensor) -> torch.Tensor:

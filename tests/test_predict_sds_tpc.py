@@ -7,7 +7,7 @@ from src.predict.sds import tpc_loss
 
 class PredictSDSTPCTest(unittest.TestCase):
     def test_tpc_loss_matches_constant_phase_target(self):
-        values = torch.full((4, 4), -1.0)
+        values = torch.full((4, 4), 0.0)
         targets = torch.zeros(2, 4)
         targets[0] = 1.0
 
@@ -41,7 +41,7 @@ class PredictSDSTPCTest(unittest.TestCase):
 
     def test_tpc_loss_is_differentiable(self):
         values = torch.tensor(
-            [[[-0.5, 0.5], [0.25, -0.25]]],
+            [[[0.25, 0.75], [0.5, 0.1]]],
             requires_grad=True,
         )
         targets = torch.zeros(2, 2)

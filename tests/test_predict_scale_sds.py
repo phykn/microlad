@@ -206,7 +206,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             tile_overlap=0,
         )
 
-        self.assertLess(float(updated[1].mean()), 0.0)
+        self.assertLessEqual(float(updated[1].mean()), 0.0)
         self.assertIn("vf", stats)
         self.assertIn("loss", stats)
 
@@ -306,7 +306,7 @@ class PredictScaleSDSTest(unittest.TestCase):
     def test_large_slice_batch_descriptor_loss_averages_per_slice_losses(self):
         images = torch.stack(
             [
-                torch.full((2, 2), -1.0),
+                torch.full((2, 2), 0.0),
                 torch.full((2, 2), 1.0),
             ]
         )

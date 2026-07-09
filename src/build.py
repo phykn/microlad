@@ -129,6 +129,7 @@ def _vae_model_from_args(args: argparse.Namespace) -> PatchVAE:
         image_size=_get_arg(args, "vae_image_size", "image_size", "size"),
         latent_size=_get_arg(args, "vae_latent_size", "latent_size", default=16),
         latent_ch=_get_arg(args, "vae_latent_ch", "latent_ch"),
+        num_phases=_get_arg(args, "vae_num_phases", "num_phases", default=3),
         base_ch=_get_arg(args, "vae_base_ch", "base_ch", default=64),
         max_ch=_get_arg(args, "vae_max_ch", "max_ch", default=512),
     )
@@ -297,6 +298,7 @@ def load_frozen_vae_from_run(
     )
     _require_config_value(vae_config, "vae config", "image_size", "size")
     _require_config_value(vae_config, "vae config", "latent_ch")
+    _require_config_value(vae_config, "vae config", "num_phases")
     args = argparse.Namespace(**vae_config)
     args.vae_ckpt = _last_model_path(run_dir, "vae")
     return load_frozen_vae(args, device=device)
@@ -437,9 +439,7 @@ def build_vae_trainer(
     loss_fn = VAELoss(
         beta=args.beta,
         ssim_weight=args.ssim_weight,
-        phase_weight=args.phase_weight,
         num_phases=args.num_phases,
-        phase_temperature=args.phase_temperature,
     )
     return VAETrainer(
         model=model,

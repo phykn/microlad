@@ -291,7 +291,7 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
     def test_objective_batch_descriptor_loss_averages_per_slice_losses(self):
         decoded = torch.stack(
             [
-                torch.full((4, 4), -1.0),
+                torch.full((4, 4), 0.0),
                 torch.full((4, 4), 1.0),
             ]
         )

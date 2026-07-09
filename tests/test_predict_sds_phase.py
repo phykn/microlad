@@ -8,7 +8,7 @@ from src.predict.sds.phase import soft_phase_probability
 class PredictSDSPhaseTest(unittest.TestCase):
     def test_soft_phase_probability_sums_to_one_over_phase_axis(self):
         probability = soft_phase_probability(
-            torch.tensor([-1.0, 0.0, 1.0]),
+            torch.tensor([0.0, 1.0, 2.0]),
             num_phases=3,
             temperature=0.1,
             phase_dim=0,
@@ -27,7 +27,7 @@ class PredictSDSPhaseTest(unittest.TestCase):
             phase_dim=0,
         )
 
-        levels = torch.tensor([-1.0, 0.0, 1.0])
+        levels = torch.tensor([0.0, 1.0, 2.0])
         expected = torch.softmax(-(values - levels).pow(2) / temperature, dim=0)
         self.assertTrue(torch.allclose(probability[:, 0], expected))
 

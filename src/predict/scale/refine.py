@@ -20,7 +20,7 @@ def refine_large_volume(
     _validate_tile_batch_size(tile_batch_size)
     _validate_volume(volume)
 
-    refined = volume.clamp(-1.0, 1.0).float()
+    refined = volume.float()
     if steps == 0:
         return refined
 
@@ -77,7 +77,7 @@ def _refine_once(
         out[:, :, index] += refined
         count[:, :, index] += 1
 
-    return (out / count.clamp_min(1)).clamp(-1.0, 1.0).float()
+    return (out / count.clamp_min(1)).float()
 
 
 def _refine_tiled_plane(

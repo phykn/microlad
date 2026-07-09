@@ -282,7 +282,7 @@ def optimize_slice(
         optimizer.step()
 
     with torch.no_grad():
-        decoded = _decode_latent(vae, latent).clamp(-1.0, 1.0)
+        decoded = _decode_latent(vae, latent)
         replace_slice(updated, axis, index, decoded)
 
     return updated, stats
@@ -373,7 +373,7 @@ def _optimize_slice_batch(
         optimizer.step()
 
     with torch.no_grad():
-        decoded = _decode_latent_batch(vae, latent).clamp(-1.0, 1.0)
+        decoded = _decode_latent_batch(vae, latent)
         replace_slice_batch(updated, axis, indices, decoded)
 
     return updated, stats

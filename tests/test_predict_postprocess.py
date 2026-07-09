@@ -11,8 +11,8 @@ from src.predict.postprocess import (
 
 
 class PredictPostprocessTest(unittest.TestCase):
-    def test_quantize_phase_maps_minus_one_to_plus_one_into_phase_values(self):
-        values = torch.tensor([[-1.0, 0.0, 1.0]])
+    def test_quantize_phase_rounds_phase_index_values(self):
+        values = torch.tensor([[0.0, 1.0, 1.8]])
 
         phase = quantize_phase(values, num_phases=3)
 
@@ -20,7 +20,7 @@ class PredictPostprocessTest(unittest.TestCase):
         self.assertTrue(torch.equal(phase, torch.tensor([[0, 1, 2]], dtype=torch.uint8)))
 
     def test_quantize_phase_clamps_values_outside_training_range(self):
-        values = torch.tensor([[-2.0, 2.0]])
+        values = torch.tensor([[-1.0, 4.0]])
 
         phase = quantize_phase(values, num_phases=4)
 
@@ -46,7 +46,29 @@ class PredictPostprocessTest(unittest.TestCase):
             quantize_phase(torch.tensor([0, 1]), num_phases=3)
 
     def test_model_output_to_phase_removes_single_channel_dimension(self):
-        output = torch.tensor([[[[-1.0, 0.0], [1.0, 2.0]]]])
+        output = torch.tensor([[[[0.0, 1.0], [2.0, 3.0]]]])
+
+        phase = model_output_to_phase(output, num_phases=3)
+
+        self.assertEqual(phase.shape, torch.Size([1, 2, 2]))
+        self.assertEqual(phase.dtype, torch.uint8)
+        self.assertTrue(
+            torch.equal(
+                phase,
+                torch.tensor([[[0, 1], [2, 2]]], dtype=torch.uint8),
+            )
+        )
+
+    def test_model_output_to_phase_accepts_phase_logits(self):
+        output = torch.tensor(
+            [
+                [
+                    [[4.0, 0.0], [0.0, 0.0]],
+                    [[0.0, 4.0], [0.0, 0.0]],
+                    [[0.0, 0.0], [4.0, 5.0]],
+                ]
+            ]
+        )
 
         phase = model_output_to_phase(output, num_phases=3)
 

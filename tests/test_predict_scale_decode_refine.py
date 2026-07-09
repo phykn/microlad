@@ -10,8 +10,8 @@ from src.predict.scale.tiles import tile_grid
 
 
 class DecodeValueVAE(torch.nn.Module):
-    image_size = 2
-    latent_size = 1
+    image_size = 4
+    latent_size = 2
     latent_ch = 1
     downsample_factor = 2
 
@@ -70,7 +70,7 @@ class InconsistentScaleVAE(DecodeValueVAE):
 
 
 class ShiftRefineVAE(torch.nn.Module):
-    image_size = 2
+    image_size = 4
 
     def __init__(self) -> None:
         super().__init__()
@@ -89,17 +89,23 @@ class ShiftRefineVAE(torch.nn.Module):
 
 
 class BadRefineVAE(ShiftRefineVAE):
+    image_size = 2
+
     def decode(self, latent: torch.Tensor) -> torch.Tensor:
         return torch.zeros(1, 2, self.image_size, self.image_size)
 
 
 class NonFiniteEncodeRefineVAE(ShiftRefineVAE):
+    image_size = 2
+
     def encode(self, image: torch.Tensor):
         self.encode_grad_enabled.append(torch.is_grad_enabled())
         return torch.full_like(image, float("nan")), torch.zeros_like(image)
 
 
 class NonFiniteDecodeRefineVAE(ShiftRefineVAE):
+    image_size = 2
+
     def decode(self, latent: torch.Tensor) -> torch.Tensor:
         self.decode_grad_enabled.append(torch.is_grad_enabled())
         return torch.full_like(latent, float("nan"))
@@ -160,7 +166,7 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
                     expected[z, y, x] = (d_value + h_value + w_value) / 3.0
 
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
-        self.assertTrue(torch.allclose(volume, expected.clamp(-1.0, 1.0)))
+        self.assertTrue(torch.allclose(volume, expected))
         self.assertFalse(vae.training)
         self.assertTrue(vae.decode_grad_enabled)
         self.assertTrue(all(enabled is False for enabled in vae.decode_grad_enabled))
@@ -241,14 +247,14 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
 
         expected = torch.empty(4, 4, 4)
         for z in range(4):
-            d_value = 1.0 if z < 2 else 2.0
             for y in range(4):
-                h_value = 3.0 if y < 2 else 4.0
                 for x in range(4):
-                    w_value = 5.0 if x < 2 else 6.0
+                    d_value = float(z + 1)
+                    h_value = float(y + 5)
+                    w_value = float(x + 9)
                     expected[z, y, x] = (d_value + h_value + w_value) / 3.0
 
-        self.assertTrue(torch.allclose(refined, expected.clamp(-1.0, 1.0)))
+        self.assertTrue(torch.allclose(refined, expected))
         self.assertFalse(vae.training)
         self.assertTrue(vae.encode_grad_enabled)
         self.assertTrue(vae.decode_grad_enabled)

@@ -39,7 +39,7 @@ class PredictSDSCommonTest(unittest.TestCase):
         )
 
         raw = prepare_anchor_image(anchor.image, num_phases=2)[0, 0]
-        expected = (raw + 0.25).clamp(-1.0, 1.0)
+        expected = raw + 0.25
         self.assertTrue(torch.allclose(targets[(0, 1)][0, 0], expected))
 
     def test_prepare_anchor_targets_rejects_non_floating_dtype(self):

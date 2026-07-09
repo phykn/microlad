@@ -14,7 +14,7 @@ def save_image(path: Path, pixels: np.ndarray) -> None:
 
 
 class PatchDatasetTest(unittest.TestCase):
-    def test_phase_image_returns_float_tensor_scaled_to_minus_one_one(self):
+    def test_phase_image_returns_float_tensor_with_phase_indices(self):
         with tempfile.TemporaryDirectory() as tmp:
             image_dir = Path(tmp)
             pixels = np.array(
@@ -37,13 +37,13 @@ class PatchDatasetTest(unittest.TestCase):
             )
             patch = dataset[0]
 
-        expected = torch.tensor(pixels, dtype=torch.float32).unsqueeze(0) - 1.0
+        expected = torch.tensor(pixels, dtype=torch.float32).unsqueeze(0)
         self.assertEqual(len(dataset), 1)
         self.assertEqual(patch.shape, torch.Size([1, 4, 4]))
         self.assertEqual(patch.dtype, torch.float32)
         self.assertTrue(torch.allclose(patch, expected))
 
-    def test_gray_image_can_be_segmented_before_scaling(self):
+    def test_gray_image_can_be_segmented_to_phase_indices(self):
         with tempfile.TemporaryDirectory() as tmp:
             image_dir = Path(tmp)
             pixels = np.array(
@@ -68,7 +68,7 @@ class PatchDatasetTest(unittest.TestCase):
 
         self.assertEqual(patch.shape, torch.Size([1, 4, 4]))
         self.assertEqual(patch.dtype, torch.float32)
-        self.assertEqual(sorted(torch.unique(patch).tolist()), [-1.0, 0.0, 1.0])
+        self.assertEqual(sorted(torch.unique(patch).tolist()), [0.0, 1.0, 2.0])
 
     def test_normalized_float_gray_image_can_be_segmented(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -94,7 +94,7 @@ class PatchDatasetTest(unittest.TestCase):
             patch = dataset[0]
 
         self.assertEqual(patch.shape, torch.Size([1, 4, 4]))
-        self.assertEqual(sorted(torch.unique(patch).tolist()), [-1.0, 0.0, 1.0])
+        self.assertEqual(sorted(torch.unique(patch).tolist()), [0.0, 1.0, 2.0])
 
     def test_segment_false_rejects_normalized_float_intensity_image(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -119,7 +119,7 @@ class PatchDatasetTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "integer"):
                 dataset[0]
 
-    def test_four_phase_scaling_uses_even_steps_from_minus_one_to_one(self):
+    def test_four_phase_image_keeps_phase_indices(self):
         with tempfile.TemporaryDirectory() as tmp:
             image_dir = Path(tmp)
             pixels = np.array([[0, 1], [2, 3]], dtype=np.uint8)
@@ -134,10 +134,7 @@ class PatchDatasetTest(unittest.TestCase):
             )
             patch = dataset[0]
 
-        expected = torch.tensor(
-            [[[-1.0, -1.0 / 3.0], [1.0 / 3.0, 1.0]]],
-            dtype=torch.float32,
-        )
+        expected = torch.tensor([[[0.0, 1.0], [2.0, 3.0]]])
         self.assertTrue(torch.allclose(patch, expected))
 
     def test_rejects_num_phases_that_exceed_uint8_range(self):
@@ -243,7 +240,7 @@ class PatchDatasetTest(unittest.TestCase):
             patch = dataset[0]
 
         self.assertEqual(patch.shape, torch.Size([1, 4, 4]))
-        self.assertEqual(sorted(torch.unique(patch).tolist()), [-1.0, 0.0, 1.0])
+        self.assertEqual(sorted(torch.unique(patch).tolist()), [0.0, 1.0, 2.0])
 
 
 if __name__ == "__main__":

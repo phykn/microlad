@@ -56,8 +56,7 @@ class PatchDataset(Dataset):
         if self.augment:
             patch = augment_patch(patch)
 
-        patch = self._scale_phase(patch)
-        return torch.from_numpy(patch.copy()).unsqueeze(0).float()
+        return torch.from_numpy(patch.astype(np.float32, copy=True)).unsqueeze(0)
 
     def _load_image(self, path: Path) -> np.ndarray:
         if self.segment:
@@ -74,5 +73,3 @@ class PatchDataset(Dataset):
                 f"phase image {path} must contain values from 0 to {self.num_phases - 1}."
             )
 
-    def _scale_phase(self, patch: np.ndarray) -> np.ndarray:
-        return patch.astype(np.float32) / (self.num_phases - 1) * 2.0 - 1.0

@@ -207,6 +207,7 @@ class BuildTest(unittest.TestCase):
             image_size=64,
             latent_size=16,
             latent_ch=2,
+            num_phases=5,
             base_ch=8,
             max_ch=16,
         )
@@ -217,6 +218,7 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(vae.image_size, 64)
         self.assertEqual(vae.latent_size, 16)
         self.assertEqual(vae.latent_ch, 2)
+        self.assertEqual(vae.num_phases, 5)
         self.assertEqual(vae.channels, (8, 16, 16))
 
     def test_load_frozen_vae_loads_checkpoint_and_disables_gradients(self):

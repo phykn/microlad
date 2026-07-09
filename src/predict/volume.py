@@ -63,7 +63,7 @@ def decode_latent_volume(
         decoded = _decode_slice(vae, latent[:, :, :, w].unsqueeze(0))
         volume[:, :, w * factor : (w + 1) * factor] += decoded.unsqueeze(2)
 
-    return (volume / 3.0).clamp(-1.0, 1.0).float()
+    return (volume / 3.0).float()
 
 
 def _validate_latent_volume(vae: torch.nn.Module, latent: torch.Tensor) -> None:

@@ -8,7 +8,7 @@ from src.predict.sds.anchor import masked_anchor_loss
 
 class PredictSDSAnchorTest(unittest.TestCase):
     def test_anchor_loss_is_zero_for_matching_images(self):
-        values = torch.tensor([[-1.0, 1.0], [0.0, 0.0]])
+        values = torch.tensor([[0.0, 2.0], [1.0, 1.0]])
         target = values.view(1, 1, 2, 2)
 
         loss, stats = anchor_loss(values, target, num_phases=3, temperature=0.01)

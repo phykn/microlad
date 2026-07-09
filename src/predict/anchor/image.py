@@ -28,8 +28,7 @@ def prepare_anchor_image(
     phase = segment_multi_otsu(image, num_phases) if segment else image
     _validate_phase_image(phase, num_phases)
 
-    scaled = phase.astype(np.float32) / (num_phases - 1) * 2.0 - 1.0
-    return torch.from_numpy(scaled.copy()).unsqueeze(0).unsqueeze(0).float()
+    return torch.from_numpy(phase.astype(np.float32, copy=True)).unsqueeze(0).unsqueeze(0)
 
 
 def _validate_phase_image(phase: np.ndarray, num_phases: int) -> None:
