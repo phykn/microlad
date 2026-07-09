@@ -53,11 +53,13 @@ def write_predictor_run(
 ) -> None:
     vae_args = argparse.Namespace(
         image_size=image_size,
+        crop_size=image_size,
         latent_size=latent_size,
         latent_ch=latent_ch,
         base_ch=4,
         max_ch=8,
         num_phases=2,
+        segment=False,
     )
     diffusion_args = argparse.Namespace(
         base_ch=4,
@@ -370,10 +372,12 @@ class BuildTest(unittest.TestCase):
                 "\n".join(
                     [
                         "image_size: 8",
+                        "crop_size: 8",
                         "latent_size: 4",
                         "latent_ch: 2",
                         "base_ch: 4",
                         "max_ch: 8",
+                        "segment: false",
                     ]
                 ),
                 encoding="utf-8",
@@ -440,7 +444,9 @@ class BuildTest(unittest.TestCase):
             save_run_config(
                 run_dir,
                 argparse.Namespace(
+                    crop_size=128,
                     size=64,
+                    segment=True,
                     latent_ch=2,
                     num_phases=3,
                 ),
@@ -451,7 +457,9 @@ class BuildTest(unittest.TestCase):
             filled = fill_diffusion_defaults_from_run(args)
 
         self.assertIs(filled, args)
+        self.assertEqual(args.crop_size, 128)
         self.assertEqual(args.size, 64)
+        self.assertTrue(args.segment)
         self.assertEqual(args.latent_ch, 2)
         self.assertEqual(args.num_phases, 3)
 
@@ -462,6 +470,8 @@ class BuildTest(unittest.TestCase):
                 run_dir,
                 argparse.Namespace(
                     image_size=40,
+                    crop_size=80,
+                    segment=False,
                     latent_size=10,
                     latent_ch=2,
                     num_phases=3,
@@ -479,7 +489,13 @@ class BuildTest(unittest.TestCase):
             target = Path(tmp) / "diffusion-run"
             save_run_config(
                 source,
-                argparse.Namespace(image_size=64, latent_ch=2, num_phases=3),
+                argparse.Namespace(
+                    image_size=64,
+                    crop_size=128,
+                    segment=False,
+                    latent_ch=2,
+                    num_phases=3,
+                ),
                 name="vae",
             )
             weight = source / "weight" / "vae" / "last" / "model.pt"

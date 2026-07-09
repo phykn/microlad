@@ -33,8 +33,6 @@ def write_config(path: Path, data_dir: Path, vae_run_dir: Path, run_root: Path) 
             [
                 "data:",
                 f"  data_dir: {data_dir.as_posix()}",
-                "  crop_size: 64",
-                "  segment: false",
                 "  augment: false",
                 "  batch_size: 1",
                 "model:",
@@ -63,11 +61,13 @@ def write_config(path: Path, data_dir: Path, vae_run_dir: Path, run_root: Path) 
 def write_vae_run(run_dir: Path) -> None:
     vae_args = argparse.Namespace(
         image_size=64,
+        crop_size=64,
         latent_size=16,
         latent_ch=2,
         base_ch=4,
         max_ch=8,
         num_phases=2,
+        segment=False,
     )
     vae = PatchVAE(
         image_size=vae_args.image_size,
@@ -106,6 +106,9 @@ class RunTrainDiffusionTest(unittest.TestCase):
         args = script.load_config_defaults(script.DEFAULT_CONFIG)
 
         self.assertIsNone(args.get("vae_run_dir"))
+        self.assertNotIn("crop_size", args)
+        self.assertNotIn("size", args)
+        self.assertNotIn("segment", args)
 
     def test_parse_args_loads_diffusion_config(self):
         script = load_script()
@@ -126,7 +129,9 @@ class RunTrainDiffusionTest(unittest.TestCase):
         self.assertEqual(args.data_dir, data_dir.as_posix())
         self.assertEqual(args.vae_run_dir, vae_run_dir.as_posix())
         self.assertEqual(args.run_root, run_root.as_posix())
+        self.assertEqual(args.crop_size, 64)
         self.assertEqual(args.size, 64)
+        self.assertFalse(args.segment)
         self.assertEqual(args.num_phases, 2)
         self.assertEqual(args.latent_ch, 2)
         self.assertEqual(args.timesteps, 4)

@@ -83,6 +83,9 @@ run/<timestamp>/
   then segmented into phase indices from `0` to `num_phases - 1`.
 - If `segment: false`, dataset inputs must already be 2D phase label images
   with integer values from `0` to `num_phases - 1`.
+- Diffusion runs inherit VAE preprocessing fields from `output.vae_run_dir`
+  (`crop_size`, `size`, `segment`, `num_phases`) so the latent dataset matches
+  the frozen VAE.
 
 ## Predict
 

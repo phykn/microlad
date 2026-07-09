@@ -210,7 +210,15 @@ def fill_diffusion_defaults_from_run(args: argparse.Namespace) -> argparse.Names
     vae_size = _require_config_value(vae_config, "vae config", "image_size", "size")
 
     for arg_name, value in (
+        (
+            "crop_size",
+            _require_config_value(vae_config, "vae config", "crop_size"),
+        ),
         ("size", vae_size),
+        (
+            "segment",
+            _require_config_value(vae_config, "vae config", "segment"),
+        ),
         (
             "num_phases",
             _require_config_value(vae_config, "vae config", "num_phases"),
