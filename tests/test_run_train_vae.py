@@ -44,7 +44,6 @@ def write_config(path: Path, data_dir: Path, run_root: Path) -> None:
                 "  max_ch: 8",
                 "loss:",
                 "  beta: 1.0",
-                "  ssim_weight: 0.0",
                 "optimization:",
                 "  lr: 0.0001",
                 "  weight_decay: 0.0",

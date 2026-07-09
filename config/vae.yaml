@@ -15,7 +15,6 @@ model:
 
 loss:
   beta: 1.0
-  ssim_weight: 0.1
 
 optimization:
   lr: 1.0e-4

@@ -438,7 +438,6 @@ def build_vae_trainer(
 ) -> VAETrainer:
     loss_fn = VAELoss(
         beta=args.beta,
-        ssim_weight=args.ssim_weight,
         num_phases=args.num_phases,
     )
     return VAETrainer(

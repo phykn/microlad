@@ -8,5 +8,4 @@ from src.loss.phase import (
     phase_loss,
     phase_target_indices,
 )
-from src.loss.ssim import ssim_loss
 from src.loss.vae import VAELoss, vae_loss

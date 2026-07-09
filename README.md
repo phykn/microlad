@@ -26,6 +26,8 @@ such as `from src.build import load_predictor` resolve.
 - For real training, put images outside the repo or in a folder ignored by your local git exclude, then set `data.data_dir` in the config.
 - Train VAE first, then train diffusion.
 - For local diffusion training, set `output.vae_run_dir` in `config/diffusion.yaml` to the VAE run folder before launching `run_train_diffusion.py`.
+- VAE reconstruction is categorical: the decoder emits `[B, num_phases, H, W]`
+  logits and the VAE loss is `CE(logits, phase_index) + beta * KL`.
 
 ## Train
 
@@ -73,10 +75,12 @@ run/<timestamp>/
 ## Data Shape
 
 - 2D images: `H x W`
-- Dataset output: `[1, H, W]`, float, `-1..1`
+- Dataset output: `[1, H, W]`, float phase indices from `0` to
+  `num_phases - 1`
+- VAE decoder training output: `[num_phases, H, W]` logits
 - VAE latent: `[C, 16, 16]` by default
 - If `segment: true`, dataset inputs are loaded as grayscale `uint8`,
-  segmented into `num_phases`, then scaled to `-1..1`.
+  then segmented into phase indices from `0` to `num_phases - 1`.
 - If `segment: false`, dataset inputs must already be 2D phase label images
   with integer values from `0` to `num_phases - 1`.
 
