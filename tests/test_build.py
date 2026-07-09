@@ -35,7 +35,7 @@ from src.data import PatchDataset
 from src.diffusion import DDPMProcess, TimeUNet
 from src.vae import PatchVAE
 from src.api import PredictOptions, Predictor
-from src.train import DiffusionTrainer, VAETrainer
+from src.training import DiffusionTrainer, VAETrainer
 
 
 def save_image(path: Path, pixels: np.ndarray) -> None:

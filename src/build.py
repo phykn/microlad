@@ -14,8 +14,8 @@ from src.data import PatchDataset
 from src.diffusion import DDPMProcess, DiffusionLoss, TimeUNet
 from src.vae import PatchVAE, VAELoss
 from src.api import Predictor
-from src.train import DiffusionTrainer, VAETrainer
-from src.train.utils import freeze_module
+from src.training import DiffusionTrainer, VAETrainer
+from src.training.runtime import freeze_module
 
 
 IMAGE_EXTENSIONS = {".bmp", ".jpg", ".jpeg", ".png", ".tif", ".tiff"}

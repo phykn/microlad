@@ -4,9 +4,9 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from src.data.augment import augment_patch
-from src.data.crop import crop_square
-from src.data.resize import resize_patch
+from src.data.transforms import augment_patch
+from src.data.transforms import crop_square
+from src.data.transforms import resize_patch
 from src.io import load_image, load_phase_image
 from src.phases.segmentation import segment_multi_otsu
 

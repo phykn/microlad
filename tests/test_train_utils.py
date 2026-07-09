@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import torch
 
-from src.train.utils import next_batch, save_checkpoint, setup_run_dirs
+from src.training.runtime import next_batch, save_checkpoint, setup_run_dirs
 
 
 class SaveCheckpointTest(unittest.TestCase):
@@ -81,7 +81,7 @@ class SaveCheckpointTest(unittest.TestCase):
                     raise RuntimeError("open file failed with error code: 1224")
                 path.write_bytes(b"checkpoint")
 
-            with patch("src.train.utils.torch.save", side_effect=fake_save):
+            with patch("src.training.runtime.torch.save", side_effect=fake_save):
                 save_checkpoint(
                     model=model,
                     optimizer=optimizer,

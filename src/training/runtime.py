@@ -9,7 +9,7 @@ import torch
 from torch import nn
 from torch.utils.tensorboard import SummaryWriter
 
-from src.train.distributed import unwrap_model
+from src.training.distributed import unwrap_model
 
 
 def validate_train_settings(

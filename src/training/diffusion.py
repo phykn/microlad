@@ -5,8 +5,8 @@ import torch
 import torch.nn as nn
 from tqdm.auto import tqdm
 
-from src.train.distributed import is_main_process, unwrap_model
-from src.train.utils import (
+from src.training.distributed import is_main_process, unwrap_model
+from src.training.runtime import (
     freeze_module,
     image_from_batch,
     log_stats,

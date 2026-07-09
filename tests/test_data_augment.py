@@ -3,7 +3,7 @@ from unittest.mock import patch as mock_patch
 
 import numpy as np
 
-from src.data.augment import augment_patch
+from src.data.transforms import augment_patch
 
 
 class DataAugmentTest(unittest.TestCase):
