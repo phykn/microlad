@@ -11,8 +11,7 @@ import yaml
 from torch.nn.parallel import DistributedDataParallel
 
 from src.data import PatchDataset
-from src.loss import DiffusionLoss
-from src.models import DDPM, TimeUNet
+from src.diffusion import DDPMProcess, DiffusionLoss, TimeUNet
 from src.vae import PatchVAE, VAELoss
 from src.predict import Predictor
 from src.train import DiffusionTrainer, VAETrainer
@@ -376,11 +375,11 @@ def build_diffusion_model(args: argparse.Namespace) -> TimeUNet:
     )
 
 
-def build_ddpm(
+def build_diffusion_process(
     args: argparse.Namespace,
     device: torch.device,
-) -> DDPM:
-    return DDPM(
+) -> DDPMProcess:
+    return DDPMProcess(
         timesteps=args.timesteps,
         beta_start=args.beta_start,
         beta_end=args.beta_end,
@@ -413,7 +412,7 @@ def build_predictor_from_run(
     return Predictor(
         vae=load_frozen_vae_from_run(run_dir, device=device),
         diffusion_model=load_frozen_diffusion_model(args, device=device),
-        ddpm=build_ddpm(args, device=device),
+        ddpm=build_diffusion_process(args, device=device),
         device=device,
     )
 
@@ -474,7 +473,7 @@ def build_diffusion_trainer(
         model=model,
         vae=vae,
         dataloader=loader,
-        loss_fn=DiffusionLoss(build_ddpm(args, device=device)),
+        loss_fn=DiffusionLoss(build_diffusion_process(args, device=device)),
         optimizer=optimizer,
         steps=args.steps,
         device=device,

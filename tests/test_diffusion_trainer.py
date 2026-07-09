@@ -5,8 +5,7 @@ from unittest.mock import patch
 
 import torch
 
-from src.loss import DiffusionLoss
-from src.models import DDPM
+from src.diffusion import DDPMProcess, DiffusionLoss
 from src.train import DiffusionTrainer
 from src.train.distributed import unwrap_model
 
@@ -82,7 +81,7 @@ class DiffusionTrainerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             vae = TinyVAE()
             model = TinyDenoiser()
-            loss_fn = DiffusionLoss(DDPM(timesteps=4))
+            loss_fn = DiffusionLoss(DDPMProcess(timesteps=4))
             optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
             trainer = DiffusionTrainer(
                 model=model,
@@ -138,7 +137,7 @@ class DiffusionTrainerTest(unittest.TestCase):
                 model=model,
                 vae=vae,
                 dataloader=infinite_batches(),
-                loss_fn=DiffusionLoss(DDPM(timesteps=4)),
+                loss_fn=DiffusionLoss(DDPMProcess(timesteps=4)),
                 optimizer=optimizer,
                 steps=1,
                 device="cpu",
@@ -238,7 +237,7 @@ class DiffusionTrainerTest(unittest.TestCase):
         dataloader=None,
     ) -> DiffusionTrainer:
         model = TinyDenoiser()
-        loss_fn = DiffusionLoss(DDPM(timesteps=4))
+        loss_fn = DiffusionLoss(DDPMProcess(timesteps=4))
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
         return DiffusionTrainer(
             model=model,

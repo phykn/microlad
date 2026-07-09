@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.models import DDPM
+from src.diffusion import DDPMProcess
 from src.predict.sds import sds_loss
 
 
@@ -19,7 +19,7 @@ class ConstantNoiseModel(torch.nn.Module):
 
 class PredictSDSCoreTest(unittest.TestCase):
     def test_sds_loss_uses_sds_gradient_direction(self):
-        ddpm = DDPM(timesteps=4, beta_start=0.1, beta_end=0.2)
+        ddpm = DDPMProcess(timesteps=4, beta_start=0.1, beta_end=0.2)
         model = ConstantNoiseModel(value=0.25)
         latent = torch.full((1, 1, 2, 2), 0.5, requires_grad=True)
         noise = torch.full_like(latent, 1.25)
@@ -41,7 +41,7 @@ class PredictSDSCoreTest(unittest.TestCase):
         self.assertTrue(torch.allclose(stats["sds"], expected.detach()))
 
     def test_sds_loss_gradient_sign_matches_sds_direction(self):
-        ddpm = DDPM(timesteps=4, beta_start=0.1, beta_end=0.2)
+        ddpm = DDPMProcess(timesteps=4, beta_start=0.1, beta_end=0.2)
         model = ConstantNoiseModel(value=0.25)
         latent = torch.full((1, 1, 2, 2), 0.5, requires_grad=True)
         noise = torch.full_like(latent, 1.25)
@@ -64,7 +64,7 @@ class PredictSDSCoreTest(unittest.TestCase):
         self.assertTrue(torch.all(latent.detach() - latent.grad > latent.detach()))
 
     def test_sds_loss_does_not_backpropagate_through_model(self):
-        ddpm = DDPM(timesteps=4)
+        ddpm = DDPMProcess(timesteps=4)
         model = ConstantNoiseModel(value=0.0)
         latent = torch.randn(1, 1, 2, 2, requires_grad=True)
 
@@ -76,7 +76,7 @@ class PredictSDSCoreTest(unittest.TestCase):
         self.assertEqual(model.grad_enabled, [False])
 
     def test_sds_loss_samples_timesteps_inside_requested_range(self):
-        ddpm = DDPM(timesteps=8)
+        ddpm = DDPMProcess(timesteps=8)
         model = ConstantNoiseModel(value=0.0)
         latent = torch.randn(4, 1, 2, 2, requires_grad=True)
 
@@ -86,7 +86,7 @@ class PredictSDSCoreTest(unittest.TestCase):
         self.assertLess(int(stats["t"].max()), 5)
 
     def test_sds_loss_rejects_invalid_inputs(self):
-        ddpm = DDPM(timesteps=4)
+        ddpm = DDPMProcess(timesteps=4)
         model = ConstantNoiseModel(value=0.0)
 
         with self.assertRaisesRegex(ValueError, "latent"):
@@ -108,7 +108,7 @@ class PredictSDSCoreTest(unittest.TestCase):
             )
 
     def test_sds_loss_rejects_non_finite_values(self):
-        ddpm = DDPM(timesteps=4)
+        ddpm = DDPMProcess(timesteps=4)
         valid_latent = torch.zeros(1, 1, 2, 2)
         valid_noise = torch.zeros_like(valid_latent)
         valid_t = torch.tensor([1], dtype=torch.long)

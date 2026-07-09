@@ -1,4 +1,4 @@
-from src.loss.diffusion import DiffusionLoss, diffusion_loss
+from src.diffusion.objective import DiffusionLoss, diffusion_loss
 from src.phases import (
     logits_to_relaxed_labels,
     phase_cross_entropy,

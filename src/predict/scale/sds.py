@@ -3,7 +3,7 @@ from collections.abc import Mapping, Sequence
 
 import torch
 
-from src.models import DDPM
+from src.diffusion import DDPMProcess
 from src.predict.blend import blend_window
 from src.predict.slices import (
     extract_slice,
@@ -26,7 +26,7 @@ def optimize_large_volume(
     volume: torch.Tensor,
     vae: torch.nn.Module,
     diffusion_model: torch.nn.Module,
-    ddpm: DDPM,
+    ddpm: DDPMProcess,
     *,
     steps: int,
     slice_steps: int,
@@ -202,7 +202,7 @@ def _optimize_large_slice(
     image: torch.Tensor,
     vae: torch.nn.Module,
     diffusion_model: torch.nn.Module,
-    ddpm: DDPM,
+    ddpm: DDPMProcess,
     *,
     steps: int,
     lr: float,
@@ -305,7 +305,7 @@ def _optimize_large_slice_batch(
     images: torch.Tensor,
     vae: torch.nn.Module,
     diffusion_model: torch.nn.Module,
-    ddpm: DDPM,
+    ddpm: DDPMProcess,
     *,
     steps: int,
     lr: float,
@@ -416,7 +416,7 @@ def _local_prior_objective(
     image: torch.Tensor,
     vae: torch.nn.Module,
     diffusion_model: torch.nn.Module,
-    ddpm: DDPM,
+    ddpm: DDPMProcess,
     *,
     t_min: int,
     t_max: int,
@@ -547,7 +547,7 @@ def _local_prior_objective_batch(
     images: torch.Tensor,
     vae: torch.nn.Module,
     diffusion_model: torch.nn.Module,
-    ddpm: DDPM,
+    ddpm: DDPMProcess,
     *,
     t_min: int,
     t_max: int,

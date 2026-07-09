@@ -1,6 +1,6 @@
 import torch
 
-from src.models.ddpm import DDPM
+from src.diffusion import DDPMProcess
 from src.predict.sds.core import sds_loss
 from tests.math_audit.helpers import cosine_similarity
 
@@ -19,7 +19,7 @@ class ConstantPrediction(torch.nn.Module):
 
 
 def test_current_sds_gradient_is_parallel_to_paper_pseudogradient():
-    ddpm = DDPM(timesteps=4, beta_start=0.1, beta_end=0.2)
+    ddpm = DDPMProcess(timesteps=4, beta_start=0.1, beta_end=0.2)
     latent = torch.full((1, 1, 2, 2), 0.5, requires_grad=True)
     noise = torch.full_like(latent, 1.25)
     timestep = torch.tensor([2], dtype=torch.long)

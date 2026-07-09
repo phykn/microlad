@@ -1,1 +1,1 @@
-from src.predict.sampler.diffusion import DiffusionSampler
+from src.diffusion.sampler import DiffusionSampler

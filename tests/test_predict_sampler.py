@@ -3,8 +3,7 @@ from unittest.mock import patch
 
 import torch
 
-from src.models import DDPM
-from src.predict.sampler import DiffusionSampler
+from src.diffusion import DDPMProcess, DiffusionSampler
 
 
 class RecordingDenoiser(torch.nn.Module):
@@ -41,7 +40,7 @@ class IdentityDDPM:
 class PredictSamplerTest(unittest.TestCase):
     def test_sample_returns_requested_latent_shape(self):
         model = RecordingDenoiser()
-        sampler = DiffusionSampler(model, DDPM(timesteps=4), device="cpu")
+        sampler = DiffusionSampler(model, DDPMProcess(timesteps=4), device="cpu")
 
         latent = sampler.sample((2, 3, 4, 4))
 
@@ -50,7 +49,7 @@ class PredictSamplerTest(unittest.TestCase):
 
     def test_sample_runs_without_gradients(self):
         model = GradCheckDenoiser()
-        sampler = DiffusionSampler(model, DDPM(timesteps=2), device="cpu")
+        sampler = DiffusionSampler(model, DDPMProcess(timesteps=2), device="cpu")
 
         latent = sampler.sample((1, 1, 4, 4))
 
@@ -58,7 +57,7 @@ class PredictSamplerTest(unittest.TestCase):
         self.assertEqual(model.grad_enabled, [False, False])
 
     def test_sample_rejects_invalid_shape(self):
-        sampler = DiffusionSampler(RecordingDenoiser(), DDPM(timesteps=2), device="cpu")
+        sampler = DiffusionSampler(RecordingDenoiser(), DDPMProcess(timesteps=2), device="cpu")
 
         with self.assertRaisesRegex(ValueError, "shape"):
             sampler.sample((1, 4, 4))
@@ -147,7 +146,7 @@ class PredictSamplerTest(unittest.TestCase):
         self.assertTrue(torch.equal(latent[0], torch.zeros(1, 2, 2)))
 
     def test_sample_lmpdd_rejects_non_cubic_latent_shape(self):
-        sampler = DiffusionSampler(RecordingDenoiser(), DDPM(timesteps=2), device="cpu")
+        sampler = DiffusionSampler(RecordingDenoiser(), DDPMProcess(timesteps=2), device="cpu")
 
         with self.assertRaisesRegex(ValueError, "cubic"):
             sampler.sample_lmpdd((2, 1, 3, 2))

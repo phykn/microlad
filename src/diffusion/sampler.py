@@ -2,7 +2,7 @@ from collections.abc import Sequence
 
 import torch
 
-from src.models import DDPM
+from src.diffusion.process import DDPMProcess
 from src.tensors.validation import validate_finite_tensor
 
 
@@ -10,7 +10,7 @@ class DiffusionSampler:
     def __init__(
         self,
         model: torch.nn.Module,
-        ddpm: DDPM,
+        ddpm: DDPMProcess,
         device: str | torch.device,
     ) -> None:
         self.device = torch.device(device)

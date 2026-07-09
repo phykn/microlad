@@ -11,7 +11,7 @@ import torch
 
 from src.build import (
     build_dataset,
-    build_ddpm,
+    build_diffusion_process,
     build_diffusion_model,
     build_predictor_from_run,
     build_diffusion_trainer,
@@ -32,7 +32,8 @@ from src.build import (
     wrap_distributed,
 )
 from src.data import PatchDataset
-from src.models import DDPM, PatchVAE, TimeUNet
+from src.diffusion import DDPMProcess, TimeUNet
+from src.vae import PatchVAE
 from src.predict import PredictOptions, Predictor
 from src.train import DiffusionTrainer, VAETrainer
 
@@ -514,9 +515,9 @@ class BuildTest(unittest.TestCase):
     def test_build_ddpm_uses_diffusion_config(self):
         args = argparse.Namespace(timesteps=8, beta_start=0.01, beta_end=0.02)
 
-        ddpm = build_ddpm(args, device=torch.device("cpu"))
+        ddpm = build_diffusion_process(args, device=torch.device("cpu"))
 
-        self.assertIsInstance(ddpm, DDPM)
+        self.assertIsInstance(ddpm, DDPMProcess)
         self.assertEqual(ddpm.num_timesteps, 8)
         self.assertTrue(torch.allclose(ddpm.betas[0], torch.tensor(0.01)))
         self.assertTrue(torch.allclose(ddpm.betas[-1], torch.tensor(0.02)))

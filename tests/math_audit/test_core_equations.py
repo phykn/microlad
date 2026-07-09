@@ -2,7 +2,7 @@ import torch
 
 from src.phases import logits_to_relaxed_labels, phase_logits
 from src.vae import kl_divergence
-from src.models.ddpm import DDPM
+from src.diffusion import DDPMProcess
 from src.predict.sds.phase import soft_phase_probability
 
 
@@ -66,7 +66,7 @@ def test_scalar_phase_expectation_can_turn_bimodal_uncertainty_into_other_phase(
 
 
 def test_q_sample_matches_closed_form():
-    ddpm = DDPM(timesteps=4, beta_start=0.1, beta_end=0.2)
+    ddpm = DDPMProcess(timesteps=4, beta_start=0.1, beta_end=0.2)
     clean = torch.tensor([[[[2.0]]]])
     noise = torch.tensor([[[[-0.5]]]])
     timestep = torch.tensor([2], dtype=torch.long)
@@ -81,7 +81,7 @@ def test_q_sample_matches_closed_form():
 
 
 def test_p_mean_matches_epsilon_parameterization():
-    ddpm = DDPM(timesteps=4, beta_start=0.1, beta_end=0.2)
+    ddpm = DDPMProcess(timesteps=4, beta_start=0.1, beta_end=0.2)
     noisy = torch.tensor([[[[0.75]]]])
     predicted_noise = torch.tensor([[[[-0.25]]]])
     timestep = torch.tensor([2], dtype=torch.long)

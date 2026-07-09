@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import torch
 
-from src.models import DDPM
+from src.diffusion import DDPMProcess
 from src.predict import AnchorSlice
 from src.predict.blend import blend_window
 from src.predict.scale import optimize_large_volume
@@ -99,7 +99,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             torch.zeros(4, 4, 4) if volume is None else volume,
             kwargs.pop("vae", IdentityVAE()),
             kwargs.pop("diffusion_model", ZeroNoiseModel()),
-            kwargs.pop("ddpm", DDPM(timesteps=4)),
+            kwargs.pop("ddpm", DDPMProcess(timesteps=4)),
             **kwargs,
         )
 
@@ -115,7 +115,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             volume,
             IdentityVAE(),
             ZeroNoiseModel(),
-            DDPM(timesteps=4),
+            DDPMProcess(timesteps=4),
             steps=1,
             slice_steps=1,
             lr=0.1,
@@ -142,7 +142,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             volume,
             ShiftDecodeVAE(),
             ZeroNoiseModel(),
-            DDPM(timesteps=4),
+            DDPMProcess(timesteps=4),
             steps=1,
             slice_steps=0,
             lr=0.1,
@@ -167,7 +167,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             torch.zeros(4, 4, 4),
             IdentityVAE(),
             ZeroNoiseModel(),
-            DDPM(timesteps=4),
+            DDPMProcess(timesteps=4),
             steps=1,
             slice_steps=1,
             lr=0.1,
@@ -191,7 +191,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             torch.zeros(4, 4, 4),
             IdentityVAE(),
             ZeroNoiseModel(),
-            DDPM(timesteps=4),
+            DDPMProcess(timesteps=4),
             steps=1,
             slice_steps=2,
             lr=0.5,
@@ -217,7 +217,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             torch.zeros(4, 4, 4),
             IdentityVAE(),
             model,
-            DDPM(timesteps=4),
+            DDPMProcess(timesteps=4),
             steps=1,
             slice_steps=1,
             sds_batch_size=2,
@@ -288,7 +288,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             torch.zeros(4, 4),
             IdentityVAE(),
             ZeroNoiseModel(),
-            DDPM(timesteps=4),
+            DDPMProcess(timesteps=4),
             t_min=1,
             t_max=3,
             num_phases=2,
@@ -315,7 +315,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             images,
             IdentityVAE(),
             ZeroNoiseModel(),
-            DDPM(timesteps=4),
+            DDPMProcess(timesteps=4),
             t_min=1,
             t_max=3,
             num_phases=2,
@@ -340,7 +340,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             images[0],
             IdentityVAE(),
             ZeroNoiseModel(),
-            DDPM(timesteps=4),
+            DDPMProcess(timesteps=4),
             t_min=1,
             t_max=3,
             num_phases=2,
@@ -354,7 +354,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             images,
             IdentityVAE(),
             ZeroNoiseModel(),
-            DDPM(timesteps=4),
+            DDPMProcess(timesteps=4),
             t_min=1,
             t_max=3,
             num_phases=2,
@@ -376,7 +376,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             torch.zeros(4, 4),
             vae,
             ZeroNoiseModel(),
-            DDPM(timesteps=4),
+            DDPMProcess(timesteps=4),
             t_min=1,
             t_max=3,
             num_phases=2,
@@ -400,7 +400,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             torch.zeros(2, 4, 4),
             vae,
             ZeroNoiseModel(),
-            DDPM(timesteps=4),
+            DDPMProcess(timesteps=4),
             t_min=1,
             t_max=3,
             num_phases=2,

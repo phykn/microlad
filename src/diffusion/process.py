@@ -11,7 +11,7 @@ SCHEDULE_TENSORS = (
 )
 
 
-class DDPM:
+class DDPMProcess:
     def __init__(
         self,
         timesteps: int = 1000,
@@ -141,4 +141,4 @@ class DDPM:
             raise ValueError("timesteps must be integer tensors.")
 
         if t.min().item() < 0 or t.max().item() >= self.num_timesteps:
-            raise ValueError("timestep values must be within the DDPM schedule.")
+            raise ValueError("timestep values must be within the DDPMProcess schedule.")

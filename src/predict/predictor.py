@@ -5,7 +5,7 @@ import torch
 
 from src.phases.quantization import quantize_phase
 from src.predict.refine import three_axis_refinement
-from src.predict.sampler import DiffusionSampler
+from src.diffusion import DiffusionSampler
 from src.predict.anchor import validate_anchors
 from src.predict.anchor.latent import prepare_anchor_latents
 from src.predict.scale import (
@@ -626,7 +626,7 @@ class Predictor:
             raise ValueError("sds_t_max must be greater than sds_t_min.")
 
         if t_max > int(self.ddpm.num_timesteps):
-            raise ValueError("sds_t_max must be at most the DDPM schedule length.")
+            raise ValueError("sds_t_max must be at most the DDPMProcess schedule length.")
 
         return t_max
 

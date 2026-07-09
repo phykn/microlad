@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 
 import torch
 
-from src.models import DDPM
+from src.diffusion import DDPMProcess
 from src.predict.slices import (
     extract_slice,
     extract_slice_batch,
@@ -23,7 +23,7 @@ def optimize_volume(
     volume: torch.Tensor,
     vae: torch.nn.Module,
     diffusion_model: torch.nn.Module,
-    ddpm: DDPM,
+    ddpm: DDPMProcess,
     *,
     steps: int,
     slice_steps: int,
@@ -179,7 +179,7 @@ def optimize_slice(
     volume: torch.Tensor,
     vae: torch.nn.Module,
     diffusion_model: torch.nn.Module,
-    ddpm: DDPM,
+    ddpm: DDPMProcess,
     *,
     axis: int,
     index: int,
@@ -292,7 +292,7 @@ def _optimize_slice_batch(
     volume: torch.Tensor,
     vae: torch.nn.Module,
     diffusion_model: torch.nn.Module,
-    ddpm: DDPM,
+    ddpm: DDPMProcess,
     *,
     axis: int,
     indices: Sequence[int],
@@ -383,7 +383,7 @@ def _objective(
     latent: torch.Tensor,
     decoded: torch.Tensor,
     diffusion_model: torch.nn.Module,
-    ddpm: DDPM,
+    ddpm: DDPMProcess,
     *,
     t_min: int,
     t_max: int,
@@ -450,7 +450,7 @@ def _objective_batch(
     latent: torch.Tensor,
     decoded: torch.Tensor,
     diffusion_model: torch.nn.Module,
-    ddpm: DDPM,
+    ddpm: DDPMProcess,
     *,
     t_min: int,
     t_max: int,

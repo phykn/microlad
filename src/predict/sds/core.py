@@ -1,13 +1,13 @@
 import torch
 
-from src.models import DDPM
+from src.diffusion import DDPMProcess
 from src.tensors.validation import validate_finite_tensor
 
 
 def sds_loss(
     latent: torch.Tensor,
     model: torch.nn.Module,
-    ddpm: DDPM,
+    ddpm: DDPMProcess,
     *,
     t_min: int,
     t_max: int,
@@ -60,7 +60,7 @@ def sds_loss(
     return loss, {"sds": loss.detach(), "t": t.detach()}
 
 
-def _validate_timestep_range(ddpm: DDPM, t_min: int, t_max: int) -> None:
+def _validate_timestep_range(ddpm: DDPMProcess, t_min: int, t_max: int) -> None:
     if t_min < 0 or t_max > ddpm.num_timesteps or t_min >= t_max:
         raise ValueError(
             "timestep range must satisfy 0 <= t_min < t_max <= num_timesteps."

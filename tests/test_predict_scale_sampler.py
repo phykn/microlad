@@ -5,7 +5,7 @@ import torch
 
 from src.predict.blend import blend_window
 from src.predict.scale.denoise import denoise_tiled_plane
-from src.predict.sampler import DiffusionSampler
+from src.diffusion import DiffusionSampler
 from src.predict.scale.sampler import sample_large_lmpdd
 from src.predict.scale.tiles import tile_grid
 

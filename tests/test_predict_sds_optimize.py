@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from src.models import DDPM
+from src.diffusion import DDPMProcess
 from src.predict import AnchorSlice
 from src.predict.sds import DiffusivitySolver, optimize_slice, optimize_volume
 from src.predict.sds.optimize import _objective, _objective_batch
@@ -64,7 +64,7 @@ class PredictSDSOptimizeTest(unittest.TestCase):
         volume = torch.zeros(4, 4, 4)
         vae = IdentityVAE()
         model = ZeroNoiseModel()
-        ddpm = DDPM(timesteps=4)
+        ddpm = DDPMProcess(timesteps=4)
 
         updated, stats = optimize_slice(
             volume,
@@ -96,7 +96,7 @@ class PredictSDSOptimizeTest(unittest.TestCase):
         volume = torch.zeros(4, 4, 4)
         vae = IdentityVAE()
         model = ZeroNoiseModel()
-        ddpm = DDPM(timesteps=4)
+        ddpm = DDPMProcess(timesteps=4)
         anchor_target = torch.ones(1, 1, 4, 4)
 
         updated, stats = optimize_slice(
@@ -125,7 +125,7 @@ class PredictSDSOptimizeTest(unittest.TestCase):
         volume = torch.zeros(4, 4, 4)
         vae = IdentityVAE()
         model = ZeroNoiseModel()
-        ddpm = DDPM(timesteps=4)
+        ddpm = DDPMProcess(timesteps=4)
         diffusivity_solver = DiffusivitySolver(height=2, width=2, low_cond=0.1)
 
         updated, stats = optimize_slice(
@@ -164,7 +164,7 @@ class PredictSDSOptimizeTest(unittest.TestCase):
                 torch.zeros(4, 4, 4),
                 NonFiniteEncodeVAE(),
                 ZeroNoiseModel(),
-                DDPM(timesteps=4),
+                DDPMProcess(timesteps=4),
                 axis=0,
                 index=0,
                 steps=1,
@@ -181,7 +181,7 @@ class PredictSDSOptimizeTest(unittest.TestCase):
                 torch.zeros(4, 4, 4),
                 NonFiniteFinalDecodeVAE(),
                 ZeroNoiseModel(),
-                DDPM(timesteps=4),
+                DDPMProcess(timesteps=4),
                 axis=0,
                 index=0,
                 steps=1,
@@ -200,7 +200,7 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
                 torch.empty(0, 4, 4),
                 IdentityVAE(),
                 ZeroNoiseModel(),
-                DDPM(timesteps=4),
+                DDPMProcess(timesteps=4),
                 steps=1,
                 slice_steps=0,
                 lr=0.1,
@@ -215,7 +215,7 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
             volume=volume,
             vae=IdentityVAE(),
             diffusion_model=ZeroNoiseModel(),
-            ddpm=DDPM(timesteps=4),
+            ddpm=DDPMProcess(timesteps=4),
             steps=0,
             slice_steps=0,
             t_min=1,
@@ -236,7 +236,7 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
         volume = torch.zeros(4, 4, 4)
         vae = IdentityVAE()
         model = ZeroNoiseModel()
-        ddpm = DDPM(timesteps=4)
+        ddpm = DDPMProcess(timesteps=4)
 
         updated, stats = optimize_volume(
             volume,
@@ -266,7 +266,7 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
         volume = torch.zeros(4, 4, 4)
         vae = IdentityVAE()
         model = RecordingNoiseModel()
-        ddpm = DDPM(timesteps=4)
+        ddpm = DDPMProcess(timesteps=4)
 
         updated, stats = optimize_volume(
             volume,
@@ -301,7 +301,7 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
             latent,
             decoded,
             ZeroNoiseModel(),
-            DDPM(timesteps=4),
+            DDPMProcess(timesteps=4),
             t_min=1,
             t_max=3,
             num_phases=2,
@@ -334,7 +334,7 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
             latent[:1],
             decoded[0],
             ZeroNoiseModel(),
-            DDPM(timesteps=4),
+            DDPMProcess(timesteps=4),
             t_min=1,
             t_max=3,
             num_phases=2,
@@ -358,7 +358,7 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
             latent,
             decoded,
             ZeroNoiseModel(),
-            DDPM(timesteps=4),
+            DDPMProcess(timesteps=4),
             t_min=1,
             t_max=3,
             num_phases=2,
@@ -388,7 +388,7 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
                 torch.zeros(4, 4, 4),
                 IdentityVAE(),
                 ZeroNoiseModel(),
-                DDPM(timesteps=4),
+                DDPMProcess(timesteps=4),
                 steps=1,
                 slice_steps=1,
                 sds_batch_size=2,
@@ -403,7 +403,7 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
         volume = torch.zeros(4, 4, 4)
         vae = IdentityVAE()
         model = ZeroNoiseModel()
-        ddpm = DDPM(timesteps=4)
+        ddpm = DDPMProcess(timesteps=4)
         anchor = AnchorSlice(
             image=np.ones((4, 4), dtype=np.uint8),
             axis=0,
@@ -438,7 +438,7 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
                 torch.zeros(4, 4, 4),
                 NonFiniteEncodeVAE(),
                 ZeroNoiseModel(),
-                DDPM(timesteps=4),
+                DDPMProcess(timesteps=4),
                 steps=1,
                 slice_steps=1,
                 sds_batch_size=2,
@@ -456,7 +456,7 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
                 torch.zeros(4, 4, 4),
                 NonFiniteFinalDecodeVAE(),
                 ZeroNoiseModel(),
-                DDPM(timesteps=4),
+                DDPMProcess(timesteps=4),
                 steps=1,
                 slice_steps=1,
                 sds_batch_size=2,

@@ -2,12 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.models import DDPM
+from src.diffusion.process import DDPMProcess
 
 
 def diffusion_loss(
     model: nn.Module,
-    ddpm: DDPM,
+    ddpm: DDPMProcess,
     clean_latent: torch.Tensor,
     t: torch.Tensor | None = None,
     noise: torch.Tensor | None = None,
@@ -40,7 +40,7 @@ def diffusion_loss(
 
 
 class DiffusionLoss(nn.Module):
-    def __init__(self, ddpm: DDPM) -> None:
+    def __init__(self, ddpm: DDPMProcess) -> None:
         super().__init__()
         self.ddpm = ddpm
 

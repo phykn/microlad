@@ -2,12 +2,12 @@ import unittest
 
 import torch
 
-from src.models import DDPM, TimeUNet
+from src.diffusion import DDPMProcess, TimeUNet
 
 
 class DDPMTest(unittest.TestCase):
     def test_q_sample_uses_closed_form_noise_formula(self):
-        ddpm = DDPM(timesteps=4, beta_start=0.1, beta_end=0.2)
+        ddpm = DDPMProcess(timesteps=4, beta_start=0.1, beta_end=0.2)
         x_start = torch.ones(2, 3, 4, 4)
         noise = torch.full_like(x_start, 2.0)
         t = torch.tensor([0, 3], dtype=torch.long)
@@ -21,7 +21,7 @@ class DDPMTest(unittest.TestCase):
         self.assertTrue(torch.allclose(noisy, expected))
 
     def test_add_noise_matches_q_sample(self):
-        ddpm = DDPM(timesteps=4)
+        ddpm = DDPMProcess(timesteps=4)
         x_start = torch.randn(2, 3, 4, 4)
         noise = torch.randn_like(x_start)
         t = torch.tensor([1, 2], dtype=torch.long)
@@ -34,7 +34,7 @@ class DDPMTest(unittest.TestCase):
         )
 
     def test_sample_timesteps_returns_integer_batch(self):
-        ddpm = DDPM(timesteps=8)
+        ddpm = DDPMProcess(timesteps=8)
 
         t = ddpm.sample_timesteps(batch_size=5)
 
@@ -48,7 +48,7 @@ class DDPMTest(unittest.TestCase):
             def forward(self, x, t):
                 return torch.zeros_like(x)
 
-        ddpm = DDPM(timesteps=4)
+        ddpm = DDPMProcess(timesteps=4)
         x = torch.randn(2, 3, 4, 4)
         t = torch.tensor([0, 2], dtype=torch.long)
 
@@ -61,7 +61,7 @@ class DDPMTest(unittest.TestCase):
             def forward(self, x, t):
                 return torch.full_like(x, 0.25)
 
-        ddpm = DDPM(timesteps=4, beta_start=0.1, beta_end=0.2)
+        ddpm = DDPMProcess(timesteps=4, beta_start=0.1, beta_end=0.2)
         x = torch.full((2, 3, 4, 4), 0.5)
         t = torch.tensor([0, 2], dtype=torch.long)
 
@@ -74,7 +74,7 @@ class DDPMTest(unittest.TestCase):
         self.assertTrue(torch.allclose(mean, expected))
 
     def test_rejects_invalid_timesteps(self):
-        ddpm = DDPM(timesteps=4)
+        ddpm = DDPMProcess(timesteps=4)
         x = torch.randn(2, 3, 4, 4)
 
         with self.assertRaisesRegex(ValueError, "shape"):
@@ -85,7 +85,7 @@ class DDPMTest(unittest.TestCase):
             ddpm.q_sample(x, torch.tensor([0, 4], dtype=torch.long))
 
     def test_rejects_empty_batch_timesteps(self):
-        ddpm = DDPM(timesteps=4)
+        ddpm = DDPMProcess(timesteps=4)
         empty = torch.empty(0, 3, 4, 4)
         t = torch.empty(0, dtype=torch.long)
 
