@@ -131,14 +131,23 @@ class ImageLoaderTest(unittest.TestCase):
 
         np.testing.assert_array_equal(loaded, np.array([[0, 1]], dtype=np.uint8))
 
-    def test_load_phase_image_rejects_rgb_images(self):
+    def test_load_phase_image_uses_first_channel_of_rgb_images(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rgb.png"
-            pixels = np.zeros((2, 2, 3), dtype=np.uint8)
+            first_channel = np.array([[0, 1], [2, 1]], dtype=np.uint8)
+            pixels = np.stack(
+                [
+                    first_channel,
+                    np.full_like(first_channel, 17),
+                    np.full_like(first_channel, 29),
+                ],
+                axis=-1,
+            )
             Image.fromarray(pixels, mode="RGB").save(path)
 
-            with self.assertRaisesRegex(ValueError, "2D"):
-                load_phase_image(path)
+            loaded = load_phase_image(path)
+
+        np.testing.assert_array_equal(loaded, first_channel)
 
     def test_load_phase_image_rejects_non_integer_float_values(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -20,6 +20,9 @@ def load_phase_image(path: str | Path) -> np.ndarray:
     with Image.open(Path(path)) as image:
         array = np.asarray(image)
 
+    if array.ndim == 3:
+        array = array[:, :, 0]
+
     if array.ndim != 2:
         raise ValueError("phase image must be a 2D label image.")
 
