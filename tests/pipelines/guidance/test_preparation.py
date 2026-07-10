@@ -21,7 +21,7 @@ class ShiftDecodeVAE(torch.nn.Module):
 
 
 class PredictSDSCommonTest(unittest.TestCase):
-    def test_prepare_anchor_targets_uses_vae_reconstruction(self):
+    def test_build_anchor_targets_uses_vae_reconstruction(self):
         anchor = AnchorSlice(
             image=np.array([[0, 1], [1, 0]], dtype=np.uint8),
             axis=0,
@@ -42,7 +42,7 @@ class PredictSDSCommonTest(unittest.TestCase):
         expected = raw + 0.25
         self.assertTrue(torch.allclose(targets[(0, 1)][0, 0], expected))
 
-    def test_prepare_anchor_targets_rejects_non_floating_dtype(self):
+    def test_build_anchor_targets_rejects_non_floating_dtype(self):
         anchors = [
             AnchorSlice(
                 image=np.array([[0, 1], [2, 3]], dtype=np.uint8),

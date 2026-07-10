@@ -127,7 +127,7 @@ class PredictAnchorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Duplicate"):
             validate_anchors(anchors, volume_shape=(4, 5, 6))
 
-    def test_prepare_anchor_latents_maps_axis_zero(self):
+    def test_encode_anchors_maps_axis_zero(self):
         anchor = AnchorSlice(image=np.ones((2, 2), dtype=np.uint8), axis=0, index=1)
 
         latent, mask = encode_anchors(
@@ -142,7 +142,7 @@ class PredictAnchorTest(unittest.TestCase):
         self.assertTrue(torch.equal(mask[1], torch.ones(1, 2, 2)))
         self.assertTrue(torch.equal(mask[0], torch.zeros(1, 2, 2)))
 
-    def test_prepare_anchor_latents_rejects_same_latent_plane_collision(self):
+    def test_encode_anchors_rejects_same_latent_plane_collision(self):
         anchors = [
             AnchorSlice(image=np.zeros((4, 4), dtype=np.uint8), axis=0, index=0),
             AnchorSlice(image=np.ones((4, 4), dtype=np.uint8), axis=0, index=1),
@@ -157,7 +157,7 @@ class PredictAnchorTest(unittest.TestCase):
                 device=torch.device("cpu"),
             )
 
-    def test_prepare_anchor_latents_maps_axis_one(self):
+    def test_encode_anchors_maps_axis_one(self):
         anchor = AnchorSlice(image=np.ones((2, 2), dtype=np.uint8), axis=1, index=1)
 
         latent, mask = encode_anchors(
@@ -172,7 +172,7 @@ class PredictAnchorTest(unittest.TestCase):
         self.assertTrue(torch.equal(mask[:, :, 1, :], torch.ones(2, 1, 2)))
         self.assertTrue(torch.equal(mask[:, :, 0, :], torch.zeros(2, 1, 2)))
 
-    def test_prepare_anchor_latents_maps_axis_two(self):
+    def test_encode_anchors_maps_axis_two(self):
         anchor = AnchorSlice(image=np.ones((2, 2), dtype=np.uint8), axis=2, index=1)
 
         latent, mask = encode_anchors(
@@ -187,7 +187,7 @@ class PredictAnchorTest(unittest.TestCase):
         self.assertTrue(torch.equal(mask[:, :, :, 1], torch.ones(2, 1, 2)))
         self.assertTrue(torch.equal(mask[:, :, :, 0], torch.zeros(2, 1, 2)))
 
-    def test_prepare_anchor_latents_rejects_invalid_axis_directly(self):
+    def test_encode_anchors_rejects_invalid_axis_directly(self):
         anchor = AnchorSlice(
             image=np.ones((2, 2), dtype=np.uint8),
             axis=3,
@@ -203,7 +203,7 @@ class PredictAnchorTest(unittest.TestCase):
                 device=torch.device("cpu"),
             )
 
-    def test_prepare_anchor_latents_rejects_invalid_index_directly(self):
+    def test_encode_anchors_rejects_invalid_index_directly(self):
         anchor = AnchorSlice(
             image=np.ones((2, 2), dtype=np.uint8),
             axis=0,
@@ -219,7 +219,7 @@ class PredictAnchorTest(unittest.TestCase):
                 device=torch.device("cpu"),
             )
 
-    def test_reconstruct_anchor_target_uses_weighted_tile_blending(self):
+    def test_reconstruct_target_uses_weighted_tile_blending(self):
         vae = LocalPatternAnchorVAE()
         image = torch.zeros(1, 1, 4, 4)
 

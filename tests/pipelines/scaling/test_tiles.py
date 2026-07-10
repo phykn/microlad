@@ -6,7 +6,7 @@ from src.pipelines.scaling.tiles import normalize_tile_weights, tile_grid, tile_
 
 
 class PredictScaleTilesTest(unittest.TestCase):
-    def test_normalized_tile_weights_sum_to_one_per_pixel(self):
+    def test_normalize_tile_weights_sum_to_one_per_pixel(self):
         placements = normalize_tile_weights(
             4,
             4,

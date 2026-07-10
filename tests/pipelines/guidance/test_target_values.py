@@ -6,7 +6,7 @@ from src.pipelines.guidance.target_values import build_phase_target
 
 
 class PredictSDSTargetsTest(unittest.TestCase):
-    def test_phase_vector_target_rejects_non_integer_phase_keys(self):
+    def test_build_phase_target_rejects_non_integer_phase_keys(self):
         with self.assertRaisesRegex(ValueError, "phase indices"):
             build_phase_target(
                 {0.5: 0.5, 1: 0.5},
@@ -16,7 +16,7 @@ class PredictSDSTargetsTest(unittest.TestCase):
                 label="fraction",
             )
 
-    def test_phase_vector_target_rejects_non_floating_dtype(self):
+    def test_build_phase_target_rejects_non_floating_dtype(self):
         with self.assertRaisesRegex(ValueError, "dtype.*floating"):
             build_phase_target(
                 {0: 0.5, 1: 0.5},

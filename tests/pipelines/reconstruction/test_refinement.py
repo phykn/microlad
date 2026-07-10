@@ -46,7 +46,7 @@ class NonFiniteDecodeVAE(CountingVAE):
 
 
 class PredictRefineTest(unittest.TestCase):
-    def test_three_axis_refinement_averages_encode_decode_from_three_axes(self):
+    def test_refine_axes_averages_encode_decode_from_three_axes(self):
         vae = CountingVAE()
         volume = torch.zeros(2, 2, 2)
 
@@ -70,7 +70,7 @@ class PredictRefineTest(unittest.TestCase):
             [(2, 1, 2, 2), (2, 1, 2, 2), (2, 1, 2, 2)],
         )
 
-    def test_three_axis_refinement_runs_without_gradients_and_sets_eval(self):
+    def test_refine_axes_runs_without_gradients_and_sets_eval(self):
         vae = CountingVAE()
         vae.train()
 
@@ -79,7 +79,7 @@ class PredictRefineTest(unittest.TestCase):
         self.assertFalse(vae.training)
         self.assertEqual(vae.grad_enabled, [False] * 3)
 
-    def test_three_axis_refinement_zero_steps_returns_clamped_input(self):
+    def test_refine_axes_zero_steps_returns_clamped_input(self):
         vae = CountingVAE()
         volume = torch.tensor([[[-2.0, 0.0], [0.5, 2.0]], [[1.5, -1.5], [0.0, 1.0]]])
 
@@ -88,7 +88,7 @@ class PredictRefineTest(unittest.TestCase):
         self.assertTrue(torch.equal(refined, volume.float()))
         self.assertEqual(vae.encode_inputs, [])
 
-    def test_three_axis_refinement_rejects_invalid_volume_shape(self):
+    def test_refine_axes_rejects_invalid_volume_shape(self):
         vae = CountingVAE()
 
         with self.assertRaisesRegex(ValueError, "shape"):
@@ -98,11 +98,11 @@ class PredictRefineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "image_size"):
             refine_axes(torch.zeros(3, 3, 3), vae, steps=1)
 
-    def test_three_axis_refinement_rejects_non_integer_steps(self):
+    def test_refine_axes_rejects_non_integer_steps(self):
         with self.assertRaisesRegex(ValueError, "steps.*integer"):
             refine_axes(torch.zeros(2, 2, 2), CountingVAE(), steps=1.5)
 
-    def test_three_axis_refinement_rejects_non_floating_volume(self):
+    def test_refine_axes_rejects_non_floating_volume(self):
         with self.assertRaisesRegex(ValueError, "floating"):
             refine_axes(
                 torch.zeros(2, 2, 2, dtype=torch.int64),
@@ -110,7 +110,7 @@ class PredictRefineTest(unittest.TestCase):
                 steps=1,
             )
 
-    def test_three_axis_refinement_rejects_non_finite_volume(self):
+    def test_refine_axes_rejects_non_finite_volume(self):
         with self.assertRaisesRegex(ValueError, "volume.*finite"):
             refine_axes(
                 torch.full((2, 2, 2), float("nan")),
@@ -118,11 +118,11 @@ class PredictRefineTest(unittest.TestCase):
                 steps=1,
             )
 
-    def test_three_axis_refinement_rejects_non_finite_encoded_latent(self):
+    def test_refine_axes_rejects_non_finite_encoded_latent(self):
         with self.assertRaisesRegex(ValueError, "encoded.*finite"):
             refine_axes(torch.zeros(2, 2, 2), NonFiniteEncodeVAE(), steps=1)
 
-    def test_three_axis_refinement_rejects_non_finite_decoded_slice(self):
+    def test_refine_axes_rejects_non_finite_decoded_slice(self):
         with self.assertRaisesRegex(ValueError, "decoded.*finite"):
             refine_axes(torch.zeros(2, 2, 2), NonFiniteDecodeVAE(), steps=1)
 

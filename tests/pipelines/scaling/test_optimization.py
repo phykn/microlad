@@ -393,7 +393,7 @@ class PredictScaleSDSTest(unittest.TestCase):
         self.assertTrue(torch.equal(total.detach(), torch.tensor(0.0)))
         self.assertEqual(stats, {})
 
-    def test_local_prior_objective_batch_uses_weighted_tile_stitching(self):
+    def test_batch_prior_loss_uses_weighted_tile_stitching(self):
         vae = LocalPatternVAE()
 
         decoded, _, _ = _batch_prior_loss(
@@ -430,7 +430,7 @@ class PredictScaleSDSTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(decoded, expected))
 
-    def test_decode_tiled_image_batch_uses_weighted_tile_stitching(self):
+    def test_decode_tiles_uses_weighted_tile_stitching(self):
         vae = LocalPatternVAE()
 
         decoded = _decode_tiles(torch.zeros(2, 4, 4), vae, tile_overlap=2)

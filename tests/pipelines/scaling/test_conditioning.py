@@ -176,7 +176,7 @@ class ScaleConditionTest(unittest.TestCase):
                 device=torch.device("cpu"),
             )
 
-    def test_shifted_anchor_slices_move_base_index_to_output_index(self):
+    def test_shift_anchor_slices_move_base_index_to_output_index(self):
         anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=1)
 
         shifted = shift_anchor_slices([anchor], volume_size=6, base_size=2)
@@ -220,7 +220,7 @@ class ScaleConditionTest(unittest.TestCase):
         self.assertTrue(torch.equal(mask[2:4, 2:4], torch.ones(2, 2)))
         self.assertTrue(torch.equal(mask[:2, :], torch.zeros(2, 6)))
 
-    def test_shifted_anchor_slices_reject_center_that_cannot_align_to_latent_grid(self):
+    def test_shift_anchor_slices_reject_center_that_cannot_align_to_latent_grid(self):
         anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=0)
 
         with self.assertRaisesRegex(ValueError, "align"):
@@ -231,7 +231,7 @@ class ScaleConditionTest(unittest.TestCase):
                 downsample_factor=2,
             )
 
-    def test_shifted_anchor_slices_reject_index_outside_base_volume(self):
+    def test_shift_anchor_slices_reject_index_outside_base_volume(self):
         anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=2)
 
         with self.assertRaisesRegex(ValueError, "index"):

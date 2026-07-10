@@ -150,7 +150,7 @@ class LocalPatternRefineVAE(torch.nn.Module):
 
 
 class PredictScaleDecodeRefineTest(unittest.TestCase):
-    def test_decode_large_latent_volume_averages_three_axes_without_gradients(self):
+    def test_decode_large_volume_averages_three_axes_without_gradients(self):
         vae = DecodeValueVAE()
         vae.train()
         latent = torch.arange(8, dtype=torch.float32).view(1, 2, 2, 2)
@@ -172,7 +172,7 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
         self.assertTrue(vae.decode_grad_enabled)
         self.assertTrue(all(enabled is False for enabled in vae.decode_grad_enabled))
 
-    def test_decode_large_latent_volume_rejects_bad_decode_shape(self):
+    def test_decode_large_volume_rejects_bad_decode_shape(self):
         with self.assertRaisesRegex(ValueError, "decode"):
             decode_large_volume(
                 BadDecodeVAE(),
@@ -180,7 +180,7 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
                 tile_overlap=0,
             )
 
-    def test_decode_large_latent_volume_rejects_non_floating_latent(self):
+    def test_decode_large_volume_rejects_non_floating_latent(self):
         with self.assertRaisesRegex(ValueError, "floating"):
             decode_large_volume(
                 DecodeValueVAE(),
@@ -188,7 +188,7 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
                 tile_overlap=0,
             )
 
-    def test_decode_large_latent_volume_rejects_non_finite_latent(self):
+    def test_decode_large_volume_rejects_non_finite_latent(self):
         with self.assertRaisesRegex(ValueError, "latent volume.*finite"):
             decode_large_volume(
                 DecodeValueVAE(),
@@ -196,7 +196,7 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
                 tile_overlap=0,
             )
 
-    def test_decode_large_latent_volume_rejects_non_finite_decode_output(self):
+    def test_decode_large_volume_rejects_non_finite_decode_output(self):
         with self.assertRaisesRegex(ValueError, "decoded.*finite"):
             decode_large_volume(
                 NonFiniteDecodeVAE(),
@@ -204,7 +204,7 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
                 tile_overlap=0,
             )
 
-    def test_decode_large_latent_volume_rejects_inconsistent_vae_scale(self):
+    def test_decode_large_volume_rejects_inconsistent_vae_scale(self):
         with self.assertRaisesRegex(ValueError, "image_size"):
             decode_large_volume(
                 InconsistentScaleVAE(),
@@ -235,7 +235,7 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(decoded, expected / weight_sum))
 
-    def test_refine_large_volume_runs_three_axis_refinement_without_gradients(self):
+    def test_refine_large_volume_runs_refine_axes_without_gradients(self):
         vae = ShiftRefineVAE()
         vae.train()
 
