@@ -36,7 +36,11 @@ def setup_run_dirs(
     run_dir: str | Path | None = None,
 ) -> tuple[Path, Path, Path, Path, SummaryWriter | None]:
     root = Path(run_root)
-    run_path = Path(run_dir) if run_dir is not None else root / _timestamp()
+    run_path = (
+        Path(run_dir)
+        if run_dir is not None
+        else root / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    )
     log_dir = run_path / "log" / component
     weight_dir = run_path / "weight" / component
     last_weight_dir = weight_dir / "last"
@@ -159,7 +163,3 @@ def freeze_module(module: nn.Module) -> None:
     module.eval()
     for parameter in module.parameters():
         parameter.requires_grad_(False)
-
-
-def _timestamp() -> str:
-    return datetime.now().strftime("%Y%m%d-%H%M%S-%f")

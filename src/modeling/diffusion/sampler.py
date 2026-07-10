@@ -55,7 +55,8 @@ class DiffusionSampler:
         anchor_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         shape = self._validate_shape(shape)
-        self._validate_lmpdd_shape(shape)
+        if shape[0] != shape[2] or shape[0] != shape[3]:
+            raise ValueError("L-MPDD sampling requires a cubic latent shape.")
         self.model.eval()
 
         x = torch.randn(shape, device=self.device)
@@ -103,10 +104,6 @@ class DiffusionSampler:
             raise ValueError("shape values must be positive.")
 
         return shape
-
-    def _validate_lmpdd_shape(self, shape: tuple[int, int, int, int]) -> None:
-        if shape[0] != shape[2] or shape[0] != shape[3]:
-            raise ValueError("L-MPDD sampling requires a cubic latent shape.")
 
     def _prepare_anchor(
         self,

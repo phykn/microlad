@@ -36,12 +36,7 @@ def build_sds_targets(
         diffusivity_size=diffusivity_size,
         diffusivity_low_cond=diffusivity_low_cond,
     )
-    if not _uses_any_target(
-        use_vf=use_vf,
-        use_tpc=use_tpc,
-        use_sa=use_sa,
-        use_diffusivity=use_diffusivity,
-    ):
+    if not (use_vf or use_tpc or use_sa or use_diffusivity):
         return {}
 
     values = _prepare_images(
@@ -90,18 +85,6 @@ def build_sds_targets(
         targets["diffusivity_solver"] = solver
 
     return targets
-
-
-def _uses_any_target(
-    *,
-    use_vf: bool,
-    use_tpc: bool,
-    use_sa: bool,
-    use_diffusivity: bool,
-) -> bool:
-    return use_vf or use_tpc or use_sa or use_diffusivity
-
-
 def _prepare_images(
     images: Sequence[np.ndarray],
     *,

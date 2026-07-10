@@ -52,7 +52,8 @@ class DiffusivitySolver(nn.Module):
             raise ValueError(f"mask must have shape [{self.height}, {self.width}].")
 
         validate_finite_tensor("mask", mask)
-        _validate_unit_interval("mask", mask)
+        if mask.min().item() < 0.0 or mask.max().item() > 1.0:
+            raise ValueError("mask values must be between 0 and 1.")
 
         return self._solve_raw(mask) / self.unit_response.to(
             device=self.base_data.device,
@@ -268,8 +269,3 @@ def compute_diffusivity(
         actual.append(torch.stack(phase_values).mean())
 
     return torch.stack(actual)
-
-
-def _validate_unit_interval(name: str, values: torch.Tensor) -> None:
-    if values.min().item() < 0.0 or values.max().item() > 1.0:
-        raise ValueError(f"{name} values must be between 0 and 1.")

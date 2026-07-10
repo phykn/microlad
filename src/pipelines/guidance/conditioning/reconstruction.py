@@ -1,6 +1,7 @@
 import torch
 
 from src.pipelines.scaling.blending import blend_window
+from src.pipelines.scaling.tiles import tile_grid
 from src.common.tensors.validation import validate_finite_tensor
 
 
@@ -41,7 +42,7 @@ def reconstruct_anchor_target(
             dtype=image.dtype,
         ).view(1, 1, image_size, image_size)
 
-    for row, col in _tile_grid(
+    for row, col in tile_grid(
         height,
         width,
         tile_size=image_size,
@@ -69,31 +70,3 @@ def _reconstruct_patch(vae: torch.nn.Module, image: torch.Tensor) -> torch.Tenso
     validate_finite_tensor("reconstructed anchor target", recon)
 
     return recon.detach()
-
-
-def _tile_grid(
-    height: int,
-    width: int,
-    *,
-    tile_size: int,
-    overlap: int,
-):
-    for row in _tile_starts(height, tile_size=tile_size, overlap=overlap):
-        for col in _tile_starts(width, tile_size=tile_size, overlap=overlap):
-            yield row, col
-
-
-def _tile_starts(size: int, *, tile_size: int, overlap: int) -> list[int]:
-    if overlap < 0 or overlap >= tile_size:
-        raise ValueError("overlap must be non-negative and smaller than tile_size.")
-
-    if tile_size > size:
-        raise ValueError("tile_size must fit inside size.")
-
-    stride = tile_size - overlap
-    starts = list(range(0, size - tile_size + 1, stride))
-    last = size - tile_size
-    if starts[-1] != last:
-        starts.append(last)
-
-    return starts

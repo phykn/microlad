@@ -10,7 +10,11 @@ def three_axis_refinement(
     *,
     steps: int,
 ) -> torch.Tensor:
-    _validate_steps(steps)
+    if not isinstance(steps, int) or isinstance(steps, bool):
+        raise ValueError("steps must be an integer.")
+
+    if steps < 0:
+        raise ValueError("steps must be non-negative.")
 
     _validate_volume(volume, vae)
 
@@ -96,11 +100,3 @@ def _validate_volume(volume: torch.Tensor, vae: torch.nn.Module) -> None:
 
     if depth != int(vae.image_size):
         raise ValueError("volume size must match vae.image_size.")
-
-
-def _validate_steps(steps: int) -> None:
-    if not isinstance(steps, int) or isinstance(steps, bool):
-        raise ValueError("steps must be an integer.")
-
-    if steps < 0:
-        raise ValueError("steps must be non-negative.")

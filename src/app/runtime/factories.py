@@ -12,15 +12,6 @@ from src.modeling.vae import PatchVAE, VAELoss
 IMAGE_EXTENSIONS = {".bmp", ".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 _MISSING = object()
 
-def _image_paths_from_dir(data_dir: str | Path) -> list[Path]:
-    root = Path(data_dir)
-    return sorted(
-        path
-        for path in root.iterdir()
-        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
-    )
-
-
 def _get_arg(args: argparse.Namespace, *names: str, default=_MISSING):
     for name in names:
         if hasattr(args, name):
@@ -47,7 +38,12 @@ def build_dataset(args: argparse.Namespace) -> PatchDataset:
     image_paths = getattr(args, "image_paths", None)
 
     if image_paths is None:
-        image_paths = _image_paths_from_dir(args.data_dir)
+        root = Path(args.data_dir)
+        image_paths = sorted(
+            path
+            for path in root.iterdir()
+            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+        )
     elif isinstance(image_paths, (str, Path)):
         image_paths = [image_paths]
 
