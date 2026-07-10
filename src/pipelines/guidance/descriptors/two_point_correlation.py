@@ -4,8 +4,8 @@ from numbers import Integral
 import torch
 import torch.nn.functional as F
 
-from src.modeling.phases.relaxation import soft_phase_probability
-from src.common.tensors.validation import validate_finite_tensor
+from src.modeling.phases.relaxation import calc_phase_probs
+from src.common.tensors.validation import require_finite
 
 
 def tpc_loss(
@@ -89,7 +89,7 @@ def compute_tpc(
         dtype=values.dtype,
     )
 
-    probability = soft_phase_probability(
+    probability = calc_phase_probs(
         slices,
         num_phases=num_phases,
         temperature=temperature,
@@ -187,7 +187,7 @@ def _target_tensor(
     if target.shape[1] < 1:
         raise ValueError("targets must contain at least one TPC bin.")
 
-    validate_finite_tensor("targets", target)
+    require_finite("targets", target)
 
     if torch.any(target < 0):
         raise ValueError("targets must be non-negative.")

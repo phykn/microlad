@@ -6,7 +6,7 @@ from src.pipelines.guidance.conditioning.images import prepare_anchor_image
 from src.pipelines.guidance.conditioning.reconstruction import reconstruct_anchor_target
 from src.pipelines.guidance.conditioning.validation import validate_anchors
 from src.pipelines.guidance.conditioning.model import AnchorSlice
-from src.common.tensors.validation import validate_floating_dtype
+from src.common.tensors.validation import require_float
 
 
 def prepare_anchor_targets(
@@ -23,7 +23,7 @@ def prepare_anchor_targets(
     if not anchors:
         return {}
 
-    validate_floating_dtype("dtype", dtype)
+    require_float("dtype", dtype)
     validate_anchors(anchors, volume_shape)
 
     targets: dict[tuple[int, int], torch.Tensor] = {}

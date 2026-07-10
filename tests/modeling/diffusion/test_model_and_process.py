@@ -124,7 +124,7 @@ class TimeUNetTest(unittest.TestCase):
                 residual_blocks = [
                     module
                     for module in getattr(model, name).modules()
-                    if type(module).__name__ == "TimeResidualBlock"
+                    if type(module).__name__ == "TimeResBlock"
                 ]
 
                 self.assertEqual(len(residual_blocks), 2)

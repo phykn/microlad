@@ -3,7 +3,7 @@ import torch
 from src.modeling.vae import get_downsample_factor
 from src.pipelines.scaling.blending import blend_window
 from src.pipelines.scaling.tiles import tile_grid
-from src.common.tensors.validation import validate_finite_tensor, validate_floating_dtype
+from src.common.tensors.validation import require_finite, require_float
 
 
 @torch.no_grad()
@@ -64,8 +64,8 @@ def _validate_latent_volume(vae: torch.nn.Module, latent: torch.Tensor) -> None:
     if latent.ndim != 4:
         raise ValueError("latent volume must have shape [C, D, H, W].")
 
-    validate_floating_dtype("latent volume dtype", latent.dtype)
-    validate_finite_tensor("latent volume", latent)
+    require_float("latent volume dtype", latent.dtype)
+    require_finite("latent volume", latent)
 
     if latent.shape[0] != int(vae.latent_ch):
         raise ValueError("latent channel count must match vae.latent_ch.")
@@ -131,7 +131,7 @@ def _decode_tiled_plane(
         if decoded.shape[-2:] != (image_size, image_size):
             raise ValueError("decode output spatial shape must match vae.image_size.")
 
-        validate_finite_tensor("decoded", decoded)
+        require_finite("decoded", decoded)
 
         out_row = row * factor
         out_col = col * factor

@@ -2,7 +2,7 @@ import numpy as np
 from skimage.filters import threshold_multiotsu
 
 
-def segment_multi_otsu(image: np.ndarray, num_phases: int) -> np.ndarray:
+def segment_otsu(image: np.ndarray, num_phases: int) -> np.ndarray:
     if image.ndim not in (2, 3):
         raise ValueError("image must have shape [H, W] or [D, H, W].")
 

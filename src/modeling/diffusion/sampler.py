@@ -3,7 +3,7 @@ from collections.abc import Sequence
 import torch
 
 from src.modeling.diffusion.process import DDPMProcess
-from src.common.tensors.validation import validate_finite_tensor
+from src.common.tensors.validation import require_finite
 
 
 class DiffusionSampler:
@@ -123,7 +123,7 @@ class DiffusionSampler:
         if anchor_latent.shape != torch.Size(shape):
             raise ValueError("anchor_latent must have the same shape as shape.")
 
-        validate_finite_tensor("anchor_latent", anchor_latent)
+        require_finite("anchor_latent", anchor_latent)
 
         anchor_mask = anchor_mask.to(device=self.device, dtype=dtype)
         try:
@@ -133,7 +133,7 @@ class DiffusionSampler:
                 "anchor_mask must be broadcastable to anchor_latent shape."
             ) from exc
 
-        validate_finite_tensor("anchor_mask", anchor_mask)
+        require_finite("anchor_mask", anchor_mask)
 
         if anchor_mask.min().item() < 0.0 or anchor_mask.max().item() > 1.0:
             raise ValueError("anchor_mask values must be between 0 and 1.")

@@ -3,7 +3,7 @@ from collections.abc import Mapping
 import torch
 import torch.nn.functional as F
 
-from src.modeling.phases.relaxation import soft_phase_probability
+from src.modeling.phases.relaxation import calc_phase_probs
 from src.pipelines.guidance.target_values import phase_vector_target
 
 
@@ -66,7 +66,7 @@ def compute_volume_fraction(
     if temperature <= 0.0:
         raise ValueError("temperature must be positive.")
 
-    probability = soft_phase_probability(
+    probability = calc_phase_probs(
         values.reshape(-1),
         num_phases=num_phases,
         temperature=temperature,

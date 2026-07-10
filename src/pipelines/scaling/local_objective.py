@@ -12,7 +12,7 @@ from src.pipelines.reconstruction.volume import decode_latent, decode_latents
 from src.pipelines.scaling.blending import blend_window
 from src.pipelines.scaling.tiles import normalized_tile_weights, tile_grid
 from src.pipelines.scaling.validation import _as_anchor_image
-from src.common.tensors.validation import validate_finite_tensor
+from src.common.tensors.validation import require_finite
 
 def _local_prior_objective(
     image: torch.Tensor,
@@ -68,7 +68,7 @@ def _local_prior_objective(
         if mu.ndim != 4:
             raise ValueError("vae.encode must return latent with shape [B, C, H, W].")
 
-        validate_finite_tensor("latent", mu)
+        require_finite("latent", mu)
 
         decoded = decode_latent(vae, mu)
         out[row : row + tile_size, col : col + tile_size] = (
@@ -221,7 +221,7 @@ def _local_prior_objective_batch(
         if mu.ndim != 4 or mu.shape[0] != batch_size:
             raise ValueError("vae.encode must return latent with shape [B, C, H, W].")
 
-        validate_finite_tensor("latent", mu)
+        require_finite("latent", mu)
 
         decoded = decode_latents(vae, mu)
         out[:, row : row + tile_size, col : col + tile_size] = (
@@ -361,7 +361,7 @@ def _decode_tiled_image(
         if mu.ndim != 4:
             raise ValueError("vae.encode must return latent with shape [B, C, H, W].")
 
-        validate_finite_tensor("latent", mu)
+        require_finite("latent", mu)
 
         decoded = decode_latent(vae, mu)
         out[row : row + tile_size, col : col + tile_size] = (
@@ -409,7 +409,7 @@ def _decode_tiled_image_batch(
         if mu.ndim != 4 or mu.shape[0] != batch_size:
             raise ValueError("vae.encode must return latent with shape [B, C, H, W].")
 
-        validate_finite_tensor("latent", mu)
+        require_finite("latent", mu)
 
         decoded = decode_latents(vae, mu)
         out[:, row : row + tile_size, col : col + tile_size] = (

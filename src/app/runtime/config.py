@@ -22,7 +22,7 @@ def _flatten_config(config: dict) -> dict:
     return defaults
 
 
-def _last_model_path(run_dir: str | Path, component: str) -> Path:
+def _last_checkpoint(run_dir: str | Path, component: str) -> Path:
     return Path(run_dir) / "weight" / component / "last" / "model.pt"
 
 
@@ -35,14 +35,14 @@ def _require_file(path: str | Path, label: str) -> Path:
     return path
 
 
-def _require_config_value(config: dict, label: str, *names: str):
+def _require_value(config: dict, label: str, *names: str):
     for name in names:
         if name in config:
             return config[name]
     raise ValueError(f"{label} is missing required value: {' or '.join(names)}")
 
 
-def _require_config_values(config: dict, label: str, *names: str) -> None:
+def _require_values(config: dict, label: str, *names: str) -> None:
     missing = [name for name in names if name not in config]
 
     if missing:
@@ -51,23 +51,23 @@ def _require_config_values(config: dict, label: str, *names: str) -> None:
         )
 
 
-def _yaml_safe_value(value):
+def _to_yaml(value):
     if isinstance(value, Path):
         return str(value)
 
     if isinstance(value, list):
-        return [_yaml_safe_value(item) for item in value]
+        return [_to_yaml(item) for item in value]
 
     if isinstance(value, tuple):
-        return [_yaml_safe_value(item) for item in value]
+        return [_to_yaml(item) for item in value]
 
     if isinstance(value, dict):
-        return {str(key): _yaml_safe_value(item) for key, item in value.items()}
+        return {str(key): _to_yaml(item) for key, item in value.items()}
 
     return value
 
 
-def load_config_defaults(
+def load_defaults(
     config_path: str | Path | None,
     *,
     label: str = "config file",
@@ -94,7 +94,7 @@ def save_run_config(run_dir: str | Path, args: argparse.Namespace, name: str) ->
     path = Path(run_dir)
     path.mkdir(parents=True, exist_ok=True)
 
-    config = {key: _yaml_safe_value(value) for key, value in vars(args).items()}
+    config = {key: _to_yaml(value) for key, value in vars(args).items()}
 
     with open(path / f"{name}.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(config, f, sort_keys=False)
@@ -107,41 +107,41 @@ def copy_vae_run(source_run_dir: str | Path, target_run_dir: str | Path) -> None
     target.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source / "vae.yaml", target / "vae.yaml")
 
-    source_weight = _last_model_path(source, "vae")
-    target_weight = _last_model_path(target, "vae")
+    source_weight = _last_checkpoint(source, "vae")
+    target_weight = _last_checkpoint(target, "vae")
     target_weight.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source_weight, target_weight)
 
 
-def fill_diffusion_defaults_from_run(args: argparse.Namespace) -> argparse.Namespace:
+def apply_vae_defaults(args: argparse.Namespace) -> argparse.Namespace:
     run_dir = getattr(args, "vae_run_dir", None)
 
     if run_dir is None:
         return args
 
-    vae_config = load_config_defaults(
+    vae_config = load_defaults(
         _require_file(Path(run_dir) / "vae.yaml", "vae config"),
         label="vae config",
     )
-    vae_size = _require_config_value(vae_config, "vae config", "image_size", "size")
+    vae_size = _require_value(vae_config, "vae config", "image_size", "size")
 
     for arg_name, value in (
         (
             "crop_size",
-            _require_config_value(vae_config, "vae config", "crop_size"),
+            _require_value(vae_config, "vae config", "crop_size"),
         ),
         ("size", vae_size),
         (
             "segment",
-            _require_config_value(vae_config, "vae config", "segment"),
+            _require_value(vae_config, "vae config", "segment"),
         ),
         (
             "num_phases",
-            _require_config_value(vae_config, "vae config", "num_phases"),
+            _require_value(vae_config, "vae config", "num_phases"),
         ),
         (
             "latent_ch",
-            _require_config_value(vae_config, "vae config", "latent_ch"),
+            _require_value(vae_config, "vae config", "latent_ch"),
         ),
     ):
         existing = getattr(args, arg_name, None)

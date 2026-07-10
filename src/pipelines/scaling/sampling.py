@@ -3,7 +3,7 @@ from collections.abc import Sequence
 import torch
 
 from src.pipelines.scaling.denoising import denoise_tiled_plane
-from src.common.tensors.validation import validate_finite_tensor
+from src.common.tensors.validation import require_finite
 
 
 @torch.no_grad()
@@ -134,7 +134,7 @@ def _prepare_anchor(
     if anchor_latent.shape != torch.Size(shape):
         raise ValueError("anchor_latent must have the same shape as latent_shape.")
 
-    validate_finite_tensor("anchor_latent", anchor_latent)
+    require_finite("anchor_latent", anchor_latent)
 
     anchor_mask = anchor_mask.to(device=device, dtype=dtype)
     try:
@@ -142,7 +142,7 @@ def _prepare_anchor(
     except RuntimeError as exc:
         raise ValueError("anchor_mask must be broadcastable to anchor_latent shape.") from exc
 
-    validate_finite_tensor("anchor_mask", anchor_mask)
+    require_finite("anchor_mask", anchor_mask)
 
     if anchor_mask.min().item() < 0.0 or anchor_mask.max().item() > 1.0:
         raise ValueError("anchor_mask values must be between 0 and 1.")
@@ -171,6 +171,6 @@ def _blend_anchor(
         if anchor.shape != latent.shape:
             raise ValueError("q_sample output must have the same shape as latent.")
 
-        validate_finite_tensor("q_sample output", anchor)
+        require_finite("q_sample output", anchor)
 
     return latent * (1.0 - anchor_mask) + anchor * anchor_mask

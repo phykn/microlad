@@ -2,7 +2,7 @@ import torch
 
 from src.pipelines.scaling.blending import blend_window
 from src.pipelines.scaling.tiles import tile_grid
-from src.common.tensors.validation import validate_finite_tensor, validate_floating_dtype
+from src.common.tensors.validation import require_finite, require_float
 
 
 @torch.no_grad()
@@ -18,8 +18,8 @@ def denoise_tiled_plane(
     if planes.ndim != 4:
         raise ValueError("planes must have shape [B, C, H, W].")
 
-    validate_floating_dtype("planes dtype", planes.dtype)
-    validate_finite_tensor("planes", planes)
+    require_float("planes dtype", planes.dtype)
+    require_finite("planes", planes)
 
     if timesteps.ndim != 1 or timesteps.shape[0] != planes.shape[0]:
         raise ValueError("timesteps must have shape [B].")
@@ -58,7 +58,7 @@ def denoise_tiled_plane(
         if mean_tile.shape != patch.shape:
             raise ValueError("ddpm.p_mean output must match input patch shape.")
 
-        validate_finite_tensor("p_mean output", mean_tile)
+        require_finite("p_mean output", mean_tile)
 
         mean_out[:, :, row : row + tile_size, col : col + tile_size] += (
             mean_tile * window
@@ -72,6 +72,6 @@ def denoise_tiled_plane(
     variance = ddpm._expand(ddpm.posterior_variance, timesteps, mean_out.ndim)
     denoised = mean_out + torch.sqrt(variance) * noise
 
-    validate_finite_tensor("denoised", denoised)
+    require_finite("denoised", denoised)
 
     return denoised

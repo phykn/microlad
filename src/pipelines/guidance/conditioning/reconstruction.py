@@ -2,7 +2,7 @@ import torch
 
 from src.pipelines.scaling.blending import blend_window
 from src.pipelines.scaling.tiles import tile_grid
-from src.common.tensors.validation import validate_finite_tensor
+from src.common.tensors.validation import require_finite
 
 
 @torch.no_grad()
@@ -15,7 +15,7 @@ def reconstruct_anchor_target(
     if image.ndim != 4 or image.shape[:2] != (1, 1):
         raise ValueError("anchor target image must have shape [1, 1, H, W].")
 
-    validate_finite_tensor("anchor target image", image)
+    require_finite("anchor target image", image)
 
     image_size = int(vae.image_size)
     height, width = int(image.shape[-2]), int(image.shape[-1])
@@ -61,12 +61,12 @@ def reconstruct_anchor_target(
 def _reconstruct_patch(vae: torch.nn.Module, image: torch.Tensor) -> torch.Tensor:
     vae.eval()
     mu, _ = vae.encode(image)
-    validate_finite_tensor("encoded anchor target", mu)
+    require_finite("encoded anchor target", mu)
 
     recon = vae.decode(mu)
     if recon.shape != image.shape:
         raise ValueError("reconstructed anchor target must match input shape.")
 
-    validate_finite_tensor("reconstructed anchor target", recon)
+    require_finite("reconstructed anchor target", recon)
 
     return recon.detach()

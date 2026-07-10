@@ -103,7 +103,7 @@ class RunTrainDiffusionTest(unittest.TestCase):
     def test_committed_diffusion_config_does_not_reference_local_run_output(self):
         script = load_script()
 
-        args = script.load_config_defaults(script.DEFAULT_CONFIG)
+        args = script.load_defaults(script.DEFAULT_CONFIG)
 
         self.assertIsNone(args.get("vae_run_dir"))
         self.assertNotIn("crop_size", args)
@@ -191,8 +191,8 @@ class RunTrainDiffusionTest(unittest.TestCase):
                 patch.object(script, "setup_device", return_value=("cpu", 0, False)),
                 patch.object(script, "build_dataset", return_value=object()),
                 patch.object(script, "build_loader", return_value=iter([object()])),
-                patch.object(script, "load_frozen_vae_from_run", return_value=object()),
-                patch.object(script, "build_diffusion_model", return_value=DeviceModel()),
+                patch.object(script, "load_run_vae", return_value=object()),
+                patch.object(script, "build_denoiser", return_value=DeviceModel()),
                 patch.object(script, "build_optimizer", return_value=object()),
                 patch.object(script, "build_diffusion_trainer", return_value=trainer),
                 patch.object(script, "copy_vae_run"),

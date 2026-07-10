@@ -27,7 +27,7 @@ from src.pipelines.guidance.validation import (
     _validate_volume_inputs,
 )
 
-from src.common.tensors.validation import validate_finite_tensor
+from src.common.tensors.validation import require_finite
 
 
 def optimize_volume(
@@ -254,7 +254,7 @@ def optimize_slice(
     if mu.ndim != 4:
         raise ValueError("vae.encode must return latent with shape [B, C, H, W].")
 
-    validate_finite_tensor("latent", mu)
+    require_finite("latent", mu)
 
     latent = mu.detach().clone().requires_grad_(True)
     optimizer = torch.optim.Adam([latent], lr=lr)
@@ -345,7 +345,7 @@ def _optimize_slice_batch(
     if latent.ndim != 4 or latent.shape[0] != len(indices):
         raise ValueError("vae.encode must return latent with shape [B, C, H, W].")
 
-    validate_finite_tensor("latent", latent)
+    require_finite("latent", latent)
 
     latent = latent.detach().clone().requires_grad_(True)
     optimizer = torch.optim.Adam([latent], lr=lr)

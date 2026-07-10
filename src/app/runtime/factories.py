@@ -23,7 +23,7 @@ def _get_arg(args: argparse.Namespace, *names: str, default=_MISSING):
     raise AttributeError(f"missing config value: {' or '.join(names)}")
 
 
-def _vae_model_from_args(args: argparse.Namespace) -> PatchVAE:
+def _make_vae(args: argparse.Namespace) -> PatchVAE:
     return PatchVAE(
         image_size=_get_arg(args, "vae_image_size", "image_size", "size"),
         latent_size=_get_arg(args, "vae_latent_size", "latent_size", default=16),
@@ -72,10 +72,10 @@ def build_loader(
 
 
 def build_vae(args: argparse.Namespace) -> PatchVAE:
-    return _vae_model_from_args(args)
+    return _make_vae(args)
 
 
-def build_diffusion_model(args: argparse.Namespace) -> TimeUNet:
+def build_denoiser(args: argparse.Namespace) -> TimeUNet:
     return TimeUNet(
         latent_ch=args.latent_ch,
         base_ch=args.base_ch,
@@ -83,7 +83,7 @@ def build_diffusion_model(args: argparse.Namespace) -> TimeUNet:
     )
 
 
-def build_diffusion_process(
+def build_ddpm(
     args: argparse.Namespace,
     device: torch.device,
 ) -> DDPMProcess:
@@ -142,7 +142,7 @@ def build_diffusion_trainer(
         model=model,
         vae=vae,
         dataloader=loader,
-        loss_fn=DiffusionLoss(build_diffusion_process(args, device=device)),
+        loss_fn=DiffusionLoss(build_ddpm(args, device=device)),
         optimizer=optimizer,
         steps=args.steps,
         device=device,

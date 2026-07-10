@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 import torch
 
-from src.app.runtime import load_frozen_vae_from_run
+from src.app.runtime import load_run_vae
 
 
 def load_script():
@@ -139,7 +139,7 @@ class RunTrainVAETest(unittest.TestCase):
             self.assertEqual(checkpoint["step"], 1)
             self.assertIn("model", checkpoint)
             self.assertIn("optimizer", checkpoint)
-            vae = load_frozen_vae_from_run(run_dir, torch.device("cpu"))
+            vae = load_run_vae(run_dir, torch.device("cpu"))
 
         self.assertFalse(vae.training)
         self.assertTrue(

@@ -11,9 +11,9 @@ import torch
 
 from src.app.runtime import (
     build_dataset,
-    build_diffusion_process,
-    build_diffusion_model,
-    build_predictor_from_run,
+    build_ddpm,
+    build_denoiser,
+    build_predictor,
     build_diffusion_trainer,
     build_loader,
     build_vae,
@@ -21,12 +21,12 @@ from src.app.runtime import (
     build_vae_trainer,
     copy_vae_run,
     cleanup_distributed,
-    fill_diffusion_defaults_from_run,
-    load_frozen_diffusion_model,
+    apply_vae_defaults,
+    load_denoiser,
     load_predictor,
-    load_frozen_vae_from_run,
+    load_run_vae,
     load_frozen_vae,
-    load_config_defaults,
+    load_defaults,
     save_run_config,
     setup_device,
     wrap_distributed,
@@ -85,7 +85,7 @@ def write_predictor_run(
         torch.save({"model": source_vae.state_dict()}, vae_ckpt)
 
     if write_diffusion_checkpoint:
-        source_diffusion = build_diffusion_model(
+        source_diffusion = build_denoiser(
             argparse.Namespace(latent_ch=latent_ch, base_ch=4, time_dim=8)
         )
         diffusion_ckpt = run_dir / "weight" / "diffusion" / "last" / "model.pt"
@@ -97,7 +97,7 @@ def write_predictor_run(
 
 
 class BuildTest(unittest.TestCase):
-    def test_load_config_defaults_flattens_nested_yaml(self):
+    def test_load_defaults_flattens_nested_yaml(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "train.yaml"
             path.write_text(
@@ -113,7 +113,7 @@ class BuildTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            defaults = load_config_defaults(path)
+            defaults = load_defaults(path)
 
         self.assertEqual(
             defaults,
@@ -252,7 +252,7 @@ class BuildTest(unittest.TestCase):
             )
         )
 
-    def test_load_frozen_diffusion_model_loads_checkpoint_and_disables_gradients(self):
+    def test_load_denoiser_loads_checkpoint_and_disables_gradients(self):
         with tempfile.TemporaryDirectory() as tmp:
             args = argparse.Namespace(
                 latent_ch=2,
@@ -260,13 +260,13 @@ class BuildTest(unittest.TestCase):
                 time_dim=16,
                 diffusion_ckpt=Path(tmp) / "diffusion.pt",
             )
-            source = build_diffusion_model(args)
+            source = build_denoiser(args)
             with torch.no_grad():
                 for parameter in source.parameters():
                     parameter.fill_(0.25)
             torch.save({"model": source.state_dict()}, args.diffusion_ckpt)
 
-            model = load_frozen_diffusion_model(args, device=torch.device("cpu"))
+            model = load_denoiser(args, device=torch.device("cpu"))
 
         self.assertIsInstance(model, TimeUNet)
         self.assertFalse(model.training)
@@ -278,10 +278,10 @@ class BuildTest(unittest.TestCase):
             )
         )
 
-    def test_build_diffusion_model_uses_model_config(self):
+    def test_build_denoiser_uses_model_config(self):
         args = argparse.Namespace(latent_ch=4, base_ch=8, time_dim=16)
 
-        model = build_diffusion_model(args)
+        model = build_denoiser(args)
 
         self.assertIsInstance(model, TimeUNet)
         self.assertEqual(model.latent_ch, 4)
@@ -295,12 +295,12 @@ class BuildTest(unittest.TestCase):
 
             save_run_config(run_dir, args, name="vae")
 
-            defaults = load_config_defaults(run_dir / "vae.yaml")
+            defaults = load_defaults(run_dir / "vae.yaml")
 
         self.assertEqual(defaults["num_phases"], 3)
         self.assertEqual(defaults["vae_ckpt"], "vae.pt")
 
-    def test_load_frozen_vae_from_run_uses_vae_config_and_weight(self):
+    def test_load_run_vae_uses_vae_config_and_weight(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run"
             args = argparse.Namespace(
@@ -320,7 +320,7 @@ class BuildTest(unittest.TestCase):
             torch.save({"model": source.state_dict()}, checkpoint)
             save_run_config(run_dir, args, name="vae")
 
-            vae = load_frozen_vae_from_run(run_dir, device=torch.device("cpu"))
+            vae = load_run_vae(run_dir, device=torch.device("cpu"))
 
         self.assertIsInstance(vae, PatchVAE)
         self.assertFalse(vae.training)
@@ -439,7 +439,7 @@ class BuildTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "diffusion checkpoint"):
                 load_predictor(run_dir, device="cpu")
 
-    def test_fill_diffusion_defaults_from_run_uses_vae_config(self):
+    def test_apply_vae_defaults_uses_vae_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run"
             save_run_config(
@@ -455,7 +455,7 @@ class BuildTest(unittest.TestCase):
             )
             args = argparse.Namespace(vae_run_dir=run_dir)
 
-            filled = fill_diffusion_defaults_from_run(args)
+            filled = apply_vae_defaults(args)
 
         self.assertIs(filled, args)
         self.assertEqual(args.crop_size, 128)
@@ -482,7 +482,7 @@ class BuildTest(unittest.TestCase):
             args = argparse.Namespace(vae_run_dir=run_dir)
 
             with self.assertRaisesRegex(ValueError, "latent_size"):
-                fill_diffusion_defaults_from_run(args)
+                apply_vae_defaults(args)
 
     def test_copy_vae_run_copies_config_and_last_weight_only(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -512,10 +512,10 @@ class BuildTest(unittest.TestCase):
             self.assertTrue((target / "weight" / "vae" / "last" / "model.pt").is_file())
             self.assertFalse((target / "weight" / "vae" / "1").exists())
 
-    def test_build_diffusion_process_uses_diffusion_config(self):
+    def test_build_ddpm_uses_diffusion_config(self):
         args = argparse.Namespace(timesteps=8, beta_start=0.01, beta_end=0.02)
 
-        ddpm = build_diffusion_process(args, device=torch.device("cpu"))
+        ddpm = build_ddpm(args, device=torch.device("cpu"))
 
         self.assertIsInstance(ddpm, DDPMProcess)
         self.assertEqual(ddpm.num_timesteps, 8)

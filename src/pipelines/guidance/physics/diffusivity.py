@@ -5,9 +5,9 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from src.modeling.phases.relaxation import soft_phase_probability
+from src.modeling.phases.relaxation import calc_phase_probs
 from src.pipelines.guidance.target_values import phase_vector_target
-from src.common.tensors.validation import validate_finite_tensor
+from src.common.tensors.validation import require_finite
 
 
 LOW_COND_FLOOR = 0.001
@@ -51,7 +51,7 @@ class DiffusivitySolver(nn.Module):
         if mask.shape != expected_shape:
             raise ValueError(f"mask must have shape [{self.height}, {self.width}].")
 
-        validate_finite_tensor("mask", mask)
+        require_finite("mask", mask)
         if mask.min().item() < 0.0 or mask.max().item() > 1.0:
             raise ValueError("mask values must be between 0 and 1.")
 
@@ -205,7 +205,7 @@ def diffusivity_loss(
         dtype=actual_diffusivity.dtype,
         label="diffusivity value",
     )
-    validate_finite_tensor("diffusivity targets", target_diffusivity)
+    require_finite("diffusivity targets", target_diffusivity)
     target_diffusivity = target_diffusivity.clamp(min=solver.low_cond, max=1.0)
 
     loss = weight * F.mse_loss(actual_diffusivity, target_diffusivity)
@@ -240,11 +240,11 @@ def compute_diffusivity(
     if temperature <= 0.0:
         raise ValueError("temperature must be positive.")
 
-    validate_finite_tensor("values", values)
+    require_finite("values", values)
 
     height, width = values.shape[-2:]
     slices = values.reshape(-1, height, width)
-    probability = soft_phase_probability(
+    probability = calc_phase_probs(
         slices,
         num_phases=num_phases,
         temperature=temperature,

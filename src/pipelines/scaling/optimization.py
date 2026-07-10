@@ -30,7 +30,7 @@ from src.pipelines.scaling.local_objective import (
 )
 from src.pipelines.scaling.validation import _as_anchor_image, _tensor_map, _validate_inputs
 
-from src.common.tensors.validation import validate_finite_tensor, validate_floating_dtype
+from src.common.tensors.validation import require_finite, require_float
 
 
 def optimize_large_volume(

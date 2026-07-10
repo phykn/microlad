@@ -3,7 +3,7 @@ import torch
 from src.modeling.phases import logits_to_relaxed_labels, phase_logits
 from src.modeling.vae import kl_divergence
 from src.modeling.diffusion import DDPMProcess
-from src.modeling.phases.relaxation import soft_phase_probability
+from src.modeling.phases.relaxation import calc_phase_probs
 
 
 class FixedNoise(torch.nn.Module):
@@ -54,7 +54,7 @@ def test_scalar_phase_expectation_can_turn_bimodal_uncertainty_into_other_phase(
     categorical = torch.softmax(logits, dim=1)[0, :, 0, 0]
 
     scalar_value = logits_to_relaxed_labels(logits, num_phases=3)
-    recovered = soft_phase_probability(
+    recovered = calc_phase_probs(
         scalar_value.reshape(-1),
         num_phases=3,
         temperature=0.1,

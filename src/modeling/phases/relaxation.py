@@ -1,10 +1,10 @@
 import torch
 
 from src.modeling.phases.representation import phase_levels
-from src.common.tensors.validation import validate_finite_tensor
+from src.common.tensors.validation import require_finite
 
 
-def soft_phase_probability(
+def calc_phase_probs(
     values: torch.Tensor,
     *,
     num_phases: int,
@@ -23,7 +23,7 @@ def soft_phase_probability(
     if not values.is_floating_point():
         raise ValueError("values must be a floating point tensor.")
 
-    validate_finite_tensor("values", values)
+    require_finite("values", values)
 
     levels = phase_levels(num_phases, device=values.device, dtype=values.dtype)
     level_shape = [1] * (values.ndim + 1)

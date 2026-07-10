@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from src.modeling.phases.quantization import (
-    model_output_to_phase,
+    decode_phase,
     phase_to_numpy,
     quantize_phase,
 )
@@ -45,10 +45,10 @@ class PredictPostprocessTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "floating"):
             quantize_phase(torch.tensor([0, 1]), num_phases=3)
 
-    def test_model_output_to_phase_removes_single_channel_dimension(self):
+    def test_decode_phase_removes_single_channel_dimension(self):
         output = torch.tensor([[[[0.0, 1.0], [2.0, 3.0]]]])
 
-        phase = model_output_to_phase(output, num_phases=3)
+        phase = decode_phase(output, num_phases=3)
 
         self.assertEqual(phase.shape, torch.Size([1, 2, 2]))
         self.assertEqual(phase.dtype, torch.uint8)
@@ -59,7 +59,7 @@ class PredictPostprocessTest(unittest.TestCase):
             )
         )
 
-    def test_model_output_to_phase_accepts_phase_logits(self):
+    def test_decode_phase_accepts_phase_logits(self):
         output = torch.tensor(
             [
                 [
@@ -70,7 +70,7 @@ class PredictPostprocessTest(unittest.TestCase):
             ]
         )
 
-        phase = model_output_to_phase(output, num_phases=3)
+        phase = decode_phase(output, num_phases=3)
 
         self.assertEqual(phase.shape, torch.Size([1, 2, 2]))
         self.assertEqual(phase.dtype, torch.uint8)
@@ -81,9 +81,9 @@ class PredictPostprocessTest(unittest.TestCase):
             )
         )
 
-    def test_model_output_to_phase_rejects_non_floating_output(self):
+    def test_decode_phase_rejects_non_floating_output(self):
         with self.assertRaisesRegex(ValueError, "floating"):
-            model_output_to_phase(
+            decode_phase(
                 torch.zeros(1, 1, 2, 2, dtype=torch.int64),
                 num_phases=3,
             )

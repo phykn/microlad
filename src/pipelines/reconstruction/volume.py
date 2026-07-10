@@ -1,7 +1,7 @@
 import torch
 
 from src.common.validation import require_int
-from src.common.tensors.validation import validate_finite_tensor, validate_floating_dtype
+from src.common.tensors.validation import require_finite, require_float
 from src.modeling.vae import get_downsample_factor
 
 
@@ -44,7 +44,7 @@ def decode_latent(vae: torch.nn.Module, latent: torch.Tensor) -> torch.Tensor:
     if decoded.shape[-2:] != (int(vae.image_size), int(vae.image_size)):
         raise ValueError("vae.decode output spatial shape must match vae.image_size.")
 
-    validate_finite_tensor("decoded", decoded)
+    require_finite("decoded", decoded)
 
     return decoded[0, 0]
 
@@ -62,7 +62,7 @@ def decode_latents(vae: torch.nn.Module, latents: torch.Tensor) -> torch.Tensor:
     if decoded.shape[-2:] != (int(vae.image_size), int(vae.image_size)):
         raise ValueError("vae.decode output spatial shape must match vae.image_size.")
 
-    validate_finite_tensor("decoded", decoded)
+    require_finite("decoded", decoded)
 
     return decoded[:, 0]
 
@@ -107,8 +107,8 @@ def _validate_latent_volume(vae: torch.nn.Module, latent: torch.Tensor) -> None:
     if latent.shape[0] != int(vae.latent_ch):
         raise ValueError("latent channel count must match vae.latent_ch.")
 
-    validate_floating_dtype("latent dtype", latent.dtype)
-    validate_finite_tensor("latent", latent)
+    require_float("latent dtype", latent.dtype)
+    require_finite("latent", latent)
 
     latent_size = int(vae.latent_size)
 

@@ -6,7 +6,7 @@ from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver, diffus
 from src.pipelines.guidance.descriptors.surface_area import surface_area_loss
 from src.pipelines.guidance.descriptors.two_point_correlation import tpc_loss
 from src.pipelines.guidance.descriptors.volume_fraction import volume_fraction_loss
-from src.common.tensors.validation import validate_finite_tensor
+from src.common.tensors.validation import require_finite
 
 
 def _validate_descriptor_inputs(name: str, weight: float, targets) -> None:
@@ -34,7 +34,7 @@ def descriptor_loss(
     sa_kernel_size: int = 7,
     sa_sigma: float = 1.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    validate_finite_tensor("decoded", decoded)
+    require_finite("decoded", decoded)
 
     total = decoded.sum() * 0.0
     stats: dict[str, torch.Tensor] = {}

@@ -9,7 +9,7 @@ from src.pipelines.guidance.conditioning.reconstruction import reconstruct_ancho
 from src.pipelines.guidance.conditioning.validation import validate_anchor, validate_anchors
 from src.pipelines.scaling.tiles import tile_grid
 from src.pipelines.guidance.conditioning.model import AnchorSlice
-from src.common.tensors.validation import validate_finite_tensor
+from src.common.tensors.validation import require_finite
 
 
 def center_start(*, volume_size: int, base_size: int) -> int:
@@ -256,7 +256,7 @@ def _encode_anchor(
     if mu.shape != expected:
         raise ValueError(f"encoded anchor latent must have shape {tuple(expected)}.")
 
-    validate_finite_tensor("encoded anchor latent", mu)
+    require_finite("encoded anchor latent", mu)
 
     return mu[0].detach()
 
@@ -314,7 +314,7 @@ def _encode_large_anchor(
                     f"encoded anchor latent must have shape {tuple(expected)}."
                 )
 
-            validate_finite_tensor("encoded anchor latent", mu)
+            require_finite("encoded anchor latent", mu)
 
             latent_row = row // factor
             latent_col = col // factor

@@ -2,7 +2,7 @@ import torch
 
 from src.pipelines.scaling.blending import blend_window
 from src.pipelines.scaling.tiles import tile_grid
-from src.common.tensors.validation import validate_finite_tensor, validate_floating_dtype
+from src.common.tensors.validation import require_finite, require_float
 
 
 @torch.no_grad()
@@ -150,7 +150,7 @@ def _encode_decode_tiles(
     if mu.shape[0] != tiles.shape[0]:
         raise ValueError("encode output batch size must match input tiles.")
 
-    validate_finite_tensor("encoded latent", mu)
+    require_finite("encoded latent", mu)
 
     decoded = vae.decode(mu)
     if decoded.ndim != 4 or decoded.shape[:2] != (tiles.shape[0], 1):
@@ -159,7 +159,7 @@ def _encode_decode_tiles(
     if decoded.shape[-2:] != (tile_size, tile_size):
         raise ValueError("decode output spatial shape must match vae.image_size.")
 
-    validate_finite_tensor("decoded tile", decoded)
+    require_finite("decoded tile", decoded)
 
     return decoded.float()
 
@@ -168,8 +168,8 @@ def _validate_volume(volume: torch.Tensor) -> None:
     if volume.ndim != 3:
         raise ValueError("volume must have shape [D, H, W].")
 
-    validate_floating_dtype("volume dtype", volume.dtype)
-    validate_finite_tensor("volume", volume)
+    require_float("volume dtype", volume.dtype)
+    require_finite("volume", volume)
 
     depth, height, width = volume.shape
     if min(depth, height, width) <= 0:

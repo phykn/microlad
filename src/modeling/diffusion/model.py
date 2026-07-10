@@ -31,7 +31,7 @@ class TimeEmbedding(nn.Module):
         return self.mlp(emb[:, : self.dim])
 
 
-class TimeResidualBlock(nn.Module):
+class TimeResBlock(nn.Module):
     def __init__(self, in_ch: int, out_ch: int, time_dim: int) -> None:
         super().__init__()
         self.skip = (
@@ -52,11 +52,11 @@ class TimeResidualBlock(nn.Module):
         return h + self.skip(x)
 
 
-class TimeResidualStack(nn.Module):
+class TimeResStack(nn.Module):
     def __init__(self, in_ch: int, out_ch: int, time_dim: int) -> None:
         super().__init__()
-        self.block1 = TimeResidualBlock(in_ch, out_ch, time_dim)
-        self.block2 = TimeResidualBlock(out_ch, out_ch, time_dim)
+        self.block1 = TimeResBlock(in_ch, out_ch, time_dim)
+        self.block2 = TimeResBlock(out_ch, out_ch, time_dim)
 
     def forward(self, x: torch.Tensor, time_emb: torch.Tensor) -> torch.Tensor:
         x = self.block1(x, time_emb)
@@ -106,10 +106,10 @@ class TimeUNet(nn.Module):
         self.time_dim = time_dim
 
         self.time_emb = TimeEmbedding(time_dim)
-        self.enc1 = TimeResidualStack(latent_ch, base_ch, time_dim)
+        self.enc1 = TimeResStack(latent_ch, base_ch, time_dim)
         self.attn1 = SelfAttention(base_ch)
         self.down1 = nn.Conv2d(base_ch, base_ch * 2, kernel_size=4, stride=2, padding=1)
-        self.enc2 = TimeResidualStack(base_ch * 2, base_ch * 2, time_dim)
+        self.enc2 = TimeResStack(base_ch * 2, base_ch * 2, time_dim)
         self.attn2 = SelfAttention(base_ch * 2)
         self.down2 = nn.Conv2d(
             base_ch * 2,
@@ -118,7 +118,7 @@ class TimeUNet(nn.Module):
             stride=2,
             padding=1,
         )
-        self.mid = TimeResidualStack(base_ch * 4, base_ch * 4, time_dim)
+        self.mid = TimeResStack(base_ch * 4, base_ch * 4, time_dim)
         self.attn_mid = SelfAttention(base_ch * 4)
         self.up2 = nn.ConvTranspose2d(
             base_ch * 4,
@@ -127,7 +127,7 @@ class TimeUNet(nn.Module):
             stride=2,
             padding=1,
         )
-        self.dec2 = TimeResidualStack(base_ch * 4, base_ch * 2, time_dim)
+        self.dec2 = TimeResStack(base_ch * 4, base_ch * 2, time_dim)
         self.up1 = nn.ConvTranspose2d(
             base_ch * 2,
             base_ch,
@@ -135,7 +135,7 @@ class TimeUNet(nn.Module):
             stride=2,
             padding=1,
         )
-        self.dec1 = TimeResidualStack(base_ch * 2, base_ch, time_dim)
+        self.dec1 = TimeResStack(base_ch * 2, base_ch, time_dim)
         self.out = nn.Conv2d(base_ch, latent_ch, kernel_size=3, padding=1)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:

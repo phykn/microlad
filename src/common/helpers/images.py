@@ -64,7 +64,7 @@ def _to_uint8_phase_labels(image: np.ndarray) -> np.ndarray:
         raise ValueError("phase image must be non-empty.")
 
     if np.issubdtype(image.dtype, np.floating):
-        return _float_phase_labels_to_uint8(image)
+        return _float_labels_to_uint8(image)
 
     values = image.astype(np.int64)
     low = int(values.min())
@@ -76,7 +76,7 @@ def _to_uint8_phase_labels(image: np.ndarray) -> np.ndarray:
     return values.astype(np.uint8)
 
 
-def _float_phase_labels_to_uint8(image: np.ndarray) -> np.ndarray:
+def _float_labels_to_uint8(image: np.ndarray) -> np.ndarray:
     values = image.astype(np.float32)
 
     if not np.isfinite(values).all():

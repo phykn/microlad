@@ -218,16 +218,16 @@ class PatchVAE(nn.Module):
             h = block(h)
         return self.conv_out(h)
 
-    def decode_probabilities(self, z: torch.Tensor) -> torch.Tensor:
+    def decode_probs(self, z: torch.Tensor) -> torch.Tensor:
         logits = self.decode_logits(z)
         return logits_to_probabilities(logits, self.num_phases)
 
-    def decode_relaxed_labels(self, z: torch.Tensor) -> torch.Tensor:
+    def decode_relaxed(self, z: torch.Tensor) -> torch.Tensor:
         logits = self.decode_logits(z)
         return logits_to_relaxed_labels(logits, self.num_phases)
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
-        return self.decode_relaxed_labels(z)
+        return self.decode_relaxed(z)
 
     def forward(
         self, x: torch.Tensor

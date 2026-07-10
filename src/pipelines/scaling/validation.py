@@ -5,7 +5,7 @@ import torch
 
 from src.pipelines.guidance.conditioning.model import AnchorSlice
 from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver
-from src.common.tensors.validation import validate_finite_tensor, validate_floating_dtype
+from src.common.tensors.validation import require_finite, require_float
 
 def _validate_inputs(
     volume: torch.Tensor,
@@ -35,8 +35,8 @@ def _validate_inputs(
     if volume.ndim != 3:
         raise ValueError("volume must have shape [D, H, W].")
 
-    validate_floating_dtype("volume dtype", volume.dtype)
-    validate_finite_tensor("volume", volume)
+    require_float("volume dtype", volume.dtype)
+    require_finite("volume", volume)
 
     depth, height, width = volume.shape
     if min(depth, height, width) <= 0:
@@ -157,7 +157,7 @@ def _validate_anchor_tensor_map(
         if image.shape != _slice_shape(volume_shape, axis):
             raise ValueError(f"{name}[{axis}, {index}] shape must match selected slice.")
 
-        validate_finite_tensor(f"{name}[{axis}, {index}]", image)
+        require_finite(f"{name}[{axis}, {index}]", image)
 
         if mask and (image.min().item() < 0.0 or image.max().item() > 1.0):
             raise ValueError(f"{name} values must be between 0 and 1.")

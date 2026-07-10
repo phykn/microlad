@@ -7,7 +7,7 @@ from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver, comput
 from src.pipelines.guidance.descriptors.surface_area import compute_surface_area
 from src.pipelines.guidance.descriptors.two_point_correlation import compute_tpc
 from src.pipelines.guidance.descriptors.volume_fraction import compute_volume_fraction
-from src.common.helpers.segmentation import segment_multi_otsu
+from src.common.helpers.segmentation import segment_otsu
 from src.common.validation import require_finite_number, require_int
 from src.modeling.phases.quantization import MAX_UINT8_PHASES
 
@@ -131,7 +131,7 @@ def _prepare_phase_image(
     if image.dtype != np.uint8:
         raise ValueError("target images must have dtype uint8.")
 
-    phase = segment_multi_otsu(image, num_phases) if segment else image
+    phase = segment_otsu(image, num_phases) if segment else image
 
     if phase.min() < 0 or phase.max() >= num_phases:
         raise ValueError(

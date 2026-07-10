@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 
 from src.modeling.phases.representation import phase_loss
-from src.common.tensors.validation import validate_finite_tensor
+from src.common.tensors.validation import require_finite
 
 
 def anchor_loss(
@@ -25,13 +25,13 @@ def anchor_loss(
     if weight < 0.0:
         raise ValueError("weight must be non-negative.")
 
-    validate_finite_tensor("values", values)
+    require_finite("values", values)
 
     target_image = _as_image(target, device=values.device, dtype=values.dtype)
     if target_image.shape != values.shape:
         raise ValueError("target shape must match values shape.")
 
-    validate_finite_tensor("target", target_image)
+    require_finite("target", target_image)
 
     recon = values.view(1, 1, *values.shape)
     target_batch = target_image.view(1, 1, *target_image.shape)
@@ -67,7 +67,7 @@ def masked_anchor_loss(
     if weight < 0.0:
         raise ValueError("weight must be non-negative.")
 
-    validate_finite_tensor("values", values)
+    require_finite("values", values)
 
     target_image = _as_image(target, device=values.device, dtype=values.dtype)
     mask_image = _as_image(mask, device=values.device, dtype=values.dtype)
@@ -78,8 +78,8 @@ def masked_anchor_loss(
     if mask_image.shape != values.shape:
         raise ValueError("mask shape must match values shape.")
 
-    validate_finite_tensor("target", target_image)
-    validate_finite_tensor("mask", mask_image)
+    require_finite("target", target_image)
+    require_finite("mask", mask_image)
 
     active = mask_image > 0
     if not bool(active.any().item()):

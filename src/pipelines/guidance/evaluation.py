@@ -7,7 +7,7 @@ from src.pipelines.guidance.anchor_objective import anchor_loss
 from src.pipelines.guidance.objective import descriptor_loss, descriptor_loss_per_sample
 from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver
 from src.pipelines.guidance.prior import sds_loss
-from src.common.tensors.validation import validate_finite_tensor
+from src.common.tensors.validation import require_finite
 
 def _objective(
     latent: torch.Tensor,

@@ -13,29 +13,29 @@ from src.pipelines.scaling.conditioning import (
     shifted_anchor_slices,
 )
 
-class PredictionPreparation:
-    def _predict_volume_size(
+class PredictionPrep:
+    def _resolve_volume_size(
         self,
         *,
         anchors: Sequence[AnchorSlice] | None,
         volume_size: int | None,
     ) -> int:
-        anchor_size = self._anchor_volume_size(anchors)
+        anchor_size = self._get_anchor_size(anchors)
 
         if volume_size is None:
-            return anchor_size if anchor_size is not None else self._image_size()
+            return anchor_size if anchor_size is not None else self._get_image_size()
 
         require_int("volume_size", volume_size)
 
         if volume_size <= 0:
             raise ValueError("volume_size must be positive.")
 
-        if anchor_size is not None and anchor_size not in (self._image_size(), volume_size):
+        if anchor_size is not None and anchor_size not in (self._get_image_size(), volume_size):
             raise ValueError("anchor image size must match vae.image_size or volume_size.")
 
         return volume_size
 
-    def _anchor_volume_size(
+    def _get_anchor_size(
         self,
         anchors: Sequence[AnchorSlice] | None,
     ) -> int | None:
@@ -71,8 +71,8 @@ class PredictionPreparation:
         if not anchors:
             return
 
-        image_size = self._image_size()
-        anchor_size = self._anchor_volume_size(anchors)
+        image_size = self._get_image_size()
+        anchor_size = self._get_anchor_size(anchors)
 
         if anchor_size == image_size and volume_size > image_size:
             validate_anchors(anchors, (image_size, image_size, image_size))
@@ -80,7 +80,7 @@ class PredictionPreparation:
 
         validate_anchors(anchors, (volume_size, volume_size, volume_size))
 
-    def _scale_anchor_latents(
+    def _build_scale_latents(
         self,
         anchors: Sequence[AnchorSlice] | None,
         *,
@@ -88,9 +88,9 @@ class PredictionPreparation:
         volume_size: int,
         tile_overlap: int,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        anchor_size = self._anchor_volume_size(anchors)
+        anchor_size = self._get_anchor_size(anchors)
 
-        if not anchors or anchor_size not in (self._image_size(), int(volume_size)):
+        if not anchors or anchor_size not in (self._get_image_size(), int(volume_size)):
             return None, None
 
         return prepare_scale_anchor_latents(
@@ -103,18 +103,18 @@ class PredictionPreparation:
             tile_overlap=tile_overlap,
         )
 
-    def _uses_scale_anchor(
+    def _has_scale_anchor(
         self,
         anchors: Sequence[AnchorSlice] | None,
         volume_size: int,
     ) -> bool:
         return (
             bool(anchors)
-            and volume_size > self._image_size()
-            and self._anchor_volume_size(anchors) == self._image_size()
+            and volume_size > self._get_image_size()
+            and self._get_anchor_size(anchors) == self._get_image_size()
         )
 
-    def _scale_anchor_schedule(
+    def _build_anchor_schedule(
         self,
         anchors: Sequence[AnchorSlice] | None,
         *,
@@ -125,7 +125,7 @@ class PredictionPreparation:
         shifted = shifted_anchor_slices(
             anchors,
             volume_size=volume_size,
-            base_size=self._image_size(),
+            base_size=self._get_image_size(),
             downsample_factor=get_downsample_factor(self.vae),
         )
         if not shifted or steps <= 0:
@@ -166,7 +166,7 @@ class PredictionPreparation:
                 axis = int(torch.randint(0, 3, (), device=self.device).item())
 
             while len(group) < batch_size:
-                index = self._random_unused_index(
+                index = self._pick_unused_index(
                     volume_size,
                     used_indices=used_indices,
                 )
@@ -177,7 +177,7 @@ class PredictionPreparation:
 
         return schedule
 
-    def _random_unused_index(
+    def _pick_unused_index(
         self,
         volume_size: int,
         *,
@@ -191,7 +191,7 @@ class PredictionPreparation:
 
         raise ValueError("sds_batch_size cannot exceed volume_size.")
 
-    def _scale_descriptor_tile_size(
+    def _resolve_tile_size(
         self,
         options: PredictOptions,
         *,
@@ -201,15 +201,15 @@ class PredictionPreparation:
         if not self._uses_targets(options):
             return None
 
-        target_size = self._target_image_size(target_images)
+        target_size = self._get_target_size(target_images)
 
-        if volume_size == self._image_size():
-            if target_size != self._image_size():
+        if volume_size == self._get_image_size():
+            if target_size != self._get_image_size():
                 raise ValueError("target images must match vae.image_size.")
 
             return None
 
-        if target_size == self._image_size():
+        if target_size == self._get_image_size():
             return target_size
 
         if target_size == volume_size:
@@ -217,7 +217,7 @@ class PredictionPreparation:
 
         raise ValueError("scale-up target images must match vae.image_size or volume_size.")
 
-    def _target_image_size(
+    def _get_target_size(
         self,
         target_images: Sequence[np.ndarray] | None,
     ) -> int:
@@ -245,7 +245,7 @@ class PredictionPreparation:
 
         return int(size)
 
-    def _scale_latent_size(
+    def _calc_latent_size(
         self,
         volume_size: int,
         *,
@@ -267,7 +267,7 @@ class PredictionPreparation:
 
         return latent_size
 
-    def _scale_tile_overlap(
+    def _resolve_overlap(
         self,
         tile_size: int,
         tile_overlap: int | None,
@@ -282,11 +282,11 @@ class PredictionPreparation:
 
         return tile_overlap
 
-    def _scale_refine_overlap(self) -> int:
-        tile_size = self._image_size()
+    def _calc_refine_overlap(self) -> int:
+        tile_size = self._get_image_size()
         return max(tile_size // 4, 1) if tile_size > 1 else 0
 
-    def _sds_t_max(self, options: PredictOptions) -> int:
+    def _resolve_t_max(self, options: PredictOptions) -> int:
         t_max = (
             int(self.ddpm.num_timesteps)
             if options.sds_t_max is None

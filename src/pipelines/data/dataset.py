@@ -8,7 +8,7 @@ from src.pipelines.data.transforms import augment_patch
 from src.pipelines.data.transforms import crop_square
 from src.pipelines.data.transforms import resize_patch
 from src.common.helpers.images import load_image, load_phase_image
-from src.common.helpers.segmentation import segment_multi_otsu
+from src.common.helpers.segmentation import segment_otsu
 
 
 class PatchDataset(Dataset):
@@ -61,7 +61,7 @@ class PatchDataset(Dataset):
     def _load_image(self, path: Path) -> np.ndarray:
         if self.segment:
             image = load_image(path)
-            return segment_multi_otsu(image, self.num_phases)
+            return segment_otsu(image, self.num_phases)
 
         image = load_phase_image(path)
         self._validate_phase_image(image, path)

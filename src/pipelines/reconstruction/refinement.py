@@ -1,6 +1,6 @@
 import torch
 
-from src.common.tensors.validation import validate_finite_tensor, validate_floating_dtype
+from src.common.tensors.validation import require_finite, require_float
 
 
 @torch.no_grad()
@@ -68,7 +68,7 @@ def _encode_decode_batch(vae: torch.nn.Module, images: torch.Tensor) -> torch.Te
     if mu.shape[0] != images.shape[0]:
         raise ValueError("encode output batch size must match the input batch.")
 
-    validate_finite_tensor("encoded latent", mu)
+    require_finite("encoded latent", mu)
 
     decoded = vae.decode(mu)
 
@@ -78,7 +78,7 @@ def _encode_decode_batch(vae: torch.nn.Module, images: torch.Tensor) -> torch.Te
     if decoded.shape[-2:] != images.shape[-2:]:
         raise ValueError("decode output spatial shape must match the input slice.")
 
-    validate_finite_tensor("decoded slice", decoded)
+    require_finite("decoded slice", decoded)
 
     return decoded.float()
 
@@ -87,8 +87,8 @@ def _validate_volume(volume: torch.Tensor, vae: torch.nn.Module) -> None:
     if volume.ndim != 3:
         raise ValueError("volume must have shape [D, H, W].")
 
-    validate_floating_dtype("volume dtype", volume.dtype)
-    validate_finite_tensor("volume", volume)
+    require_float("volume dtype", volume.dtype)
+    require_finite("volume", volume)
 
     depth, height, width = volume.shape
 

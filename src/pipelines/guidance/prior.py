@@ -1,7 +1,7 @@
 import torch
 
 from src.modeling.diffusion import DDPMProcess
-from src.common.tensors.validation import validate_finite_tensor
+from src.common.tensors.validation import require_finite
 
 
 def sds_loss(
@@ -22,7 +22,7 @@ def sds_loss(
     if any(size <= 0 for size in latent.shape):
         raise ValueError("latent dimensions must be positive.")
 
-    validate_finite_tensor("latent", latent)
+    require_finite("latent", latent)
     _validate_timestep_range(ddpm, t_min, t_max)
 
     if t is None:
@@ -42,7 +42,7 @@ def sds_loss(
     if noise.shape != latent.shape:
         raise ValueError("noise must have the same shape as latent.")
 
-    validate_finite_tensor("noise", noise)
+    require_finite("noise", noise)
     noisy_latent = ddpm.q_sample(latent, t, noise=noise)
 
     with torch.no_grad():
@@ -51,7 +51,7 @@ def sds_loss(
     if pred_noise.shape != latent.shape:
         raise ValueError("model output must have the same shape as latent.")
 
-    validate_finite_tensor("model output", pred_noise)
+    require_finite("model output", pred_noise)
 
     sigma = ddpm.sqrt_one_minus_alphas_cumprod[t].view(
         (latent.shape[0],) + (1,) * (latent.ndim - 1)
@@ -64,7 +64,7 @@ def sds_loss(
         spatial_weight = spatial_weight.to(device=latent.device, dtype=latent.dtype)
         if spatial_weight.shape != latent.shape[-2:]:
             raise ValueError("spatial_weight must match latent spatial shape.")
-        validate_finite_tensor("spatial_weight", spatial_weight)
+        require_finite("spatial_weight", spatial_weight)
         if torch.any(spatial_weight < 0):
             raise ValueError("spatial_weight must be non-negative.")
 

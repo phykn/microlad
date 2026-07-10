@@ -8,7 +8,7 @@ from src.app.runtime import (
     build_optimizer,
     build_vae_trainer,
     cleanup_distributed,
-    load_config_defaults,
+    load_defaults,
     save_run_config,
     setup_device,
     wrap_distributed,
@@ -21,7 +21,7 @@ DEFAULT_CONFIG = "config/vae.yaml"
 def parse_args_from_list(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.parse_args(argv)
-    args = argparse.Namespace(**load_config_defaults(DEFAULT_CONFIG))
+    args = argparse.Namespace(**load_defaults(DEFAULT_CONFIG))
     if (
         getattr(args, "data_dir", None) is None
         and getattr(args, "image_paths", None) is None

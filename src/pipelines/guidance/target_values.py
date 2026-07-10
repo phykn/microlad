@@ -3,7 +3,7 @@ from numbers import Integral
 
 import torch
 
-from src.common.tensors.validation import validate_finite_tensor, validate_floating_dtype
+from src.common.tensors.validation import require_finite, require_float
 
 
 def phase_vector_target(
@@ -15,7 +15,7 @@ def phase_vector_target(
     label: str,
     require_sum_one: bool = False,
 ) -> torch.Tensor:
-    validate_floating_dtype("dtype", dtype)
+    require_float("dtype", dtype)
 
     if isinstance(targets, torch.Tensor):
         target = targets.to(device=device, dtype=dtype)
@@ -41,7 +41,7 @@ def phase_vector_target(
     if target.shape != torch.Size([num_phases]):
         raise ValueError(f"targets must have one {label} per phase.")
 
-    validate_finite_tensor("targets", target)
+    require_finite("targets", target)
 
     if torch.any(target < 0):
         raise ValueError("targets must be non-negative.")

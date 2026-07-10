@@ -25,9 +25,9 @@ from src.app.api.options import AnchorSlice, PredictOptions
 from src.pipelines.reconstruction.volume import generate_initial_volume
 
 
-from src.app.api.preparation import PredictionPreparation
+from src.app.api.preparation import PredictionPrep
 
-class Predictor(PredictionPreparation):
+class Predictor(PredictionPrep):
     def __init__(
         self,
         vae: torch.nn.Module,
@@ -50,14 +50,14 @@ class Predictor(PredictionPreparation):
         target_images: Sequence[np.ndarray] | None = None,
         volume_size: int | None = None,
     ) -> tuple[torch.Tensor, dict]:
-        volume_size = self._predict_volume_size(
+        volume_size = self._resolve_volume_size(
             anchors=anchors,
             volume_size=volume_size,
         )
         self._validate_anchors(anchors, volume_size)
-        self._validate_predict_inputs(options, target_images=target_images)
+        self._validate_inputs(options, target_images=target_images)
 
-        volume, stats = self._generate_volume(
+        volume, stats = self._generate_base(
             volume_size,
             options=options,
             anchors=anchors,
@@ -74,18 +74,18 @@ class Predictor(PredictionPreparation):
             stats = {**stats, **sds_stats}
 
         if options.refine_steps > 0:
-            volume = self._refine_volume(volume, options.refine_steps)
+            volume = self._refine(volume, options.refine_steps)
 
         return quantize_phase(volume, options.num_phases), stats
 
-    def _generate_volume(
+    def _generate_base(
         self,
         volume_size: int,
         *,
         options: PredictOptions,
         anchors: Sequence[AnchorSlice] | None,
     ) -> tuple[torch.Tensor, dict]:
-        if volume_size == self._image_size():
+        if volume_size == self._get_image_size():
             anchor_latent, anchor_mask = prepare_anchor_latents(
                 self.vae,
                 anchors,
@@ -97,19 +97,19 @@ class Predictor(PredictionPreparation):
             volume = generate_initial_volume(
                 self.sampler,
                 self.vae,
-                size=self._image_size(),
+                size=self._get_image_size(),
                 anchor_latent=anchor_latent,
                 anchor_mask=anchor_mask,
             ).to(self.device)
             return volume, {}
 
-        return self._generate_large_volume(
+        return self._generate_large(
             volume_size,
             options=options,
             anchors=anchors,
         )
 
-    def _generate_large_volume(
+    def _generate_large(
         self,
         volume_size: int,
         *,
@@ -118,13 +118,13 @@ class Predictor(PredictionPreparation):
     ) -> tuple[torch.Tensor, dict[str, int]]:
         factor = get_downsample_factor(self.vae)
         tile_size = int(self.vae.latent_size)
-        overlap = self._scale_tile_overlap(tile_size, None)
-        latent_size = self._scale_latent_size(
+        overlap = self._resolve_overlap(tile_size, None)
+        latent_size = self._calc_latent_size(
             volume_size,
             factor=factor,
             tile_size=tile_size,
         )
-        anchor_latent, anchor_mask = self._scale_anchor_latents(
+        anchor_latent, anchor_mask = self._build_scale_latents(
             anchors,
             options=options,
             volume_size=volume_size,
@@ -158,13 +158,13 @@ class Predictor(PredictionPreparation):
             "tile_overlap": overlap,
             "condition_start": center_start(
                 volume_size=volume_size,
-                base_size=self._image_size(),
+                base_size=self._get_image_size(),
             ),
         }
         return volume, stats
 
-    def _refine_volume(self, volume: torch.Tensor, steps: int) -> torch.Tensor:
-        if volume.shape[0] == self._image_size():
+    def _refine(self, volume: torch.Tensor, steps: int) -> torch.Tensor:
+        if volume.shape[0] == self._get_image_size():
             return three_axis_refinement(
                 volume,
                 self.vae,
@@ -175,7 +175,7 @@ class Predictor(PredictionPreparation):
             volume,
             self.vae,
             steps=steps,
-            tile_overlap=self._scale_refine_overlap(),
+            tile_overlap=self._calc_refine_overlap(),
         )
 
     def _run_sds(
@@ -186,20 +186,20 @@ class Predictor(PredictionPreparation):
         anchors: Sequence[AnchorSlice] | None,
         target_images: Sequence[np.ndarray] | None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        kwargs = self._sds_kwargs(
+        kwargs = self._build_sds_args(
             options,
             anchors=anchors,
             target_images=target_images,
             volume_size=int(volume.shape[0]),
         )
 
-        if volume.shape[0] != self._image_size():
+        if volume.shape[0] != self._get_image_size():
             return optimize_large_volume(
                 volume,
                 self.vae,
                 self.diffusion_model,
                 self.ddpm,
-                tile_overlap=self._scale_refine_overlap(),
+                tile_overlap=self._calc_refine_overlap(),
                 **kwargs,
             )
 
@@ -214,7 +214,7 @@ class Predictor(PredictionPreparation):
             **kwargs,
         )
 
-    def _sds_kwargs(
+    def _build_sds_args(
         self,
         options: PredictOptions,
         *,
@@ -233,12 +233,12 @@ class Predictor(PredictionPreparation):
         anchor_masks = None
         slice_schedule = None
 
-        if self._uses_scale_anchor(anchors, volume_size):
+        if self._has_scale_anchor(anchors, volume_size):
             anchor_targets, anchor_masks = prepare_scale_anchor_targets(
                 self.vae,
                 anchors,
                 volume_size=volume_size,
-                base_size=self._image_size(),
+                base_size=self._get_image_size(),
                 num_phases=options.num_phases,
                 segment=options.anchor_segment,
                 device=self.device,
@@ -247,7 +247,7 @@ class Predictor(PredictionPreparation):
             )
 
             sds_anchors = None
-            slice_schedule = self._scale_anchor_schedule(
+            slice_schedule = self._build_anchor_schedule(
                 anchors,
                 steps=options.sds_steps,
                 batch_size=options.sds_batch_size,
@@ -260,7 +260,7 @@ class Predictor(PredictionPreparation):
             "sds_batch_size": options.sds_batch_size,
             "lr": options.sds_lr,
             "t_min": options.sds_t_min,
-            "t_max": self._sds_t_max(options),
+            "t_max": self._resolve_t_max(options),
             "num_phases": options.num_phases,
             "slice_schedule": slice_schedule,
             "anchors": sds_anchors,
@@ -278,7 +278,7 @@ class Predictor(PredictionPreparation):
             "diffusivity_targets": targets.get("diffusivity_targets"),
             "diffusivity_solver": solver,
             "diffusivity_weight": options.diffusivity_weight,
-            "descriptor_tile_size": self._scale_descriptor_tile_size(
+            "descriptor_tile_size": self._resolve_tile_size(
                 options,
                 target_images=target_images,
                 volume_size=volume_size,
@@ -305,7 +305,7 @@ class Predictor(PredictionPreparation):
             diffusivity_low_cond=options.diffusivity_low_cond,
         )
 
-    def _validate_predict_inputs(
+    def _validate_inputs(
         self,
         options: PredictOptions,
         *,
@@ -320,7 +320,7 @@ class Predictor(PredictionPreparation):
             raise ValueError("target_images are required when target losses are enabled.")
 
         if options.sds_steps > 0:
-            self._sds_t_max(options)
+            self._resolve_t_max(options)
 
-    def _image_size(self) -> int:
+    def _get_image_size(self) -> int:
         return int(self.vae.image_size)

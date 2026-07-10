@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from src.common.helpers.segmentation import segment_multi_otsu
+from src.common.helpers.segmentation import segment_otsu
 from src.modeling.phases.quantization import MAX_UINT8_PHASES
 
 
@@ -25,7 +25,7 @@ def prepare_anchor_image(
     if image.ndim != 2:
         raise ValueError("anchor image must be 2D.")
 
-    phase = segment_multi_otsu(image, num_phases) if segment else image
+    phase = segment_otsu(image, num_phases) if segment else image
     _validate_phase_image(phase, num_phases)
 
     return torch.from_numpy(phase.astype(np.float32, copy=True)).unsqueeze(0).unsqueeze(0)
