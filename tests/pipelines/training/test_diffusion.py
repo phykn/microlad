@@ -114,9 +114,9 @@ class DiffusionTrainerTest(unittest.TestCase):
         self.assertEqual(trainer.step, 1)
         self.assertIn("loss", stats)
         self.assertIn("noise", stats)
-        self.assertIn("grad_norm", stats)
+        self.assertIn("calc_grad_norm", stats)
         self.assertGreaterEqual(stats["loss"], 0.0)
-        self.assertGreater(stats["grad_norm"], 0.0)
+        self.assertGreater(stats["calc_grad_norm"], 0.0)
 
     def test_trainer_can_reuse_existing_run_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -196,7 +196,7 @@ class DiffusionTrainerTest(unittest.TestCase):
         self.assertEqual(progress.kwargs["desc"], "diffusion")
         self.assertFalse(progress.kwargs["disable"])
         self.assertEqual(len(progress.postfixes), 2)
-        self.assertEqual(set(progress.postfixes[-1]), {"loss", "grad_norm"})
+        self.assertEqual(set(progress.postfixes[-1]), {"loss", "calc_grad_norm"})
         self.assertIn("loss", stats)
 
     def test_default_gradient_clipping_limits_gradients_after_logging_raw_norm(self):
@@ -215,10 +215,10 @@ class DiffusionTrainerTest(unittest.TestCase):
             )
 
             stats = trainer.train_step()
-            clipped_norm = trainer.grad_norm()
+            clipped_norm = trainer.calc_grad_norm()
             trainer.close()
 
-        self.assertGreater(stats["grad_norm"], 1.0)
+        self.assertGreater(stats["calc_grad_norm"], 1.0)
         self.assertLessEqual(clipped_norm, 1.0001)
 
     def test_trainer_rejects_invalid_step_settings(self):

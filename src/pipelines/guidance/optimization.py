@@ -11,10 +11,10 @@ from src.pipelines.reconstruction.slices import (
     select_slice_batch,
 )
 from src.pipelines.guidance.anchor_objective import anchor_loss
-from src.pipelines.guidance.preparation import prepare_anchor_targets, prepare_inference_module
+from src.pipelines.guidance.preparation import build_anchor_targets, freeze_inference
 from src.pipelines.guidance.prior import sds_loss
 from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver
-from src.pipelines.guidance.objective import descriptor_loss, descriptor_loss_per_sample
+from src.pipelines.guidance.objective import descriptor_loss, sample_descriptor_loss
 from src.pipelines.guidance.conditioning.model import AnchorSlice
 from src.pipelines.guidance.evaluation import (
     _objective,
@@ -23,7 +23,7 @@ from src.pipelines.guidance.evaluation import (
 from src.pipelines.reconstruction.volume import decode_latent, decode_latents
 from src.pipelines.guidance.validation import (
     _validate_inputs,
-    _validate_optimization_contract,
+    _validate_contract,
     _validate_volume_inputs,
 )
 
@@ -70,7 +70,7 @@ def optimize_volume(
         anchors=anchors,
         anchor_weight=anchor_weight,
     )
-    _validate_optimization_contract(
+    _validate_contract(
         lr=lr,
         sds_weight=sds_weight,
         anchor_weight=anchor_weight,
@@ -86,7 +86,7 @@ def optimize_volume(
         diffusivity_targets=diffusivity_targets,
         diffusivity_solver=diffusivity_solver,
     )
-    anchor_targets = prepare_anchor_targets(
+    anchor_targets = build_anchor_targets(
         vae,
         anchors,
         volume_shape=volume.shape,
@@ -240,8 +240,8 @@ def optimize_slice(
     if steps == 0:
         return updated, {}
 
-    prepare_inference_module(vae)
-    prepare_inference_module(diffusion_model)
+    freeze_inference(vae)
+    freeze_inference(diffusion_model)
 
     image = extract_slice(updated, axis, index).view(
         1,
@@ -332,8 +332,8 @@ def _optimize_slice_batch(
     if steps == 0:
         return updated, {}
 
-    prepare_inference_module(vae)
-    prepare_inference_module(diffusion_model)
+    freeze_inference(vae)
+    freeze_inference(diffusion_model)
 
     images = extract_slice_batch(updated, axis, indices)
     image_size = int(vae.image_size)

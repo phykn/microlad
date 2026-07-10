@@ -161,13 +161,13 @@ def _validate_options(
             f"num_phases must be at most {MAX_UINT8_PHASES} for uint8 images."
         )
 
-    _validate_positive_scalar("temperature", temperature)
+    _require_positive("temperature", temperature)
 
     require_int("sa_kernel_size", sa_kernel_size)
     if sa_kernel_size <= 0 or sa_kernel_size % 2 == 0:
         raise ValueError("sa_kernel_size must be a positive odd integer.")
 
-    _validate_positive_scalar("sa_sigma", sa_sigma)
+    _require_positive("sa_sigma", sa_sigma)
 
     if use_diffusivity:
         _diffusivity_shape(diffusivity_size)
@@ -200,7 +200,7 @@ def _diffusivity_shape(size: int | tuple[int, int] | None) -> tuple[int, int]:
     return int(height), int(width)
 
 
-def _validate_positive_scalar(name: str, value: float) -> None:
+def _require_positive(name: str, value: float) -> None:
     require_finite_number(name, value)
 
     if value <= 0.0:

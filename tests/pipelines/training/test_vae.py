@@ -89,10 +89,10 @@ class VAETrainerTest(unittest.TestCase):
         self.assertEqual(trainer.step, 1)
         self.assertEqual(
             set(stats.keys()),
-            {"loss", "reconstruction", "kl", "grad_norm"},
+            {"loss", "reconstruction", "kl", "calc_grad_norm"},
         )
         self.assertGreaterEqual(stats["loss"], 0.0)
-        self.assertGreater(stats["grad_norm"], 0.0)
+        self.assertGreater(stats["calc_grad_norm"], 0.0)
 
     def test_checkpoint_saves_unwrapped_model_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -184,7 +184,7 @@ class VAETrainerTest(unittest.TestCase):
         self.assertEqual(len(progress.postfixes), 2)
         self.assertEqual(
             set(progress.postfixes[-1]),
-            {"loss", "reconstruction", "kl", "grad_norm"},
+            {"loss", "reconstruction", "kl", "calc_grad_norm"},
         )
         self.assertIn("loss", stats)
 
@@ -219,10 +219,10 @@ class VAETrainerTest(unittest.TestCase):
             )
 
             stats = trainer.train_step()
-            clipped_norm = trainer.grad_norm()
+            clipped_norm = trainer.calc_grad_norm()
             trainer.close()
 
-        self.assertGreater(stats["grad_norm"], 1.0)
+        self.assertGreater(stats["calc_grad_norm"], 1.0)
         self.assertLessEqual(clipped_norm, 1.0001)
 
     def test_train_rejects_non_positive_steps(self):

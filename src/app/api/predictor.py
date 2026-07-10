@@ -5,19 +5,19 @@ import torch
 
 from src.modeling.phases.quantization import quantize_phase
 from src.modeling.vae import get_downsample_factor
-from src.pipelines.reconstruction.refinement import three_axis_refinement
+from src.pipelines.reconstruction.refinement import refine_axes
 from src.modeling.diffusion import DiffusionSampler
 from src.pipelines.guidance.conditioning.validation import validate_anchors
-from src.pipelines.guidance.conditioning.latents import prepare_anchor_latents
-from src.pipelines.scaling.decoding import decode_large_latent_volume
+from src.pipelines.guidance.conditioning.latents import encode_anchors
+from src.pipelines.scaling.decoding import decode_large_volume
 from src.pipelines.scaling.optimization import optimize_large_volume
 from src.pipelines.scaling.refinement import refine_large_volume
 from src.pipelines.scaling.sampling import sample_large_lmpdd
 from src.pipelines.scaling.conditioning import (
     center_start,
-    prepare_scale_anchor_latents,
-    prepare_scale_anchor_targets,
-    shifted_anchor_slices,
+    encode_scale_anchors,
+    build_scale_targets,
+    shift_anchor_slices,
 )
 from src.pipelines.guidance.optimization import optimize_volume
 from src.pipelines.guidance.conditioning.targets import build_sds_targets
@@ -86,7 +86,7 @@ class Predictor(PredictionPrep):
         anchors: Sequence[AnchorSlice] | None,
     ) -> tuple[torch.Tensor, dict]:
         if volume_size == self._get_image_size():
-            anchor_latent, anchor_mask = prepare_anchor_latents(
+            anchor_latent, anchor_mask = encode_anchors(
                 self.vae,
                 anchors,
                 num_phases=options.num_phases,
@@ -146,7 +146,7 @@ class Predictor(PredictionPrep):
             anchor_latent=anchor_latent,
             anchor_mask=anchor_mask,
         )
-        volume = decode_large_latent_volume(
+        volume = decode_large_volume(
             self.vae,
             latent,
             tile_overlap=overlap,
@@ -165,7 +165,7 @@ class Predictor(PredictionPrep):
 
     def _refine(self, volume: torch.Tensor, steps: int) -> torch.Tensor:
         if volume.shape[0] == self._get_image_size():
-            return three_axis_refinement(
+            return refine_axes(
                 volume,
                 self.vae,
                 steps=steps,
@@ -234,7 +234,7 @@ class Predictor(PredictionPrep):
         slice_schedule = None
 
         if self._has_scale_anchor(anchors, volume_size):
-            anchor_targets, anchor_masks = prepare_scale_anchor_targets(
+            anchor_targets, anchor_masks = build_scale_targets(
                 self.vae,
                 anchors,
                 volume_size=volume_size,

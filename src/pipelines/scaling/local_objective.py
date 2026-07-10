@@ -5,12 +5,12 @@ import torch.nn.functional as F
 
 from src.modeling.diffusion import DDPMProcess
 from src.pipelines.guidance.anchor_objective import anchor_loss, masked_anchor_loss
-from src.pipelines.guidance.objective import descriptor_loss, descriptor_loss_per_sample
+from src.pipelines.guidance.objective import descriptor_loss, sample_descriptor_loss
 from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver
 from src.pipelines.guidance.prior import sds_loss
 from src.pipelines.reconstruction.volume import decode_latent, decode_latents
 from src.pipelines.scaling.blending import blend_window
-from src.pipelines.scaling.tiles import normalized_tile_weights, tile_grid
+from src.pipelines.scaling.tiles import normalize_tile_weights, tile_grid
 from src.pipelines.scaling.validation import _as_anchor_image
 from src.common.tensors.validation import require_finite
 
@@ -43,7 +43,7 @@ def _local_prior_objective(
     height, width = int(image.shape[0]), int(image.shape[1])
     out = image.new_zeros(image.shape)
     weight_sum = image.detach().new_zeros(image.shape)
-    placements = normalized_tile_weights(
+    placements = normalize_tile_weights(
         height,
         width,
         tile_size=tile_size,
@@ -156,7 +156,7 @@ def _local_prior_objective(
     return stitched, total, mean_stats
 
 
-def _local_prior_objective_batch(
+def _batch_prior_loss(
     images: torch.Tensor,
     vae: torch.nn.Module,
     diffusion_model: torch.nn.Module,
@@ -187,7 +187,7 @@ def _local_prior_objective_batch(
     tile_size = int(vae.image_size)
     out = images.new_zeros(images.shape)
     weight_sum = images.detach().new_zeros(images.shape)
-    placements = normalized_tile_weights(
+    placements = normalize_tile_weights(
         height,
         width,
         tile_size=tile_size,
@@ -260,7 +260,7 @@ def _local_prior_objective_batch(
             total = total + weighted
             stats["sds"] = weighted.detach()
 
-        target_total, target_stats = descriptor_loss_per_sample(
+        target_total, target_stats = sample_descriptor_loss(
             decoded,
             num_phases=num_phases,
             vf_targets=vf_targets,
@@ -374,7 +374,7 @@ def _decode_tiled_image(
     return _weighted_average(out, weight_sum)
 
 
-def _decode_tiled_image_batch(
+def _decode_tiles(
     images: torch.Tensor,
     vae: torch.nn.Module,
     *,

@@ -3,13 +3,13 @@ from collections.abc import Sequence
 import torch
 
 from src.pipelines.guidance.conditioning.images import prepare_anchor_image
-from src.pipelines.guidance.conditioning.reconstruction import reconstruct_anchor_target
+from src.pipelines.guidance.conditioning.reconstruction import reconstruct_target
 from src.pipelines.guidance.conditioning.validation import validate_anchors
 from src.pipelines.guidance.conditioning.model import AnchorSlice
 from src.common.tensors.validation import require_float
 
 
-def prepare_anchor_targets(
+def build_anchor_targets(
     vae: torch.nn.Module,
     anchors: Sequence[AnchorSlice] | None,
     *,
@@ -34,7 +34,7 @@ def prepare_anchor_targets(
             num_phases=num_phases,
             segment=segment,
         ).to(device=device, dtype=dtype)
-        target = reconstruct_anchor_target(
+        target = reconstruct_target(
             vae,
             target,
             tile_overlap=tile_overlap,
@@ -44,7 +44,7 @@ def prepare_anchor_targets(
     return targets
 
 
-def prepare_inference_module(module: torch.nn.Module) -> None:
+def freeze_inference(module: torch.nn.Module) -> None:
     module.eval()
 
     for parameter in module.parameters():

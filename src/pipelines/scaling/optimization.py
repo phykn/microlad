@@ -14,17 +14,17 @@ from src.pipelines.reconstruction.slices import (
     select_slice_batch,
 )
 from src.pipelines.guidance.anchor_objective import anchor_loss, masked_anchor_loss
-from src.pipelines.guidance.preparation import prepare_anchor_targets, prepare_inference_module
+from src.pipelines.guidance.preparation import build_anchor_targets, freeze_inference
 from src.pipelines.guidance.prior import sds_loss
 from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver
-from src.pipelines.guidance.objective import descriptor_loss, descriptor_loss_per_sample
+from src.pipelines.guidance.objective import descriptor_loss, sample_descriptor_loss
 from src.pipelines.guidance.conditioning.model import AnchorSlice
-from src.pipelines.scaling.tiles import normalized_tile_weights, tile_grid
+from src.pipelines.scaling.tiles import normalize_tile_weights, tile_grid
 from src.pipelines.scaling.local_objective import (
     _decode_tiled_image,
-    _decode_tiled_image_batch,
+    _decode_tiles,
     _local_prior_objective,
-    _local_prior_objective_batch,
+    _batch_prior_loss,
     _mean_stats,
     _record_stats,
 )
@@ -90,7 +90,7 @@ def optimize_large_volume(
         temperature=temperature,
         num_phases=num_phases,
     )
-    prepared_targets = prepare_anchor_targets(
+    prepared_targets = build_anchor_targets(
         vae,
         anchors,
         volume_shape=volume.shape,
@@ -113,8 +113,8 @@ def optimize_large_volume(
         dtype=volume.dtype,
     )
 
-    prepare_inference_module(vae)
-    prepare_inference_module(diffusion_model)
+    freeze_inference(vae)
+    freeze_inference(diffusion_model)
 
     updated = volume.clone().float()
     history: dict[str, list[torch.Tensor]] = {}
@@ -167,7 +167,7 @@ def optimize_large_volume(
             targets = [prepared_targets.get((axis, index)) for index in indices]
             masks = [prepared_masks.get((axis, index)) for index in indices]
 
-            refined, stats = _optimize_large_slice_batch(
+            refined, stats = _optimize_batch(
                 images,
                 vae,
                 diffusion_model,
@@ -312,7 +312,7 @@ def _optimize_large_slice(
     return decoded, _mean_stats(history)
 
 
-def _optimize_large_slice_batch(
+def _optimize_batch(
     images: torch.Tensor,
     vae: torch.nn.Module,
     diffusion_model: torch.nn.Module,
@@ -361,7 +361,7 @@ def _optimize_large_slice_batch(
     for _ in range(steps):
         optimizer.zero_grad()
 
-        decoded, total, stats = _local_prior_objective_batch(
+        decoded, total, stats = _batch_prior_loss(
             image_param,
             vae,
             diffusion_model,
@@ -387,7 +387,7 @@ def _optimize_large_slice_batch(
         )
 
         if not use_tile_descriptor:
-            target_total, target_stats = descriptor_loss_per_sample(
+            target_total, target_stats = sample_descriptor_loss(
                 decoded,
                 num_phases=num_phases,
                 vf_targets=vf_targets,
@@ -414,7 +414,7 @@ def _optimize_large_slice_batch(
         _record_stats(history, stats)
 
     with torch.no_grad():
-        decoded = _decode_tiled_image_batch(
+        decoded = _decode_tiles(
             image_param.detach(),
             vae,
             tile_overlap=tile_overlap,

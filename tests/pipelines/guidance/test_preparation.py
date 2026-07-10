@@ -5,7 +5,7 @@ import torch
 
 from src.app.api import AnchorSlice
 from src.pipelines.guidance.conditioning.images import prepare_anchor_image
-from src.pipelines.guidance.preparation import prepare_anchor_targets
+from src.pipelines.guidance.preparation import build_anchor_targets
 
 
 class ShiftDecodeVAE(torch.nn.Module):
@@ -28,7 +28,7 @@ class PredictSDSCommonTest(unittest.TestCase):
             index=1,
         )
 
-        targets = prepare_anchor_targets(
+        targets = build_anchor_targets(
             ShiftDecodeVAE(),
             [anchor],
             volume_shape=torch.Size([2, 2, 2]),
@@ -52,7 +52,7 @@ class PredictSDSCommonTest(unittest.TestCase):
         ]
 
         with self.assertRaisesRegex(ValueError, "dtype"):
-            prepare_anchor_targets(
+            build_anchor_targets(
                 ShiftDecodeVAE(),
                 anchors,
                 volume_shape=torch.Size([2, 2, 2]),

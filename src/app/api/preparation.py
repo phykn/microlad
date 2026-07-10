@@ -9,8 +9,8 @@ from src.modeling.vae import get_downsample_factor
 from src.pipelines.guidance.conditioning.validation import validate_anchors
 from src.pipelines.scaling.conditioning import (
     center_start,
-    prepare_scale_anchor_latents,
-    shifted_anchor_slices,
+    encode_scale_anchors,
+    shift_anchor_slices,
 )
 
 class PredictionPrep:
@@ -93,7 +93,7 @@ class PredictionPrep:
         if not anchors or anchor_size not in (self._get_image_size(), int(volume_size)):
             return None, None
 
-        return prepare_scale_anchor_latents(
+        return encode_scale_anchors(
             self.vae,
             anchors,
             volume_size=volume_size,
@@ -122,7 +122,7 @@ class PredictionPrep:
         batch_size: int = 1,
         volume_size: int,
     ) -> list[tuple[int, int]] | None:
-        shifted = shifted_anchor_slices(
+        shifted = shift_anchor_slices(
             anchors,
             volume_size=volume_size,
             base_size=self._get_image_size(),

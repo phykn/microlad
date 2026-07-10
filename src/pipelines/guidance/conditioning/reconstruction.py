@@ -6,7 +6,7 @@ from src.common.tensors.validation import require_finite
 
 
 @torch.no_grad()
-def reconstruct_anchor_target(
+def reconstruct_target(
     vae: torch.nn.Module,
     image: torch.Tensor,
     *,

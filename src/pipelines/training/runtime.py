@@ -12,7 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 from src.pipelines.training.distributed import unwrap_model
 
 
-def validate_train_settings(
+def validate_training(
     *,
     steps: int,
     save_every: int,
@@ -69,7 +69,7 @@ def log_stats(writer: SummaryWriter | None, stats: dict[str, float], step: int) 
         writer.add_scalar(f"train/{name}", value, step)
 
 
-def progress_postfix(stats: dict[str, float]) -> dict[str, str]:
+def format_progress(stats: dict[str, float]) -> dict[str, str]:
     return {name: f"{value:.4g}" for name, value in stats.items()}
 
 
@@ -109,23 +109,23 @@ def save_checkpoint(
     if step % save_every == 0:
         step_dir = weight_dir / str(step)
         step_dir.mkdir(parents=True, exist_ok=True)
-        save_checkpoint_file(checkpoint, step_dir / "model.pt")
+        write_checkpoint(checkpoint, step_dir / "model.pt")
 
-    save_checkpoint_file(checkpoint, last_weight_dir / "model.pt")
+    write_checkpoint(checkpoint, last_weight_dir / "model.pt")
 
 
-def save_checkpoint_file(checkpoint: dict, path: Path) -> None:
+def write_checkpoint(checkpoint: dict, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid4().hex}.tmp")
     try:
         torch.save(checkpoint, temp_path)
-        replace_file(temp_path, path)
+        replace_atomic(temp_path, path)
     finally:
         if temp_path.exists():
             temp_path.unlink()
 
 
-def replace_file(source: Path, target: Path) -> None:
+def replace_atomic(source: Path, target: Path) -> None:
     for attempt in range(5):
         try:
             os.replace(source, target)
@@ -137,7 +137,7 @@ def replace_file(source: Path, target: Path) -> None:
             time.sleep(0.1)
 
 
-def model_grad_norm(parameters: Iterable[torch.nn.Parameter]) -> float:
+def calc_grad_norm(parameters: Iterable[torch.nn.Parameter]) -> float:
     total = 0.0
     for parameter in parameters:
         if parameter.grad is None:
@@ -149,7 +149,7 @@ def model_grad_norm(parameters: Iterable[torch.nn.Parameter]) -> float:
     return total**0.5
 
 
-def image_from_batch(batch) -> torch.Tensor:
+def unpack_batch(batch) -> torch.Tensor:
     if isinstance(batch, torch.Tensor):
         return batch
 

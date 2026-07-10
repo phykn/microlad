@@ -7,15 +7,15 @@ from tqdm.auto import tqdm
 
 from src.pipelines.training.distributed import is_main_process
 from src.pipelines.training.runtime import (
-    image_from_batch,
+    unpack_batch,
     log_stats,
     loss_stats,
-    model_grad_norm,
+    calc_grad_norm,
     next_batch,
-    progress_postfix,
+    format_progress,
     save_checkpoint,
     setup_run_dirs,
-    validate_train_settings,
+    validate_training,
 )
 
 
@@ -32,7 +32,7 @@ class VAETrainer:
         save_every: int = 1,
         clip_grad_norm: float | None = 1.0,
     ) -> None:
-        validate_train_settings(
+        validate_training(
             steps=steps,
             save_every=save_every,
             clip_grad_norm=clip_grad_norm,
@@ -65,13 +65,13 @@ class VAETrainer:
     def train_step(self) -> dict[str, float]:
         self.model.train()
         batch, self.iterator = next_batch(self.dataloader, self.iterator)
-        image = image_from_batch(batch).to(self.device)
+        image = unpack_batch(batch).to(self.device)
 
         self.optimizer.zero_grad(set_to_none=True)
         recon, mu, logvar = self.model(image)
         loss, parts = self.loss_fn(recon, image, mu, logvar)
         loss.backward()
-        grad_norm = self.grad_norm()
+        calc_grad_norm = self.calc_grad_norm()
 
         if self.clip_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
@@ -79,7 +79,7 @@ class VAETrainer:
         self.optimizer.step()
 
         stats = loss_stats(loss, parts)
-        stats["grad_norm"] = grad_norm
+        stats["calc_grad_norm"] = calc_grad_norm
         self.step += 1
         self.log_step_stats(stats)
         self.save_checkpoint()
@@ -96,7 +96,7 @@ class VAETrainer:
 
         for _ in progress:
             stats = self.train_step()
-            progress.set_postfix(progress_postfix(stats))
+            progress.set_postfix(format_progress(stats))
 
         return stats
 
@@ -114,8 +114,8 @@ class VAETrainer:
             is_main_process=self.is_main_process,
         )
 
-    def grad_norm(self) -> float:
-        return model_grad_norm(self.model.parameters())
+    def calc_grad_norm(self) -> float:
+        return calc_grad_norm(self.model.parameters())
 
     def close(self) -> None:
         if self.writer is not None:

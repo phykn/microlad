@@ -39,7 +39,7 @@ def _validate_inputs(
     if steps < 0:
         raise ValueError("steps must be non-negative.")
 
-    _validate_optimization_contract(
+    _validate_contract(
         lr=lr,
         sds_weight=sds_weight,
         anchor_weight=anchor_weight,
@@ -62,7 +62,7 @@ def _validate_inputs(
         raise ValueError("selected slice shape must match vae.image_size.")
 
 
-def _validate_optimization_contract(
+def _validate_contract(
     *,
     lr: float,
     sds_weight: float,

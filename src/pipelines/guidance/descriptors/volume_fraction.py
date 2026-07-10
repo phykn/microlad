@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 
 from src.modeling.phases.relaxation import calc_phase_probs
-from src.pipelines.guidance.target_values import phase_vector_target
+from src.pipelines.guidance.target_values import build_phase_target
 
 
 def volume_fraction_loss(
@@ -32,7 +32,7 @@ def volume_fraction_loss(
         num_phases=num_phases,
         temperature=temperature,
     )
-    target = phase_vector_target(
+    target = build_phase_target(
         targets,
         num_phases=num_phases,
         device=values.device,

@@ -6,7 +6,7 @@ import torch
 from src.common.tensors.validation import require_finite, require_float
 
 
-def phase_vector_target(
+def build_phase_target(
     targets: Mapping[int, float] | torch.Tensor,
     *,
     num_phases: int,

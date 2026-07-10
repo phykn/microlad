@@ -42,7 +42,7 @@ def tile_grid(
             yield row, col
 
 
-def normalized_tile_weights(
+def normalize_tile_weights(
     height: int,
     width: int,
     *,

@@ -23,7 +23,7 @@ def sds_loss(
         raise ValueError("latent dimensions must be positive.")
 
     require_finite("latent", latent)
-    _validate_timestep_range(ddpm, t_min, t_max)
+    _validate_range(ddpm, t_min, t_max)
 
     if t is None:
         t = torch.randint(t_min, t_max, (latent.shape[0],), device=latent.device)
@@ -86,7 +86,7 @@ def sds_loss(
     return loss, {"sds": loss.detach(), "t": t.detach()}
 
 
-def _validate_timestep_range(ddpm: DDPMProcess, t_min: int, t_max: int) -> None:
+def _validate_range(ddpm: DDPMProcess, t_min: int, t_max: int) -> None:
     if t_min < 0 or t_max > ddpm.num_timesteps or t_min >= t_max:
         raise ValueError(
             "timestep range must satisfy 0 <= t_min < t_max <= num_timesteps."

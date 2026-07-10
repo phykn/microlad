@@ -3,7 +3,7 @@ import unittest
 import torch
 
 from src.pipelines.scaling.blending import blend_window
-from src.pipelines.scaling.decoding import decode_large_latent_volume
+from src.pipelines.scaling.decoding import decode_large_volume
 from src.pipelines.scaling.refinement import refine_large_volume
 from src.pipelines.scaling.decoding import _decode_tiled_plane
 from src.pipelines.scaling.refinement import _refine_tiled_plane
@@ -155,7 +155,7 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
         vae.train()
         latent = torch.arange(8, dtype=torch.float32).view(1, 2, 2, 2)
 
-        volume = decode_large_latent_volume(vae, latent, tile_overlap=0)
+        volume = decode_large_volume(vae, latent, tile_overlap=0)
 
         expected = torch.empty(4, 4, 4)
         for z in range(4):
@@ -174,7 +174,7 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
 
     def test_decode_large_latent_volume_rejects_bad_decode_shape(self):
         with self.assertRaisesRegex(ValueError, "decode"):
-            decode_large_latent_volume(
+            decode_large_volume(
                 BadDecodeVAE(),
                 torch.zeros(1, 2, 2, 2),
                 tile_overlap=0,
@@ -182,7 +182,7 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
 
     def test_decode_large_latent_volume_rejects_non_floating_latent(self):
         with self.assertRaisesRegex(ValueError, "floating"):
-            decode_large_latent_volume(
+            decode_large_volume(
                 DecodeValueVAE(),
                 torch.zeros(1, 2, 2, 2, dtype=torch.int64),
                 tile_overlap=0,
@@ -190,7 +190,7 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
 
     def test_decode_large_latent_volume_rejects_non_finite_latent(self):
         with self.assertRaisesRegex(ValueError, "latent volume.*finite"):
-            decode_large_latent_volume(
+            decode_large_volume(
                 DecodeValueVAE(),
                 torch.full((1, 2, 2, 2), float("nan")),
                 tile_overlap=0,
@@ -198,7 +198,7 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
 
     def test_decode_large_latent_volume_rejects_non_finite_decode_output(self):
         with self.assertRaisesRegex(ValueError, "decoded.*finite"):
-            decode_large_latent_volume(
+            decode_large_volume(
                 NonFiniteDecodeVAE(),
                 torch.zeros(1, 2, 2, 2),
                 tile_overlap=0,
@@ -206,7 +206,7 @@ class PredictScaleDecodeRefineTest(unittest.TestCase):
 
     def test_decode_large_latent_volume_rejects_inconsistent_vae_scale(self):
         with self.assertRaisesRegex(ValueError, "image_size"):
-            decode_large_latent_volume(
+            decode_large_volume(
                 InconsistentScaleVAE(),
                 torch.zeros(1, 2, 2, 2),
                 tile_overlap=0,

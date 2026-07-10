@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from src.modeling.phases.relaxation import calc_phase_probs
-from src.pipelines.guidance.target_values import phase_vector_target
+from src.pipelines.guidance.target_values import build_phase_target
 from src.common.tensors.validation import require_finite
 
 
@@ -198,7 +198,7 @@ def diffusivity_loss(
         num_phases=num_phases,
         temperature=temperature,
     )
-    target_diffusivity = phase_vector_target(
+    target_diffusivity = build_phase_target(
         targets,
         num_phases=num_phases,
         device=actual_diffusivity.device,

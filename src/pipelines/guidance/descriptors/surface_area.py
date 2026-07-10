@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 
 from src.modeling.phases.relaxation import calc_phase_probs
-from src.pipelines.guidance.target_values import phase_vector_target
+from src.pipelines.guidance.target_values import build_phase_target
 
 
 def surface_area_loss(
@@ -48,7 +48,7 @@ def surface_area_loss(
         kernel_size=kernel_size,
         sigma=sigma,
     )
-    target_sa = phase_vector_target(
+    target_sa = build_phase_target(
         targets,
         num_phases=num_phases,
         device=values.device,

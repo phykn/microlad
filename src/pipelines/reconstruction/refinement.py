@@ -4,7 +4,7 @@ from src.common.tensors.validation import require_finite, require_float
 
 
 @torch.no_grad()
-def three_axis_refinement(
+def refine_axes(
     volume: torch.Tensor,
     vae: torch.nn.Module,
     *,

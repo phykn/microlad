@@ -8,7 +8,7 @@ from src.pipelines.guidance.conditioning.validation import validate_anchors
 from src.pipelines.guidance.conditioning.model import AnchorSlice
 
 
-def prepare_anchor_latents(
+def encode_anchors(
     vae: torch.nn.Module,
     anchors: Sequence[AnchorSlice] | None,
     *,

@@ -9,8 +9,8 @@ def blend_window(
     dtype: torch.dtype,
     floor: float = 1e-3,
 ) -> torch.Tensor:
-    _validate_positive_integer("height", height)
-    _validate_positive_integer("width", width)
+    _require_positive_int("height", height)
+    _require_positive_int("width", width)
 
     if floor <= 0.0:
         raise ValueError("floor must be positive.")
@@ -31,7 +31,7 @@ def blend_window(
     return torch.outer(window_h, window_w).clamp_min(floor)
 
 
-def _validate_positive_integer(name: str, value: int) -> None:
+def _require_positive_int(name: str, value: int) -> None:
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"{name} must be an integer.")
 

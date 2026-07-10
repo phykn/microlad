@@ -5,7 +5,7 @@ import torch
 
 from src.modeling.vae import get_downsample_factor
 from src.pipelines.guidance.conditioning.images import prepare_anchor_image
-from src.pipelines.guidance.conditioning.reconstruction import reconstruct_anchor_target
+from src.pipelines.guidance.conditioning.reconstruction import reconstruct_target
 from src.pipelines.guidance.conditioning.validation import validate_anchor, validate_anchors
 from src.pipelines.scaling.tiles import tile_grid
 from src.pipelines.guidance.conditioning.model import AnchorSlice
@@ -40,7 +40,7 @@ def _aligned_center_start(
     return start
 
 
-def shifted_anchor_slices(
+def shift_anchor_slices(
     anchors: Sequence[AnchorSlice] | None,
     *,
     volume_size: int,
@@ -61,7 +61,7 @@ def shifted_anchor_slices(
     return [(int(anchor.axis), start + int(anchor.index)) for anchor in anchors or []]
 
 
-def prepare_scale_anchor_latents(
+def encode_scale_anchors(
     vae: torch.nn.Module,
     anchors: Sequence[AnchorSlice] | None,
     *,
@@ -159,7 +159,7 @@ def prepare_scale_anchor_latents(
     return latent, mask
 
 
-def prepare_scale_anchor_targets(
+def build_scale_targets(
     vae: torch.nn.Module,
     anchors: Sequence[AnchorSlice] | None,
     *,
@@ -196,7 +196,7 @@ def prepare_scale_anchor_targets(
             num_phases=num_phases,
             segment=segment,
         ).to(device=device, dtype=dtype)
-        image = reconstruct_anchor_target(vae, image)[0, 0]
+        image = reconstruct_target(vae, image)[0, 0]
 
         target = torch.zeros((volume_size, volume_size), device=device, dtype=dtype)
         mask = torch.zeros_like(target)

@@ -2,12 +2,12 @@ import unittest
 
 import torch
 
-from src.pipelines.scaling.tiles import normalized_tile_weights, tile_grid, tile_starts
+from src.pipelines.scaling.tiles import normalize_tile_weights, tile_grid, tile_starts
 
 
 class PredictScaleTilesTest(unittest.TestCase):
     def test_normalized_tile_weights_sum_to_one_per_pixel(self):
-        placements = normalized_tile_weights(
+        placements = normalize_tile_weights(
             4,
             4,
             tile_size=3,

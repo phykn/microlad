@@ -5,9 +5,9 @@ import torch
 
 from src.pipelines.scaling.conditioning import (
     center_start,
-    prepare_scale_anchor_latents,
-    prepare_scale_anchor_targets,
-    shifted_anchor_slices,
+    encode_scale_anchors,
+    build_scale_targets,
+    shift_anchor_slices,
 )
 from src.app.api.options import AnchorSlice
 
@@ -67,7 +67,7 @@ class ScaleConditionTest(unittest.TestCase):
     def test_anchor_latent_is_written_at_shifted_center_plane(self):
         anchor = AnchorSlice(image=np.ones((2, 2), dtype=np.uint8), axis=0, index=1)
 
-        latent, mask = prepare_scale_anchor_latents(
+        latent, mask = encode_scale_anchors(
             IdentityVAE(),
             [anchor],
             volume_size=6,
@@ -87,7 +87,7 @@ class ScaleConditionTest(unittest.TestCase):
         ]
 
         with self.assertRaisesRegex(ValueError, "latent plane"):
-            prepare_scale_anchor_latents(
+            encode_scale_anchors(
                 DownsamplingVAE(),
                 anchors,
                 volume_size=6,
@@ -100,7 +100,7 @@ class ScaleConditionTest(unittest.TestCase):
         anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=2)
 
         with self.assertRaisesRegex(ValueError, "index"):
-            prepare_scale_anchor_latents(
+            encode_scale_anchors(
                 IdentityVAE(),
                 [anchor],
                 volume_size=6,
@@ -113,7 +113,7 @@ class ScaleConditionTest(unittest.TestCase):
         anchor = AnchorSlice(image=np.zeros((4, 4), dtype=np.uint8), axis=0, index=4)
 
         with self.assertRaisesRegex(ValueError, "index"):
-            prepare_scale_anchor_latents(
+            encode_scale_anchors(
                 IdentityVAE(),
                 [anchor],
                 volume_size=4,
@@ -126,7 +126,7 @@ class ScaleConditionTest(unittest.TestCase):
         anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=0)
 
         with self.assertRaisesRegex(ValueError, "align"):
-            prepare_scale_anchor_latents(
+            encode_scale_anchors(
                 DownsamplingVAE(),
                 [anchor],
                 volume_size=4,
@@ -138,7 +138,7 @@ class ScaleConditionTest(unittest.TestCase):
     def test_large_anchor_latents_do_not_require_base_center_alignment(self):
         anchor = AnchorSlice(image=np.zeros((4, 4), dtype=np.uint8), axis=0, index=0)
 
-        latent, mask = prepare_scale_anchor_latents(
+        latent, mask = encode_scale_anchors(
             DownsamplingVAE(),
             [anchor],
             volume_size=4,
@@ -154,7 +154,7 @@ class ScaleConditionTest(unittest.TestCase):
         anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=0)
 
         with self.assertRaisesRegex(ValueError, "encoded anchor latent.*finite"):
-            prepare_scale_anchor_latents(
+            encode_scale_anchors(
                 NonFiniteVAE(),
                 [anchor],
                 volume_size=4,
@@ -167,7 +167,7 @@ class ScaleConditionTest(unittest.TestCase):
         anchor = AnchorSlice(image=np.zeros((4, 4), dtype=np.uint8), axis=0, index=0)
 
         with self.assertRaisesRegex(ValueError, "encoded anchor latent.*finite"):
-            prepare_scale_anchor_latents(
+            encode_scale_anchors(
                 NonFiniteVAE(),
                 [anchor],
                 volume_size=4,
@@ -179,7 +179,7 @@ class ScaleConditionTest(unittest.TestCase):
     def test_shifted_anchor_slices_move_base_index_to_output_index(self):
         anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=1)
 
-        shifted = shifted_anchor_slices([anchor], volume_size=6, base_size=2)
+        shifted = shift_anchor_slices([anchor], volume_size=6, base_size=2)
 
         self.assertEqual(shifted, [(0, 3)])
 
@@ -187,7 +187,7 @@ class ScaleConditionTest(unittest.TestCase):
         anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=0)
 
         with self.assertRaisesRegex(ValueError, "align"):
-            prepare_scale_anchor_targets(
+            build_scale_targets(
                 DownsamplingVAE(),
                 [anchor],
                 volume_size=4,
@@ -202,7 +202,7 @@ class ScaleConditionTest(unittest.TestCase):
     def test_scale_anchor_targets_use_reconstructed_center_patch(self):
         anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=1)
 
-        targets, masks = prepare_scale_anchor_targets(
+        targets, masks = build_scale_targets(
             ShiftDecodeVAE(),
             [anchor],
             volume_size=6,
@@ -224,7 +224,7 @@ class ScaleConditionTest(unittest.TestCase):
         anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=0)
 
         with self.assertRaisesRegex(ValueError, "align"):
-            shifted_anchor_slices(
+            shift_anchor_slices(
                 [anchor],
                 volume_size=4,
                 base_size=2,
@@ -235,7 +235,7 @@ class ScaleConditionTest(unittest.TestCase):
         anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=2)
 
         with self.assertRaisesRegex(ValueError, "index"):
-            shifted_anchor_slices([anchor], volume_size=6, base_size=2)
+            shift_anchor_slices([anchor], volume_size=6, base_size=2)
 
 
 if __name__ == "__main__":

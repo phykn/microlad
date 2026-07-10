@@ -9,7 +9,7 @@ from src.pipelines.guidance.descriptors.volume_fraction import volume_fraction_l
 from src.common.tensors.validation import require_finite
 
 
-def _validate_descriptor_inputs(name: str, weight: float, targets) -> None:
+def _validate_descriptor(name: str, weight: float, targets) -> None:
     if weight < 0.0:
         raise ValueError(f"{name}_weight must be non-negative.")
 
@@ -39,10 +39,10 @@ def descriptor_loss(
     total = decoded.sum() * 0.0
     stats: dict[str, torch.Tensor] = {}
 
-    _validate_descriptor_inputs("vf", vf_weight, vf_targets)
-    _validate_descriptor_inputs("tpc", tpc_weight, tpc_targets)
-    _validate_descriptor_inputs("sa", sa_weight, sa_targets)
-    _validate_descriptor_inputs(
+    _validate_descriptor("vf", vf_weight, vf_targets)
+    _validate_descriptor("tpc", tpc_weight, tpc_targets)
+    _validate_descriptor("sa", sa_weight, sa_targets)
+    _validate_descriptor(
         "diffusivity",
         diffusivity_weight,
         diffusivity_targets,
@@ -101,7 +101,7 @@ def descriptor_loss(
     return total, stats
 
 
-def descriptor_loss_per_sample(
+def sample_descriptor_loss(
     decoded: torch.Tensor,
     *,
     num_phases: int,

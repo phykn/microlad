@@ -7,7 +7,7 @@ from src.common.tensors.validation import require_finite, require_float
 
 
 @torch.no_grad()
-def decode_large_latent_volume(
+def decode_large_volume(
     vae: torch.nn.Module,
     latent: torch.Tensor,
     *,

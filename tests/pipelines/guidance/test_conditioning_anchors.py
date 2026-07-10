@@ -6,9 +6,9 @@ import torch
 from src.pipelines.scaling.blending import blend_window
 from src.app.api import AnchorSlice
 from src.pipelines.guidance.conditioning.images import prepare_anchor_image
-from src.pipelines.guidance.conditioning.reconstruction import reconstruct_anchor_target
+from src.pipelines.guidance.conditioning.reconstruction import reconstruct_target
 from src.pipelines.guidance.conditioning.validation import validate_anchor, validate_anchors
-from src.pipelines.guidance.conditioning.latents import prepare_anchor_latents
+from src.pipelines.guidance.conditioning.latents import encode_anchors
 
 
 class IdentityVAE(torch.nn.Module):
@@ -130,7 +130,7 @@ class PredictAnchorTest(unittest.TestCase):
     def test_prepare_anchor_latents_maps_axis_zero(self):
         anchor = AnchorSlice(image=np.ones((2, 2), dtype=np.uint8), axis=0, index=1)
 
-        latent, mask = prepare_anchor_latents(
+        latent, mask = encode_anchors(
             IdentityVAE(),
             [anchor],
             num_phases=2,
@@ -149,7 +149,7 @@ class PredictAnchorTest(unittest.TestCase):
         ]
 
         with self.assertRaisesRegex(ValueError, "latent plane"):
-            prepare_anchor_latents(
+            encode_anchors(
                 DownsamplingVAE(),
                 anchors,
                 num_phases=2,
@@ -160,7 +160,7 @@ class PredictAnchorTest(unittest.TestCase):
     def test_prepare_anchor_latents_maps_axis_one(self):
         anchor = AnchorSlice(image=np.ones((2, 2), dtype=np.uint8), axis=1, index=1)
 
-        latent, mask = prepare_anchor_latents(
+        latent, mask = encode_anchors(
             IdentityVAE(),
             [anchor],
             num_phases=2,
@@ -175,7 +175,7 @@ class PredictAnchorTest(unittest.TestCase):
     def test_prepare_anchor_latents_maps_axis_two(self):
         anchor = AnchorSlice(image=np.ones((2, 2), dtype=np.uint8), axis=2, index=1)
 
-        latent, mask = prepare_anchor_latents(
+        latent, mask = encode_anchors(
             IdentityVAE(),
             [anchor],
             num_phases=2,
@@ -195,7 +195,7 @@ class PredictAnchorTest(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "axis"):
-            prepare_anchor_latents(
+            encode_anchors(
                 IdentityVAE(),
                 [anchor],
                 num_phases=2,
@@ -211,7 +211,7 @@ class PredictAnchorTest(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "index"):
-            prepare_anchor_latents(
+            encode_anchors(
                 IdentityVAE(),
                 [anchor],
                 num_phases=2,
@@ -223,7 +223,7 @@ class PredictAnchorTest(unittest.TestCase):
         vae = LocalPatternAnchorVAE()
         image = torch.zeros(1, 1, 4, 4)
 
-        recon = reconstruct_anchor_target(vae, image, tile_overlap=2)
+        recon = reconstruct_target(vae, image, tile_overlap=2)
 
         expected = torch.zeros_like(image)
         weight_sum = torch.zeros_like(image)

@@ -4,7 +4,7 @@ import torch
 
 from src.modeling.diffusion import DDPMProcess
 from src.pipelines.guidance.anchor_objective import anchor_loss
-from src.pipelines.guidance.objective import descriptor_loss, descriptor_loss_per_sample
+from src.pipelines.guidance.objective import descriptor_loss, sample_descriptor_loss
 from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver
 from src.pipelines.guidance.prior import sds_loss
 from src.common.tensors.validation import require_finite
@@ -132,7 +132,7 @@ def _objective_batch(
         total = total + loss
         stats["anchor"] = loss.detach()
 
-    target_total, target_stats = descriptor_loss_per_sample(
+    target_total, target_stats = sample_descriptor_loss(
         decoded,
         num_phases=num_phases,
         vf_targets=vf_targets,

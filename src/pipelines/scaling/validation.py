@@ -45,8 +45,8 @@ def _validate_inputs(
     if depth != height or depth != width:
         raise ValueError("scale-up SDS requires a cubic volume.")
 
-    _validate_non_negative_integer("steps", steps)
-    _validate_non_negative_integer("slice_steps", slice_steps)
+    _require_nonnegative_int("steps", steps)
+    _require_nonnegative_int("slice_steps", slice_steps)
 
     if not isinstance(num_phases, int) or isinstance(num_phases, bool):
         raise ValueError("num_phases must be an integer.")
@@ -54,8 +54,8 @@ def _validate_inputs(
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
 
-    _validate_positive_scalar("lr", lr)
-    _validate_positive_scalar("temperature", temperature)
+    _require_positive("lr", lr)
+    _require_positive("temperature", temperature)
 
     if not isinstance(sds_batch_size, int) or isinstance(sds_batch_size, bool):
         raise ValueError("sds_batch_size must be an integer.")
@@ -74,14 +74,14 @@ def _validate_inputs(
         ("sa_weight", sa_weight),
         ("diffusivity_weight", diffusivity_weight),
     ):
-        _validate_non_negative_scalar(name, weight)
+        _require_nonnegative(name, weight)
 
-    _validate_anchor_tensor_map(
+    _validate_anchor_map(
         "anchor_targets",
         anchor_targets,
         volume_shape=volume.shape,
     )
-    _validate_anchor_tensor_map(
+    _validate_anchor_map(
         "anchor_masks",
         anchor_masks,
         volume_shape=volume.shape,
@@ -119,7 +119,7 @@ def _as_anchor_image(target: torch.Tensor) -> torch.Tensor:
     raise ValueError("anchor target must have shape [H, W] or [1, 1, H, W].")
 
 
-def _validate_non_negative_integer(name: str, value: int) -> None:
+def _require_nonnegative_int(name: str, value: int) -> None:
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"{name} must be an integer.")
 
@@ -127,17 +127,17 @@ def _validate_non_negative_integer(name: str, value: int) -> None:
         raise ValueError(f"{name} must be non-negative.")
 
 
-def _validate_positive_scalar(name: str, value: float) -> None:
+def _require_positive(name: str, value: float) -> None:
     if not math.isfinite(float(value)) or value <= 0.0:
         raise ValueError(f"{name} must be positive and finite.")
 
 
-def _validate_non_negative_scalar(name: str, value: float) -> None:
+def _require_nonnegative(name: str, value: float) -> None:
     if not math.isfinite(float(value)) or value < 0.0:
         raise ValueError(f"{name} must be non-negative and finite.")
 
 
-def _validate_anchor_tensor_map(
+def _validate_anchor_map(
     name: str,
     values: Mapping[tuple[int, int], torch.Tensor] | None,
     *,
@@ -148,7 +148,7 @@ def _validate_anchor_tensor_map(
         return
 
     for key, value in values.items():
-        axis, index = _validate_anchor_tensor_key(
+        axis, index = _validate_anchor_key(
             name,
             key,
             volume_shape=volume_shape,
@@ -163,7 +163,7 @@ def _validate_anchor_tensor_map(
             raise ValueError(f"{name} values must be between 0 and 1.")
 
 
-def _validate_anchor_tensor_key(
+def _validate_anchor_key(
     name: str,
     key: tuple[int, int],
     *,

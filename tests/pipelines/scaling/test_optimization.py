@@ -9,9 +9,9 @@ from src.pipelines.scaling.blending import blend_window
 from src.pipelines.scaling.optimization import optimize_large_volume
 from src.pipelines.scaling.local_objective import (
     _decode_tiled_image,
-    _decode_tiled_image_batch,
+    _decode_tiles,
     _local_prior_objective,
-    _local_prior_objective_batch,
+    _batch_prior_loss,
 )
 from src.pipelines.scaling.tiles import tile_grid
 
@@ -311,7 +311,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             ]
         )
 
-        _, total, stats = _local_prior_objective_batch(
+        _, total, stats = _batch_prior_loss(
             images,
             IdentityVAE(),
             ZeroNoiseModel(),
@@ -350,7 +350,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             temperature=0.5,
             tile_overlap=0,
         )
-        _, batch_total, stats = _local_prior_objective_batch(
+        _, batch_total, stats = _batch_prior_loss(
             images,
             IdentityVAE(),
             ZeroNoiseModel(),
@@ -396,7 +396,7 @@ class PredictScaleSDSTest(unittest.TestCase):
     def test_local_prior_objective_batch_uses_weighted_tile_stitching(self):
         vae = LocalPatternVAE()
 
-        decoded, _, _ = _local_prior_objective_batch(
+        decoded, _, _ = _batch_prior_loss(
             torch.zeros(2, 4, 4),
             vae,
             ZeroNoiseModel(),
@@ -433,7 +433,7 @@ class PredictScaleSDSTest(unittest.TestCase):
     def test_decode_tiled_image_batch_uses_weighted_tile_stitching(self):
         vae = LocalPatternVAE()
 
-        decoded = _decode_tiled_image_batch(torch.zeros(2, 4, 4), vae, tile_overlap=2)
+        decoded = _decode_tiles(torch.zeros(2, 4, 4), vae, tile_overlap=2)
 
         expected = _expected_local_pattern_stitch(vae, torch.zeros(4, 4))
 

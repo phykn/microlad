@@ -17,7 +17,7 @@ def refine_large_volume(
     if steps < 0:
         raise ValueError("steps must be non-negative.")
 
-    _validate_tile_batch_size(tile_batch_size)
+    _validate_batch_size(tile_batch_size)
     _validate_volume(volume)
 
     refined = volume.float()
@@ -90,7 +90,7 @@ def _refine_tiled_plane(
     if image.ndim != 2:
         raise ValueError("image must have shape [H, W].")
 
-    _validate_tile_batch_size(tile_batch_size)
+    _validate_batch_size(tile_batch_size)
 
     tile_size = int(vae.image_size)
     height, width = int(image.shape[0]), int(image.shape[1])
@@ -179,7 +179,7 @@ def _validate_volume(volume: torch.Tensor) -> None:
         raise ValueError("large volume refinement requires a cubic volume.")
 
 
-def _validate_tile_batch_size(tile_batch_size: int) -> None:
+def _validate_batch_size(tile_batch_size: int) -> None:
     if not isinstance(tile_batch_size, int) or isinstance(tile_batch_size, bool):
         raise ValueError("tile_batch_size must be an integer.")
 
