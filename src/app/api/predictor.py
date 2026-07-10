@@ -4,6 +4,7 @@ import numpy as np
 import torch
 
 from src.modeling.phases.quantization import quantize_phase
+from src.modeling.vae import get_downsample_factor
 from src.pipelines.reconstruction.refinement import three_axis_refinement
 from src.modeling.diffusion import DiffusionSampler
 from src.pipelines.guidance.conditioning.validation import validate_anchors
@@ -115,7 +116,7 @@ class Predictor(PredictionPreparation):
         options: PredictOptions,
         anchors: Sequence[AnchorSlice] | None,
     ) -> tuple[torch.Tensor, dict[str, int]]:
-        factor = self._downsample_factor()
+        factor = get_downsample_factor(self.vae)
         tile_size = int(self.vae.latent_size)
         overlap = self._scale_tile_overlap(tile_size, None)
         latent_size = self._scale_latent_size(
@@ -242,7 +243,7 @@ class Predictor(PredictionPreparation):
                 segment=options.anchor_segment,
                 device=self.device,
                 dtype=torch.float32,
-                downsample_factor=self._downsample_factor(),
+                downsample_factor=get_downsample_factor(self.vae),
             )
 
             sds_anchors = None
@@ -323,22 +324,3 @@ class Predictor(PredictionPreparation):
 
     def _image_size(self) -> int:
         return int(self.vae.image_size)
-
-    def _downsample_factor(self) -> int:
-        factor = int(
-            getattr(
-                self.vae,
-                "downsample_factor",
-                int(self.vae.image_size) // int(self.vae.latent_size),
-            )
-        )
-
-        if factor <= 0:
-            raise ValueError("VAE downsample factor must be positive.")
-
-        if int(self.vae.image_size) != int(self.vae.latent_size) * factor:
-            raise ValueError(
-                "vae.image_size must equal vae.latent_size times downsample factor."
-            )
-
-        return factor

@@ -2,7 +2,12 @@ import unittest
 
 import torch
 
-from src.pipelines.reconstruction.volume import decode_latent_volume, generate_initial_volume
+from src.pipelines.reconstruction.volume import (
+    decode_latent,
+    decode_latent_volume,
+    decode_latents,
+    generate_initial_volume,
+)
 
 
 class FakeSampler:
@@ -64,6 +69,25 @@ class ZeroDownsampleVAE(CountingVAE):
 
 
 class PredictVolumeTest(unittest.TestCase):
+    def test_decode_latent_returns_single_image(self):
+        decoded = decode_latent(CountingVAE(), torch.zeros(1, 1, 2, 2))
+
+        self.assertEqual(decoded.shape, torch.Size([4, 4]))
+
+    def test_decode_latents_returns_image_batch(self):
+        decoded = decode_latents(CountingVAE(), torch.zeros(2, 1, 2, 2))
+
+        self.assertEqual(decoded.shape, torch.Size([2, 4, 4]))
+
+    def test_decode_latents_rejects_bad_or_non_finite_output(self):
+        latent = torch.zeros(2, 1, 2, 2)
+
+        with self.assertRaisesRegex(ValueError, "shape"):
+            decode_latents(BadVAE(), latent)
+
+        with self.assertRaisesRegex(ValueError, "finite"):
+            decode_latents(NonFiniteDecodeVAE(), latent)
+
     def test_decode_latent_volume_averages_three_axis_decodes(self):
         vae = CountingVAE()
         latent = torch.zeros(1, 2, 2, 2)

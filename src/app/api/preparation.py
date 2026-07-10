@@ -5,6 +5,7 @@ import torch
 
 from src.app.api.options import AnchorSlice, PredictOptions
 from src.common.validation import require_int
+from src.modeling.vae import get_downsample_factor
 from src.pipelines.guidance.conditioning.validation import validate_anchors
 from src.pipelines.scaling.conditioning import (
     center_start,
@@ -125,7 +126,7 @@ class PredictionPreparation:
             anchors,
             volume_size=volume_size,
             base_size=self._image_size(),
-            downsample_factor=self._downsample_factor(),
+            downsample_factor=get_downsample_factor(self.vae),
         )
         if not shifted or steps <= 0:
             return None

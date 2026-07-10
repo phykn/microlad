@@ -154,31 +154,3 @@ def _objective_batch(
     stats["loss"] = total.detach()
 
     return total, stats
-
-
-def _decode_latent(vae: torch.nn.Module, latent: torch.Tensor) -> torch.Tensor:
-    decoded = vae.decode(latent)
-
-    if decoded.ndim != 4 or decoded.shape[:2] != (1, 1):
-        raise ValueError("vae.decode must return shape [1, 1, H, W].")
-
-    if decoded.shape[-2:] != (int(vae.image_size), int(vae.image_size)):
-        raise ValueError("vae.decode output spatial shape must match vae.image_size.")
-
-    validate_finite_tensor("decoded", decoded)
-
-    return decoded[0, 0]
-
-
-def _decode_latent_batch(vae: torch.nn.Module, latent: torch.Tensor) -> torch.Tensor:
-    decoded = vae.decode(latent)
-
-    if decoded.ndim != 4 or decoded.shape[0] != latent.shape[0] or decoded.shape[1] != 1:
-        raise ValueError("vae.decode must return shape [B, 1, H, W].")
-
-    if decoded.shape[-2:] != (int(vae.image_size), int(vae.image_size)):
-        raise ValueError("vae.decode output spatial shape must match vae.image_size.")
-
-    validate_finite_tensor("decoded", decoded)
-
-    return decoded[:, 0]

@@ -9,6 +9,26 @@ from src.modeling.phases.representation import (
 )
 
 
+def get_downsample_factor(vae: nn.Module) -> int:
+    factor = int(
+        getattr(
+            vae,
+            "downsample_factor",
+            int(vae.image_size) // int(vae.latent_size),
+        )
+    )
+
+    if factor <= 0:
+        raise ValueError("VAE downsample factor must be positive.")
+
+    if int(vae.image_size) != int(vae.latent_size) * factor:
+        raise ValueError(
+            "vae.image_size must equal vae.latent_size times downsample factor."
+        )
+
+    return factor
+
+
 class ConvBlock(nn.Module):
     def __init__(
         self,

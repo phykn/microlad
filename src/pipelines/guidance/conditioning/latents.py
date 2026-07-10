@@ -2,6 +2,7 @@ from collections.abc import Sequence
 
 import torch
 
+from src.modeling.vae import get_downsample_factor
 from src.pipelines.guidance.conditioning.images import prepare_anchor_image
 from src.pipelines.guidance.conditioning.validation import validate_anchors
 from src.pipelines.guidance.conditioning.model import AnchorSlice
@@ -26,7 +27,7 @@ def prepare_anchor_latents(
     shape = (latent_size, latent_ch, latent_size, latent_size)
     anchor_latent = torch.zeros(shape, device=device)
     anchor_mask = torch.zeros(shape, device=device)
-    factor = _downsample_factor(vae)
+    factor = get_downsample_factor(vae)
     written_planes: set[tuple[int, int]] = set()
 
     for anchor in anchors:
@@ -55,16 +56,6 @@ def prepare_anchor_latents(
         )
 
     return anchor_latent, anchor_mask
-
-
-def _downsample_factor(vae: torch.nn.Module) -> int:
-    return int(
-        getattr(
-            vae,
-            "downsample_factor",
-            int(vae.image_size) // int(vae.latent_size),
-        )
-    )
 
 
 def _encode_anchor_latent(

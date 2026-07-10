@@ -1,5 +1,6 @@
 import torch
 
+from src.modeling.vae import get_downsample_factor
 from src.pipelines.scaling.blending import blend_window
 from src.pipelines.scaling.tiles import tile_grid
 from src.common.tensors.validation import validate_finite_tensor, validate_floating_dtype
@@ -16,7 +17,7 @@ def decode_large_latent_volume(
     vae.eval()
 
     _, depth, height, width = latent.shape
-    factor = _downsample_factor(vae)
+    factor = get_downsample_factor(vae)
     volume = torch.zeros(
         depth * factor,
         height * factor,
@@ -73,7 +74,7 @@ def _validate_latent_volume(vae: torch.nn.Module, latent: torch.Tensor) -> None:
     if any(size < latent_size for size in latent.shape[1:]):
         raise ValueError("latent spatial shape must be at least vae.latent_size.")
 
-    _downsample_factor(vae)
+    get_downsample_factor(vae)
 
 
 def _decode_tiled_plane(
@@ -87,7 +88,7 @@ def _decode_tiled_plane(
 
     tile_size = int(vae.latent_size)
     image_size = int(vae.image_size)
-    factor = _downsample_factor(vae)
+    factor = get_downsample_factor(vae)
     height, width = int(latent_plane.shape[1]), int(latent_plane.shape[2])
     out = torch.zeros(
         height * factor,
@@ -144,23 +145,3 @@ def _decode_tiled_plane(
         ] += window
 
     return out / weight_sum.clamp_min(torch.finfo(weight_sum.dtype).tiny)
-
-
-def _downsample_factor(vae: torch.nn.Module) -> int:
-    factor = int(
-        getattr(
-            vae,
-            "downsample_factor",
-            int(vae.image_size) // int(vae.latent_size),
-        )
-    )
-
-    if factor <= 0:
-        raise ValueError("VAE downsample factor must be positive.")
-
-    if int(vae.latent_size) * factor != int(vae.image_size):
-        raise ValueError(
-            "vae.image_size must equal vae.latent_size * downsample_factor."
-        )
-
-    return factor

@@ -8,6 +8,7 @@ from src.pipelines.guidance.anchor_objective import anchor_loss, masked_anchor_l
 from src.pipelines.guidance.objective import descriptor_loss, descriptor_loss_per_sample
 from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver
 from src.pipelines.guidance.prior import sds_loss
+from src.pipelines.reconstruction.volume import decode_latent, decode_latents
 from src.pipelines.scaling.blending import blend_window
 from src.pipelines.scaling.tiles import normalized_tile_weights, tile_grid
 from src.pipelines.scaling.validation import _as_anchor_image
@@ -69,7 +70,7 @@ def _local_prior_objective(
 
         validate_finite_tensor("latent", mu)
 
-        decoded = _decode_latent(vae, mu)
+        decoded = decode_latent(vae, mu)
         out[row : row + tile_size, col : col + tile_size] = (
             out[row : row + tile_size, col : col + tile_size]
             + decoded * ownership
@@ -222,7 +223,7 @@ def _local_prior_objective_batch(
 
         validate_finite_tensor("latent", mu)
 
-        decoded = _decode_latent_batch(vae, mu)
+        decoded = decode_latents(vae, mu)
         out[:, row : row + tile_size, col : col + tile_size] = (
             out[:, row : row + tile_size, col : col + tile_size]
             + decoded * ownership
@@ -362,7 +363,7 @@ def _decode_tiled_image(
 
         validate_finite_tensor("latent", mu)
 
-        decoded = _decode_latent(vae, mu)
+        decoded = decode_latent(vae, mu)
         out[row : row + tile_size, col : col + tile_size] = (
             out[row : row + tile_size, col : col + tile_size] + decoded * window
         )
@@ -410,7 +411,7 @@ def _decode_tiled_image_batch(
 
         validate_finite_tensor("latent", mu)
 
-        decoded = _decode_latent_batch(vae, mu)
+        decoded = decode_latents(vae, mu)
         out[:, row : row + tile_size, col : col + tile_size] = (
             out[:, row : row + tile_size, col : col + tile_size] + decoded * window
         )
@@ -456,31 +457,3 @@ def _mean_stats(history: dict[str, list[torch.Tensor]]) -> dict[str, torch.Tenso
         for key, values in history.items()
         if values
     }
-
-
-def _decode_latent(vae: torch.nn.Module, latent: torch.Tensor) -> torch.Tensor:
-    decoded = vae.decode(latent)
-
-    if decoded.ndim != 4 or decoded.shape[:2] != (1, 1):
-        raise ValueError("vae.decode must return shape [1, 1, H, W].")
-
-    if decoded.shape[-2:] != (int(vae.image_size), int(vae.image_size)):
-        raise ValueError("vae.decode output spatial shape must match vae.image_size.")
-
-    validate_finite_tensor("decoded", decoded)
-
-    return decoded[0, 0]
-
-
-def _decode_latent_batch(vae: torch.nn.Module, latent: torch.Tensor) -> torch.Tensor:
-    decoded = vae.decode(latent)
-
-    if decoded.ndim != 4 or decoded.shape[0] != latent.shape[0] or decoded.shape[1] != 1:
-        raise ValueError("vae.decode must return shape [B, 1, H, W].")
-
-    if decoded.shape[-2:] != (int(vae.image_size), int(vae.image_size)):
-        raise ValueError("vae.decode output spatial shape must match vae.image_size.")
-
-    validate_finite_tensor("decoded", decoded)
-
-    return decoded[:, 0]

@@ -4,7 +4,21 @@ import torch
 import torch.nn as nn
 
 from src.common.neural import downsample_steps
-from src.modeling.vae import PatchVAE, reparameterize
+from src.modeling.vae import PatchVAE, get_downsample_factor, reparameterize
+
+
+class VAEGeometry:
+    def __init__(
+        self,
+        *,
+        image_size: int = 64,
+        latent_size: int = 16,
+        downsample_factor: int | None = 4,
+    ) -> None:
+        self.image_size = image_size
+        self.latent_size = latent_size
+        if downsample_factor is not None:
+            self.downsample_factor = downsample_factor
 
 
 class DownsampleShapeTest(unittest.TestCase):
@@ -20,6 +34,22 @@ class DownsampleShapeTest(unittest.TestCase):
             downsample_steps(image_size=130, latent_size=16)
         with self.assertRaisesRegex(ValueError, "power of two"):
             downsample_steps(image_size=96, latent_size=16)
+
+    def test_get_downsample_factor_reads_or_derives_valid_factor(self):
+        self.assertEqual(get_downsample_factor(VAEGeometry()), 4)
+        self.assertEqual(
+            get_downsample_factor(VAEGeometry(downsample_factor=None)),
+            4,
+        )
+
+    def test_get_downsample_factor_rejects_invalid_geometry(self):
+        for vae in (
+            VAEGeometry(downsample_factor=0),
+            VAEGeometry(downsample_factor=2),
+        ):
+            with self.subTest(vae=vae):
+                with self.assertRaisesRegex(ValueError, "downsample"):
+                    get_downsample_factor(vae)
 
 
 class PatchVAETest(unittest.TestCase):

@@ -17,11 +17,10 @@ from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver
 from src.pipelines.guidance.objective import descriptor_loss, descriptor_loss_per_sample
 from src.pipelines.guidance.conditioning.model import AnchorSlice
 from src.pipelines.guidance.evaluation import (
-    _decode_latent,
-    _decode_latent_batch,
     _objective,
     _objective_batch,
 )
+from src.pipelines.reconstruction.volume import decode_latent, decode_latents
 from src.pipelines.guidance.validation import (
     _validate_inputs,
     _validate_optimization_contract,
@@ -264,7 +263,7 @@ def optimize_slice(
 
     for _ in range(steps):
         optimizer.zero_grad()
-        decoded = _decode_latent(vae, latent)
+        decoded = decode_latent(vae, latent)
 
         total, stats = _objective(
             latent,
@@ -294,7 +293,7 @@ def optimize_slice(
         optimizer.step()
 
     with torch.no_grad():
-        decoded = _decode_latent(vae, latent)
+        decoded = decode_latent(vae, latent)
         replace_slice(updated, axis, index, decoded)
 
     return updated, stats
@@ -355,7 +354,7 @@ def _optimize_slice_batch(
 
     for _ in range(steps):
         optimizer.zero_grad()
-        decoded = _decode_latent_batch(vae, latent)
+        decoded = decode_latents(vae, latent)
 
         total, stats = _objective_batch(
             latent,
@@ -385,7 +384,7 @@ def _optimize_slice_batch(
         optimizer.step()
 
     with torch.no_grad():
-        decoded = _decode_latent_batch(vae, latent)
+        decoded = decode_latents(vae, latent)
         replace_slice_batch(updated, axis, indices, decoded)
 
     return updated, stats

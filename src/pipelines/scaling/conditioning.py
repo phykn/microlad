@@ -3,6 +3,7 @@ from collections.abc import Sequence
 import numpy as np
 import torch
 
+from src.modeling.vae import get_downsample_factor
 from src.pipelines.guidance.conditioning.images import prepare_anchor_image
 from src.pipelines.guidance.conditioning.reconstruction import reconstruct_anchor_target
 from src.pipelines.guidance.conditioning.validation import validate_anchor, validate_anchors
@@ -73,7 +74,7 @@ def prepare_scale_anchor_latents(
     if not anchors:
         return None, None
 
-    factor = _downsample_factor(vae)
+    factor = get_downsample_factor(vae)
     volume_size = int(volume_size)
     if volume_size % factor != 0:
         raise ValueError("volume_size must be divisible by VAE downsample factor.")
@@ -231,16 +232,6 @@ def _scale_anchor_scope(
     raise ValueError("anchor image size must match vae.image_size or volume_size.")
 
 
-def _downsample_factor(vae: torch.nn.Module) -> int:
-    return int(
-        getattr(
-            vae,
-            "downsample_factor",
-            int(vae.image_size) // int(vae.latent_size),
-        )
-    )
-
-
 def _encode_anchor(
     vae: torch.nn.Module,
     anchor: AnchorSlice,
@@ -280,7 +271,7 @@ def _encode_large_anchor(
     device: torch.device,
     tile_overlap: int,
 ) -> torch.Tensor:
-    factor = _downsample_factor(vae)
+    factor = get_downsample_factor(vae)
     image_size = int(vae.image_size)
     latent_tile_size = int(vae.latent_size)
     latent_size = int(volume_size) // factor
