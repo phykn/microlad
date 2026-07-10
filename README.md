@@ -2,9 +2,9 @@
 
 MicroLad-style 2D-to-3D microstructure generation.
 
-This repo trains on 2D grayscale or phase image patches, then generates a 3D candidate. During inference, observed 2D slices can be fixed at specified positions, and target statistics from a slice bundle can guide SDS refinement.
+This repo trains on 2D grayscale or phase image patches, then generates a 3D candidate. During inference, observed 2D slices guide specified positions through a soft anchor loss, and target statistics from a slice bundle can guide SDS refinement.
 
-The active implementation is in `src`. Legacy reference folders and removed interactive examples are not part of the maintained workflow.
+The active implementation is in `src`, and maintained interactive examples are in `notebooks`. Legacy reference folders are not part of the maintained workflow.
 A small sample image is checked in under `data/` so the default config can build a dataset without external files.
 Real training datasets and model checkpoints are not checked in.
 
@@ -21,6 +21,8 @@ The source tree has four ownership layers:
 python -m pip install -r requirements.txt
 ```
 
+The requirements include training, tests, and the libraries imported by the notebooks. Select this environment as the notebook kernel.
+
 Run training and prediction examples from the repository root. For scripts or
 interactive sessions launched elsewhere, add the checkout root to `PYTHONPATH` so imports
 such as `from src.app.runtime import load_predictor` resolve.
@@ -36,14 +38,23 @@ such as `from src.app.runtime import load_predictor` resolve.
 - VAE reconstruction is categorical: the decoder emits `[B, num_phases, H, W]`
   logits and the VAE loss is `CE(logits, phase_index) + beta * KL`.
 
-## Train
+## Test
 
-The default training configs are full-length examples. For a bounded smoke
-check, run the focused entrypoint tests instead:
+Run the full suite:
+
+```sh
+python -m pytest -q
+```
+
+For a bounded training-entrypoint check:
 
 ```sh
 python -m pytest tests/app/runtime/test_run_train_vae.py tests/app/runtime/test_run_train_diffusion.py -q
 ```
+
+## Train
+
+The default training configs are full-length examples.
 
 ```sh
 python run_train_vae.py
@@ -94,6 +105,18 @@ run/<timestamp>/
   (`crop_size`, `size`, `segment`, `num_phases`) so the latent dataset matches
   the frozen VAE.
 
+## Notebooks
+
+The notebooks follow the maintained workflow in order:
+
+- `00_dataset.ipynb`: load and inspect phase-index batches
+- `01_vae.ipynb`: compare VAE inputs and reconstructions
+- `02_diffusion.ipynb`: sample and decode diffusion latents
+- `03_predict.ipynb`: run anchored prediction and inspect descriptor targets
+- `04_scale_up.ipynb`: generate and inspect a larger volume
+
+`RUN_DIR = None` selects the latest compatible run. Set it to a run path when a specific checkpoint is required. Dataset tensors, decoded VAE values, and descriptor inputs use phase indices from `0` to `num_phases - 1`.
+
 ## Predict
 
 Load a trained run folder and call `predict`:
@@ -113,7 +136,7 @@ options = PredictOptions(
 volume, stats = predictor.predict(options)
 ```
 
-Anchors are full 2D slices fixed at a volume axis and index:
+Anchors are full 2D slices assigned to a volume axis and index. They contribute a soft loss during refinement; generated values are not forcibly overwritten:
 
 ```python
 anchor = AnchorSlice(image=anchor_image, axis=0, index=32)

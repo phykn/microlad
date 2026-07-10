@@ -1,8 +1,13 @@
-torch
+ipykernel
+ipython
+ipywidgets
+matplotlib
 numpy
 pillow
-tifffile
-scikit-image
+pytest
 pyyaml
+scikit-image
 tensorboard
+tifffile
+torch
 tqdm

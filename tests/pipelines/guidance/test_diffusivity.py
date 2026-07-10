@@ -10,10 +10,12 @@ class PredictSDSDiffusivityTest(unittest.TestCase):
         solver = DiffusivitySolver(height=4, width=4, low_cond=0.1)
 
         high = solver(torch.ones(4, 4))
+        middle = solver(torch.full((4, 4), 0.5))
         low = solver(torch.zeros(4, 4))
 
         self.assertTrue(torch.allclose(high, torch.tensor(1.0), atol=1e-4))
         self.assertTrue(torch.allclose(low, torch.tensor(0.1), atol=1e-4))
+        self.assertTrue(low < middle < high)
 
     def test_solver_clips_zero_low_cond_to_internal_floor(self):
         solver = DiffusivitySolver(height=2, width=2, low_cond=0.0)
@@ -95,6 +97,7 @@ class PredictSDSDiffusivityTest(unittest.TestCase):
         self.assertIsNotNone(values.grad)
         self.assertEqual(values.grad.shape, values.shape)
         self.assertTrue(torch.isfinite(values.grad).all())
+        self.assertGreater(float(torch.linalg.vector_norm(values.grad)), 0.0)
 
     def test_diffusivity_loss_rejects_invalid_inputs(self):
         solver = DiffusivitySolver(height=2, width=2)

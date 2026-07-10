@@ -2,10 +2,26 @@ import unittest
 
 import torch
 
-from src.pipelines.guidance.descriptors.two_point_correlation import tpc_loss
+from src.pipelines.guidance.descriptors.two_point_correlation import compute_tpc, tpc_loss
 
 
 class PredictSDSTPCTest(unittest.TestCase):
+    def test_tpc_is_invariant_to_periodic_translation(self):
+        values = torch.tensor(
+            [
+                [0.0, 0.0, 1.0, 1.0],
+                [0.0, 0.0, 1.0, 1.0],
+                [1.0, 1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0, 0.0],
+            ]
+        )
+        shifted = torch.roll(values, shifts=(1, 2), dims=(0, 1))
+
+        actual = compute_tpc(values, num_phases=2, temperature=0.01)
+        translated = compute_tpc(shifted, num_phases=2, temperature=0.01)
+
+        self.assertTrue(torch.allclose(actual, translated, atol=1e-6))
+
     def test_tpc_loss_matches_constant_phase_target(self):
         values = torch.full((4, 4), 0.0)
         targets = torch.zeros(2, 4)

@@ -1,4 +1,3 @@
-import importlib
 import sys
 import tempfile
 import unittest
@@ -9,14 +8,8 @@ import numpy as np
 from PIL import Image
 import torch
 
+import run_train_vae as script
 from src.app.runtime import load_run_vae
-
-
-def load_script():
-    try:
-        return importlib.import_module("run_train_vae")
-    except ModuleNotFoundError as exc:
-        raise AssertionError("run_train_vae.py should exist") from exc
 
 
 def write_image(path: Path) -> None:
@@ -89,7 +82,6 @@ class DeviceModel:
 
 class RunTrainVAETest(unittest.TestCase):
     def test_parse_args_loads_vae_config(self):
-        script = load_script()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             data_dir = root / "data"
@@ -108,7 +100,6 @@ class RunTrainVAETest(unittest.TestCase):
         self.assertEqual(args.num_phases, 2)
 
     def test_main_trains_one_step_and_writes_checkpoint(self):
-        script = load_script()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             data_dir = root / "data"
@@ -147,7 +138,6 @@ class RunTrainVAETest(unittest.TestCase):
         )
 
     def test_main_closes_trainer_when_training_raises(self):
-        script = load_script()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             data_dir = root / "data"
@@ -180,7 +170,6 @@ class RunTrainVAETest(unittest.TestCase):
         cleanup.assert_called_once_with(False)
 
     def test_main_cleans_up_distributed_when_close_raises(self):
-        script = load_script()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             data_dir = root / "data"

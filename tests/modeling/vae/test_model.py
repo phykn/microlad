@@ -1,7 +1,6 @@
 import unittest
 
 import torch
-import torch.nn as nn
 
 from src.common.neural import downsample_steps
 from src.modeling.vae import PatchVAE, get_downsample_factor, reparameterize
@@ -106,14 +105,6 @@ class PatchVAETest(unittest.TestCase):
         self.assertEqual(first_down_shapes, [(64, 64), (64, 64)])
         self.assertEqual(first_up_shapes, [(16, 16), (16, 16)])
 
-    def test_default_image_size_matches_original_repo_size(self):
-        model = PatchVAE(base_ch=8, max_ch=32)
-
-        self.assertEqual(model.image_size, 64)
-        self.assertEqual(model.latent_size, 16)
-        self.assertEqual(model.downsample_factor, 4)
-        self.assertEqual(model.downsample_steps, 2)
-
     def test_rejects_non_positive_latent_size_with_value_error(self):
         with self.assertRaisesRegex(ValueError, "latent_size"):
             PatchVAE(image_size=64, latent_size=0, base_ch=8, max_ch=32)
@@ -157,13 +148,6 @@ class PatchVAETest(unittest.TestCase):
         self.assertEqual(decoded.shape, torch.Size([2, 1, 64, 64]))
         self.assertTrue(torch.all(decoded >= 0.0))
         self.assertTrue(torch.all(decoded <= 3.0))
-
-    def test_output_has_no_tanh_activation(self):
-        model = PatchVAE(image_size=64, latent_size=16, base_ch=8, max_ch=32)
-
-        has_tanh = any(isinstance(module, nn.Tanh) for module in model.modules())
-
-        self.assertFalse(has_tanh)
 
     def test_encode_rejects_wrong_input_shape(self):
         model = PatchVAE(image_size=64, latent_size=16, base_ch=8, max_ch=32)

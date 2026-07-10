@@ -23,6 +23,20 @@ class VAELossTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(kl, torch.tensor(0.0)))
 
+    def test_kl_divergence_averages_over_latent_elements(self):
+        mu = torch.tensor([[[[0.0]], [[1.0]]]], dtype=torch.float64)
+        logvar = torch.zeros_like(mu)
+
+        expected = torch.tensor(0.25, dtype=torch.float64)
+
+        self.assertTrue(torch.allclose(kl_divergence(mu, logvar), expected))
+        self.assertTrue(
+            torch.allclose(
+                kl_divergence(mu.repeat(1, 4, 8, 8), logvar.repeat(1, 4, 8, 8)),
+                expected,
+            )
+        )
+
     def test_phase_levels_are_zero_based_phase_indices(self):
         levels = phase_levels(num_phases=4)
 

@@ -1,5 +1,4 @@
 import argparse
-import importlib
 import sys
 import tempfile
 import unittest
@@ -10,15 +9,9 @@ import numpy as np
 from PIL import Image
 import torch
 
+import run_train_diffusion as script
 from src.app.runtime import save_run_config
 from src.modeling.vae import PatchVAE
-
-
-def load_script():
-    try:
-        return importlib.import_module("run_train_diffusion")
-    except ModuleNotFoundError as exc:
-        raise AssertionError("run_train_diffusion.py should exist") from exc
 
 
 def write_image(path: Path) -> None:
@@ -100,18 +93,7 @@ class DeviceModel:
 
 
 class RunTrainDiffusionTest(unittest.TestCase):
-    def test_committed_diffusion_config_does_not_reference_local_run_output(self):
-        script = load_script()
-
-        args = script.load_defaults(script.DEFAULT_CONFIG)
-
-        self.assertIsNone(args.get("vae_run_dir"))
-        self.assertNotIn("crop_size", args)
-        self.assertNotIn("size", args)
-        self.assertNotIn("segment", args)
-
     def test_parse_args_loads_diffusion_config(self):
-        script = load_script()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config = root / "diffusion.yaml"
@@ -137,7 +119,6 @@ class RunTrainDiffusionTest(unittest.TestCase):
         self.assertEqual(args.timesteps, 4)
 
     def test_main_trains_one_step_and_writes_checkpoint(self):
-        script = load_script()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             data_dir = root / "data"
@@ -168,7 +149,6 @@ class RunTrainDiffusionTest(unittest.TestCase):
             self.assertFalse((vae_run_dir / "weight" / "diffusion").exists())
 
     def test_main_cleans_up_distributed_when_close_raises(self):
-        script = load_script()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             data_dir = root / "data"

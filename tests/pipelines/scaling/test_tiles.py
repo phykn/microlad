@@ -6,6 +6,14 @@ from src.pipelines.scaling.tiles import normalize_tile_weights, tile_grid, tile_
 
 
 class PredictScaleTilesTest(unittest.TestCase):
+    def test_tile_grid_covers_every_pixel(self):
+        coverage = torch.zeros(9, 11, dtype=torch.int64)
+
+        for row, col in tile_grid(9, 11, tile_size=4, overlap=2):
+            coverage[row : row + 4, col : col + 4] += 1
+
+        self.assertTrue(torch.all(coverage > 0))
+
     def test_normalize_tile_weights_sum_to_one_per_pixel(self):
         placements = normalize_tile_weights(
             4,

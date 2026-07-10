@@ -8,8 +8,6 @@ from src.app.api import AnchorSlice
 from src.pipelines.scaling.blending import blend_window
 from src.pipelines.scaling.optimization import optimize_large_volume
 from src.pipelines.scaling.local_objective import (
-    _decode_tiled_image,
-    _decode_tiles,
     _local_prior_objective,
     _batch_prior_loss,
 )
@@ -420,30 +418,6 @@ class PredictScaleSDSTest(unittest.TestCase):
                 expected.unsqueeze(0).expand(2, -1, -1),
             )
         )
-
-    def test_decode_tiled_image_uses_weighted_tile_stitching(self):
-        vae = LocalPatternVAE()
-
-        decoded = _decode_tiled_image(torch.zeros(4, 4), vae, tile_overlap=2)
-
-        expected = _expected_local_pattern_stitch(vae, torch.zeros(4, 4))
-
-        self.assertTrue(torch.allclose(decoded, expected))
-
-    def test_decode_tiles_uses_weighted_tile_stitching(self):
-        vae = LocalPatternVAE()
-
-        decoded = _decode_tiles(torch.zeros(2, 4, 4), vae, tile_overlap=2)
-
-        expected = _expected_local_pattern_stitch(vae, torch.zeros(4, 4))
-
-        self.assertTrue(
-            torch.allclose(
-                decoded,
-                expected.unsqueeze(0).expand(2, -1, -1),
-            )
-        )
-
 
 def _expected_local_pattern_stitch(
     vae: LocalPatternVAE,
