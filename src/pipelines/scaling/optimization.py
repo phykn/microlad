@@ -255,7 +255,7 @@ def _optimize_large_slice(
     for _ in range(steps):
         optimizer.zero_grad()
 
-        decoded, total, stats = _local_prior_objective(
+        decoded, phase_probabilities, total, stats = _local_prior_objective(
             image_param,
             vae,
             diffusion_model,
@@ -293,6 +293,7 @@ def _optimize_large_slice(
                 diffusivity_solver=diffusivity_solver,
                 diffusivity_weight=diffusivity_weight,
                 temperature=temperature,
+                phase_probabilities=phase_probabilities,
             )
             total = total + target_total
             stats.update(target_stats)
@@ -361,7 +362,7 @@ def _optimize_batch(
     for _ in range(steps):
         optimizer.zero_grad()
 
-        decoded, total, stats = _batch_prior_loss(
+        decoded, phase_probabilities, total, stats = _batch_prior_loss(
             image_param,
             vae,
             diffusion_model,
@@ -400,6 +401,7 @@ def _optimize_batch(
                 diffusivity_solver=diffusivity_solver,
                 diffusivity_weight=diffusivity_weight,
                 temperature=temperature,
+                phase_probabilities=phase_probabilities,
             )
             total = total + target_total
             stats.update(target_stats)

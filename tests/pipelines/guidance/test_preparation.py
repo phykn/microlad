@@ -5,7 +5,10 @@ import torch
 
 from src.app.api import AnchorSlice
 from src.pipelines.guidance.conditioning.images import prepare_anchor_image
-from src.pipelines.guidance.preparation import build_anchor_targets
+from src.pipelines.guidance.preparation import (
+    build_anchor_constraint_volume,
+    build_anchor_targets,
+)
 
 
 class ShiftDecodeVAE(torch.nn.Module):
@@ -18,6 +21,15 @@ class ShiftDecodeVAE(torch.nn.Module):
 
     def decode(self, latent: torch.Tensor) -> torch.Tensor:
         return latent + 0.25
+
+
+class BiasedCategoricalVAE(ShiftDecodeVAE):
+    num_phases = 2
+
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
+        probabilities = torch.zeros(latent.shape[0], 2, 2, 2)
+        probabilities[:, 0] = 1.0
+        return probabilities
 
 
 class PredictSDSCommonTest(unittest.TestCase):
@@ -61,6 +73,27 @@ class PredictSDSCommonTest(unittest.TestCase):
                 device=torch.device("cpu"),
                 dtype=torch.long,
             )
+
+    def test_categorical_constraint_volume_preserves_raw_anchor_labels(self):
+        anchor = AnchorSlice(
+            image=np.ones((2, 2), dtype=np.uint8),
+            axis=0,
+            index=1,
+        )
+
+        target, mask = build_anchor_constraint_volume(
+            BiasedCategoricalVAE(),
+            [anchor],
+            volume_shape=torch.Size([2, 2, 2]),
+            num_phases=2,
+            segment=False,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+
+        self.assertTrue(torch.all(target[1] == 1))
+        self.assertTrue(torch.all(mask[1] == 1))
+        self.assertTrue(torch.all(mask[0] == 0))
 
 
 if __name__ == "__main__":

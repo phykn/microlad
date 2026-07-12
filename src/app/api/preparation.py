@@ -14,6 +14,15 @@ from src.pipelines.scaling.conditioning import (
 )
 
 class PredictionPrep:
+    _BALANCED_AXIS_ORDERS = (
+        (0, 1, 2),
+        (2, 1, 0),
+        (1, 0, 2),
+        (2, 0, 1),
+        (0, 2, 1),
+        (1, 2, 0),
+    )
+
     def _resolve_volume_size(
         self,
         *,
@@ -177,6 +186,44 @@ class PredictionPrep:
 
         return schedule
 
+    def _build_balanced_schedule(
+        self,
+        *,
+        steps: int,
+        batch_size: int,
+        volume_size: int,
+    ) -> list[tuple[int, int]] | None:
+        if steps <= 0:
+            return None
+
+        if batch_size <= 0:
+            raise ValueError("sds_batch_size must be positive.")
+
+        if batch_size > volume_size:
+            raise ValueError("sds_batch_size cannot exceed volume_size.")
+
+        if volume_size % batch_size != 0:
+            raise ValueError(
+                "balanced SDS requires volume_size to be divisible by sds_batch_size."
+            )
+
+        batches_per_axis = volume_size // batch_size
+        schedule: list[tuple[int, int]] = []
+
+        for step in range(steps):
+            sweep = step // (3 * batches_per_axis)
+            within_sweep = step % (3 * batches_per_axis)
+            axis_slot = within_sweep // batches_per_axis
+            batch_slot = within_sweep % batches_per_axis
+            axis_order = self._BALANCED_AXIS_ORDERS[
+                sweep % len(self._BALANCED_AXIS_ORDERS)
+            ]
+            axis = axis_order[axis_slot]
+            start = batch_slot * batch_size
+            schedule.extend((axis, index) for index in range(start, start + batch_size))
+
+        return schedule
+
     def _pick_unused_index(
         self,
         volume_size: int,
@@ -307,4 +354,6 @@ class PredictionPrep:
             or options.tpc_weight > 0.0
             or options.sa_weight > 0.0
             or options.diffusivity_weight > 0.0
+            or options.joint_3d_transition_weight > 0.0
+            or options.joint_3d_run_weight > 0.0
         )

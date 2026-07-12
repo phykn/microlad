@@ -3,7 +3,10 @@ from collections.abc import Mapping
 import torch
 import torch.nn.functional as F
 
-from src.modeling.phases.relaxation import calc_phase_probs
+from src.modeling.phases.relaxation import (
+    calc_phase_probs,
+    sharpen_phase_probabilities,
+)
 from src.pipelines.guidance.target_values import build_phase_target
 
 
@@ -16,6 +19,7 @@ def surface_area_loss(
     kernel_size: int = 7,
     sigma: float = 1.0,
     weight: float = 1.0,
+    phase_probabilities: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if values.ndim < 2:
         raise ValueError("values must have at least two spatial dimensions.")
@@ -47,6 +51,7 @@ def surface_area_loss(
         temperature=temperature,
         kernel_size=kernel_size,
         sigma=sigma,
+        phase_probabilities=phase_probabilities,
     )
     target_sa = build_phase_target(
         targets,
@@ -73,6 +78,7 @@ def compute_surface_area(
     temperature: float = 0.1,
     kernel_size: int = 7,
     sigma: float = 1.0,
+    phase_probabilities: torch.Tensor | None = None,
 ) -> torch.Tensor:
     if values.ndim < 2:
         raise ValueError("values must have at least two spatial dimensions.")
@@ -97,12 +103,19 @@ def compute_surface_area(
 
     height, width = values.shape[-2:]
     slices = values.reshape(-1, height, width)
-    probability = calc_phase_probs(
-        slices,
-        num_phases=num_phases,
-        temperature=temperature,
-        phase_dim=1,
-    )
+    if phase_probabilities is None:
+        probability = calc_phase_probs(
+            slices,
+            num_phases=num_phases,
+            temperature=temperature,
+            phase_dim=1,
+        )
+    else:
+        probability = sharpen_phase_probabilities(
+            phase_probabilities,
+            num_phases=num_phases,
+            temperature=temperature,
+        )
 
     return _relative_surface_area(
         probability,

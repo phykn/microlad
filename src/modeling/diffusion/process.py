@@ -94,8 +94,18 @@ class DDPMProcess:
         self._validate_timesteps(t, x_t.shape[0])
 
         pred_noise = model(x_t, t)
+        return self.p_mean_from_noise(x_t, t, pred_noise)
+
+    def p_mean_from_noise(
+        self,
+        x_t: torch.Tensor,
+        t: torch.Tensor,
+        pred_noise: torch.Tensor,
+    ) -> torch.Tensor:
+        self._match_device(x_t.device)
+        self._validate_timesteps(t, x_t.shape[0])
         if pred_noise.shape != x_t.shape:
-            raise ValueError("model output must have the same shape as x_t.")
+            raise ValueError("pred_noise must have the same shape as x_t.")
 
         alpha = self._expand(self.alphas, t, x_t.ndim)
         beta = self._expand(self.betas, t, x_t.ndim)
@@ -109,9 +119,25 @@ class DDPMProcess:
         x_t: torch.Tensor,
         t: torch.Tensor,
     ) -> torch.Tensor:
-        mean = self.p_mean(model, x_t, t)
+        self._match_device(x_t.device)
+        self._validate_timesteps(t, x_t.shape[0])
+        pred_noise = model(x_t, t)
+        return self.p_sample_from_noise(x_t, t, pred_noise)
 
-        noise = torch.randn_like(x_t)
+    def p_sample_from_noise(
+        self,
+        x_t: torch.Tensor,
+        t: torch.Tensor,
+        pred_noise: torch.Tensor,
+        *,
+        noise: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        mean = self.p_mean_from_noise(x_t, t, pred_noise)
+
+        if noise is None:
+            noise = torch.randn_like(x_t)
+        if noise.shape != x_t.shape:
+            raise ValueError("noise must have the same shape as x_t.")
         shape = (t.shape[0],) + (1,) * (x_t.ndim - 1)
         noise = torch.where(t.view(shape) > 0, noise, torch.zeros_like(noise))
         variance = self._expand(self.posterior_variance, t, x_t.ndim)

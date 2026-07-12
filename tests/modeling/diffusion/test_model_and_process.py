@@ -73,6 +73,22 @@ class DDPMTest(unittest.TestCase):
         expected = (x - beta / sigma * 0.25) / torch.sqrt(alpha)
         self.assertTrue(torch.allclose(mean, expected))
 
+    def test_p_sample_from_noise_uses_consensus_prediction_and_shared_noise(self):
+        ddpm = DDPMProcess(timesteps=4, beta_start=0.1, beta_end=0.2)
+        x = torch.full((2, 3, 4, 4), 0.5)
+        t = torch.tensor([0, 2], dtype=torch.long)
+        pred_noise = torch.full_like(x, 0.25)
+        shared_noise = torch.zeros_like(x)
+
+        sample = ddpm.p_sample_from_noise(
+            x,
+            t,
+            pred_noise,
+            noise=shared_noise,
+        )
+
+        self.assertTrue(torch.allclose(sample, ddpm.p_mean_from_noise(x, t, pred_noise)))
+
     def test_rejects_invalid_timesteps(self):
         ddpm = DDPMProcess(timesteps=4)
         x = torch.randn(2, 3, 4, 4)

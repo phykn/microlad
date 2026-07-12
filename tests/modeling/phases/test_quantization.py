@@ -81,6 +81,22 @@ class PredictPostprocessTest(unittest.TestCase):
             )
         )
 
+    def test_decode_phase_preserves_minority_probability_mass(self):
+        probabilities = torch.tensor(
+            [
+                [
+                    [[0.60, 0.60], [0.60, 0.60]],
+                    [[0.25, 0.25], [0.25, 0.25]],
+                    [[0.15, 0.15], [0.15, 0.15]],
+                ]
+            ]
+        )
+
+        phase = decode_phase(probabilities.log(), num_phases=3)
+        counts = torch.bincount(phase.reshape(-1).long(), minlength=3)
+
+        self.assertTrue(torch.equal(counts, torch.tensor([2, 1, 1])))
+
     def test_decode_phase_rejects_non_floating_output(self):
         with self.assertRaisesRegex(ValueError, "floating"):
             decode_phase(

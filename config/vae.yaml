@@ -9,9 +9,9 @@ data:
 
 model:
   latent_size: 16
-  latent_ch: 4
+  latent_ch: 8
   base_ch: 64
-  max_ch: 512
+  max_ch: 256
 
 loss:
   beta: 1.0
@@ -23,7 +23,7 @@ optimization:
 
 training:
   steps: 50000
-  save_every: 1000
+  save_every: 5000
 
 output:
   run_root: run

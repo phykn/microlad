@@ -27,6 +27,12 @@ class GradCheckDenoiser(torch.nn.Module):
         return x * 0.0 * self.weight
 
 
+class BatchIndexDenoiser(torch.nn.Module):
+    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        values = torch.arange(x.shape[0], device=x.device, dtype=x.dtype)
+        return values.view(-1, 1, 1, 1).expand_as(x)
+
+
 class IdentityDDPM:
     def __init__(self, timesteps: int) -> None:
         self.num_timesteps = timesteps
@@ -144,6 +150,35 @@ class PredictSamplerTest(unittest.TestCase):
 
         self.assertTrue(torch.equal(latent[1], torch.ones(1, 2, 2)))
         self.assertTrue(torch.equal(latent[0], torch.zeros(1, 2, 2)))
+
+    def test_lmpdd_axis_consensus_averages_all_orientations_in_canonical_order(self):
+        sampler = DiffusionSampler(
+            BatchIndexDenoiser(),
+            DDPMProcess(timesteps=1),
+            device="cpu",
+        )
+        x = torch.zeros(2, 1, 2, 2)
+        t = torch.zeros(2, dtype=torch.long)
+
+        prediction = sampler._predict_lmpdd_noise(x, t)
+
+        zz, yy, xx = torch.meshgrid(
+            torch.arange(2),
+            torch.arange(2),
+            torch.arange(2),
+            indexing="ij",
+        )
+        expected = ((zz + yy + xx).float() / 3.0).unsqueeze(1)
+        self.assertTrue(torch.equal(prediction, expected))
+
+    def test_sample_lmpdd_axis_consensus_scores_every_axis_at_each_step(self):
+        model = RecordingDenoiser()
+        sampler = DiffusionSampler(model, DDPMProcess(timesteps=2), device="cpu")
+
+        latent = sampler.sample_lmpdd((2, 1, 2, 2), axis_consensus=True)
+
+        self.assertEqual(latent.shape, torch.Size([2, 1, 2, 2]))
+        self.assertEqual(model.steps, [1, 1, 1, 0, 0, 0])
 
     def test_sample_lmpdd_rejects_non_cubic_latent_shape(self):
         sampler = DiffusionSampler(RecordingDenoiser(), DDPMProcess(timesteps=2), device="cpu")

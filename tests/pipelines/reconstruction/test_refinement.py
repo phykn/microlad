@@ -45,7 +45,42 @@ class NonFiniteDecodeVAE(CountingVAE):
         return torch.full_like(latent, float("nan"))
 
 
+class CategoricalRefineVAE(CountingVAE):
+    num_phases = 3
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.probability_calls = 0
+
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        raise AssertionError("categorical refinement must not use scalar decode")
+
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
+        phase = 2 if self.probability_calls == 1 else 0
+        self.probability_calls += 1
+        probabilities = torch.zeros(
+            latent.shape[0],
+            self.num_phases,
+            self.image_size,
+            self.image_size,
+            dtype=latent.dtype,
+            device=latent.device,
+        )
+        probabilities[:, phase] = 1.0
+        return probabilities
+
+
 class PredictRefineTest(unittest.TestCase):
+    def test_categorical_refinement_votes_in_probability_space(self):
+        refined = refine_axes(
+            torch.zeros(2, 2, 2),
+            CategoricalRefineVAE(),
+            steps=1,
+        )
+
+        self.assertFalse(torch.any(refined == 1.0))
+        self.assertTrue(torch.all(refined == 0.0))
+
     def test_refine_axes_averages_encode_decode_from_three_axes(self):
         vae = CountingVAE()
         volume = torch.zeros(2, 2, 2)

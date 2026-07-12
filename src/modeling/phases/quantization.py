@@ -2,6 +2,7 @@ import numpy as np
 import torch
 
 from src.common.tensors.validation import require_finite, require_float
+from src.modeling.phases.representation import probabilities_to_calibrated_labels
 
 
 MAX_UINT8_PHASES = int(np.iinfo(np.uint8).max) + 1
@@ -44,7 +45,11 @@ def decode_phase(output: torch.Tensor, num_phases: int) -> torch.Tensor:
         return quantize_phase(output[:, 0], num_phases=num_phases)
 
     if output.shape[1] == num_phases:
-        return output.argmax(dim=1).to(torch.uint8)
+        probabilities = torch.softmax(output, dim=1)
+        return probabilities_to_calibrated_labels(
+            probabilities,
+            num_phases,
+        )[:, 0].to(torch.uint8)
 
     raise ValueError(
         "model output must have shape [B, 1, H, W] or [B, num_phases, H, W]."

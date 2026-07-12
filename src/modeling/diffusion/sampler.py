@@ -53,10 +53,13 @@ class DiffusionSampler:
         *,
         anchor_latent: torch.Tensor | None = None,
         anchor_mask: torch.Tensor | None = None,
+        axis_consensus: bool = False,
     ) -> torch.Tensor:
         shape = self._validate_shape(shape)
         if shape[0] != shape[2] or shape[0] != shape[3]:
             raise ValueError("L-MPDD sampling requires a cubic latent shape.")
+        if not isinstance(axis_consensus, bool):
+            raise ValueError("axis_consensus must be a boolean.")
         self.model.eval()
 
         x = torch.randn(shape, device=self.device)
@@ -68,6 +71,20 @@ class DiffusionSampler:
         )
 
         batch_size = shape[0]
+        if axis_consensus:
+            for step in range(self.ddpm.num_timesteps - 1, -1, -1):
+                t = torch.full(
+                    (batch_size,),
+                    step,
+                    dtype=torch.long,
+                    device=self.device,
+                )
+                pred_noise = self._predict_lmpdd_noise(x, t)
+                x = self.ddpm.p_sample_from_noise(x, t, pred_noise)
+                if anchor_latent is not None and anchor_mask is not None:
+                    x = self._blend_anchor(x, anchor_latent, anchor_mask, step)
+            return x
+
         rotations = 0
         for step in range(self.ddpm.num_timesteps - 1, -1, -1):
             t = torch.full((batch_size,), step, dtype=torch.long, device=self.device)
@@ -162,3 +179,20 @@ class DiffusionSampler:
 
     def _rotate_lmpdd(self, x: torch.Tensor) -> torch.Tensor:
         return x.transpose(0, 2).transpose(3, 0).contiguous()
+
+    def _predict_lmpdd_noise(
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+    ) -> torch.Tensor:
+        oriented = x
+        canonical_predictions = []
+        for orientation in range(3):
+            prediction = self.model(oriented, t)
+            if prediction.shape != oriented.shape:
+                raise ValueError("model output must have the same shape as x.")
+            for _ in range((3 - orientation) % 3):
+                prediction = self._rotate_lmpdd(prediction)
+            canonical_predictions.append(prediction)
+            oriented = self._rotate_lmpdd(oriented)
+        return torch.stack(canonical_predictions).mean(dim=0)

@@ -68,6 +68,31 @@ class ZeroDownsampleVAE(CountingVAE):
         self.downsample_factor = 0
 
 
+class PhaseAwareVAE(CountingVAE):
+    def __init__(self) -> None:
+        super().__init__()
+        self.num_phases = 3
+
+        self.probability_calls = 0
+
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        raise AssertionError("categorical volume decoding must not use scalar decode")
+
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
+        phase = 2 if self.probability_calls == 1 else 0
+        self.probability_calls += 1
+        probabilities = torch.zeros(
+            latent.shape[0],
+            self.num_phases,
+            self.image_size,
+            self.image_size,
+            dtype=latent.dtype,
+            device=latent.device,
+        )
+        probabilities[:, phase] = 1.0
+        return probabilities
+
+
 class PredictVolumeTest(unittest.TestCase):
     def test_decode_latent_returns_single_image(self):
         decoded = decode_latent(CountingVAE(), torch.zeros(1, 1, 2, 2))
@@ -88,19 +113,19 @@ class PredictVolumeTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "finite"):
             decode_latents(NonFiniteDecodeVAE(), latent)
 
-    def test_decode_latent_volume_averages_three_axis_decodes(self):
+    def test_decode_latent_volume_interpolates_and_averages_three_axis_decodes(self):
         vae = CountingVAE()
         latent = torch.zeros(1, 2, 2, 2)
 
         volume = decode_latent_volume(vae, latent)
 
         expected = torch.empty(4, 4, 4)
-        for z in range(4):
-            d_value = 1.0 if z < 2 else 2.0
-            for y in range(4):
-                h_value = 3.0 if y < 2 else 4.0
-                for x in range(4):
-                    w_value = 5.0 if x < 2 else 6.0
+        d_values = (1.0, 1.25, 1.75, 2.0)
+        h_values = (3.0, 3.25, 3.75, 4.0)
+        w_values = (5.0, 5.25, 5.75, 6.0)
+        for z, d_value in enumerate(d_values):
+            for y, h_value in enumerate(h_values):
+                for x, w_value in enumerate(w_values):
                     expected[z, y, x] = (d_value + h_value + w_value) / 3.0
 
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
@@ -120,6 +145,12 @@ class PredictVolumeTest(unittest.TestCase):
 
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
         self.assertFalse(vae.training)
+
+    def test_phase_aware_decode_uses_cross_axis_probability_consensus(self):
+        volume = decode_latent_volume(PhaseAwareVAE(), torch.zeros(1, 2, 2, 2))
+
+        self.assertFalse(torch.any(volume == 1.0))
+        self.assertTrue(torch.all(volume == 0.0))
 
     def test_generate_initial_volume_rejects_size_that_does_not_match_vae(self):
         with self.assertRaisesRegex(ValueError, "size"):

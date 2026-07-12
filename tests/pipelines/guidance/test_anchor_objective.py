@@ -7,6 +7,23 @@ from src.pipelines.guidance.anchor_objective import masked_anchor_loss
 
 
 class PredictSDSAnchorTest(unittest.TestCase):
+    def test_categorical_anchor_loss_uses_probabilities_not_expected_label(self):
+        values = torch.ones(2, 2)
+        target = torch.zeros(2, 2)
+        probabilities = torch.zeros(3, 2, 2)
+        probabilities[0] = 0.9
+        probabilities[2] = 0.1
+
+        scalar_loss, _ = anchor_loss(values, target, num_phases=3)
+        categorical_loss, _ = anchor_loss(
+            values,
+            target,
+            num_phases=3,
+            phase_probabilities=probabilities,
+        )
+
+        self.assertLess(float(categorical_loss), float(scalar_loss))
+
     def test_anchor_loss_is_zero_for_matching_images(self):
         values = torch.tensor([[0.0, 2.0], [1.0, 1.0]])
         target = values.view(1, 1, 2, 2)
@@ -27,6 +44,17 @@ class PredictSDSAnchorTest(unittest.TestCase):
         self.assertIsNotNone(values.grad)
         self.assertEqual(values.grad.shape, values.shape)
         self.assertTrue(torch.all(values.grad < 0.0))
+
+    def test_anchor_loss_accepts_relaxed_reconstructed_target(self):
+        values = torch.tensor([[0.0, 1.0], [1.0, 0.0]], requires_grad=True)
+        target = torch.tensor([[0.25, 1.25], [1.25, 0.25]])
+
+        loss, stats = anchor_loss(values, target, num_phases=2)
+        loss.backward()
+
+        self.assertTrue(torch.isfinite(loss))
+        self.assertTrue(torch.isfinite(stats["anchor_phase"]))
+        self.assertIsNotNone(values.grad)
 
     def test_anchor_loss_rejects_invalid_inputs(self):
         with self.assertRaisesRegex(ValueError, "values"):

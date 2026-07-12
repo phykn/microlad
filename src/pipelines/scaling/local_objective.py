@@ -8,7 +8,11 @@ from src.pipelines.guidance.anchor_objective import anchor_loss, masked_anchor_l
 from src.pipelines.guidance.objective import descriptor_loss, sample_descriptor_loss
 from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver
 from src.pipelines.guidance.prior import sds_loss
-from src.pipelines.reconstruction.volume import decode_latent, decode_latents
+from src.pipelines.reconstruction.volume import (
+    decode_latent_with_probabilities,
+    decode_latents_with_probabilities,
+    decoded_labels,
+)
 from src.pipelines.scaling.blending import blend_window
 from src.pipelines.scaling.tiles import normalize_tile_weights, tile_grid
 from src.pipelines.scaling.validation import _as_anchor_image
@@ -38,10 +42,16 @@ def _local_prior_objective(
     diffusivity_targets: Mapping[int, float] | torch.Tensor | None = None,
     diffusivity_solver: DiffusivitySolver | None = None,
     diffusivity_weight: float = 0.0,
-) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor | None,
+    torch.Tensor,
+    dict[str, torch.Tensor],
+]:
     tile_size = int(vae.image_size)
     height, width = int(image.shape[0]), int(image.shape[1])
     out = image.new_zeros(image.shape)
+    probability_out: torch.Tensor | None = None
     weight_sum = image.detach().new_zeros(image.shape)
     placements = normalize_tile_weights(
         height,
@@ -70,7 +80,11 @@ def _local_prior_objective(
 
         require_finite("latent", mu)
 
-        decoded = decode_latent(vae, mu)
+        decoded, phase_probabilities = decode_latent_with_probabilities(
+            vae,
+            mu,
+            num_phases=num_phases,
+        )
         out[row : row + tile_size, col : col + tile_size] = (
             out[row : row + tile_size, col : col + tile_size]
             + decoded * ownership
@@ -78,6 +92,16 @@ def _local_prior_objective(
         weight_sum[row : row + tile_size, col : col + tile_size] = (
             weight_sum[row : row + tile_size, col : col + tile_size] + ownership
         )
+        if phase_probabilities is not None:
+            if probability_out is None:
+                probability_out = image.new_zeros(
+                    num_phases,
+                    height,
+                    width,
+                )
+            probability_out[:, row : row + tile_size, col : col + tile_size] += (
+                phase_probabilities * ownership.unsqueeze(0)
+            )
 
         stats: dict[str, torch.Tensor] = {}
         if sds_weight > 0.0:
@@ -119,12 +143,20 @@ def _local_prior_objective(
             diffusivity_solver=diffusivity_solver,
             diffusivity_weight=diffusivity_weight,
             temperature=temperature,
+            phase_probabilities=phase_probabilities,
         )
         total = total + target_total
         stats.update(target_stats)
         _record_stats(history, stats)
 
     stitched = _weighted_average(out, weight_sum)
+    stitched_probabilities = (
+        None
+        if probability_out is None
+        else probability_out / weight_sum.clamp_min(
+            torch.finfo(weight_sum.dtype).tiny
+        ).unsqueeze(0)
+    )
     total = total / max(tile_count, 1)
     mean_stats = _mean_stats(history)
 
@@ -140,6 +172,7 @@ def _local_prior_objective(
                     num_phases=num_phases,
                     temperature=temperature,
                     weight=anchor_weight,
+                    phase_probabilities=stitched_probabilities,
                 )
             else:
                 anchor_total, _ = masked_anchor_loss(
@@ -149,11 +182,12 @@ def _local_prior_objective(
                     num_phases=num_phases,
                     temperature=temperature,
                     weight=anchor_weight,
+                    phase_probabilities=stitched_probabilities,
                 )
             total = total + anchor_total
             mean_stats["anchor"] = anchor_total.detach()
 
-    return stitched, total, mean_stats
+    return stitched, stitched_probabilities, total, mean_stats
 
 
 def _batch_prior_loss(
@@ -180,12 +214,18 @@ def _batch_prior_loss(
     diffusivity_targets: Mapping[int, float] | torch.Tensor | None = None,
     diffusivity_solver: DiffusivitySolver | None = None,
     diffusivity_weight: float = 0.0,
-) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor | None,
+    torch.Tensor,
+    dict[str, torch.Tensor],
+]:
     batch_size = int(images.shape[0])
     height = int(images.shape[1])
     width = int(images.shape[2])
     tile_size = int(vae.image_size)
     out = images.new_zeros(images.shape)
+    probability_out: torch.Tensor | None = None
     weight_sum = images.detach().new_zeros(images.shape)
     placements = normalize_tile_weights(
         height,
@@ -223,7 +263,11 @@ def _batch_prior_loss(
 
         require_finite("latent", mu)
 
-        decoded = decode_latents(vae, mu)
+        decoded, phase_probabilities = decode_latents_with_probabilities(
+            vae,
+            mu,
+            num_phases=num_phases,
+        )
         out[:, row : row + tile_size, col : col + tile_size] = (
             out[:, row : row + tile_size, col : col + tile_size]
             + decoded * ownership
@@ -232,6 +276,17 @@ def _batch_prior_loss(
             weight_sum[:, row : row + tile_size, col : col + tile_size]
             + ownership
         )
+        if phase_probabilities is not None:
+            if probability_out is None:
+                probability_out = images.new_zeros(
+                    batch_size,
+                    num_phases,
+                    height,
+                    width,
+                )
+            probability_out[
+                :, :, row : row + tile_size, col : col + tile_size
+            ] += phase_probabilities * ownership.view(1, 1, tile_size, tile_size)
 
         stats: dict[str, torch.Tensor] = {}
         if sds_weight > 0.0:
@@ -273,6 +328,7 @@ def _batch_prior_loss(
             diffusivity_solver=diffusivity_solver,
             diffusivity_weight=diffusivity_weight,
             temperature=temperature,
+            phase_probabilities=phase_probabilities,
         )
         total = total + target_total
         stats.update(target_stats)
@@ -280,6 +336,13 @@ def _batch_prior_loss(
         _record_stats(history, stats)
 
     stitched = _weighted_average(out, weight_sum)
+    stitched_probabilities = (
+        None
+        if probability_out is None
+        else probability_out / weight_sum.clamp_min(
+            torch.finfo(weight_sum.dtype).tiny
+        ).unsqueeze(1)
+    )
     total = total / max(tile_count, 1)
     mean_stats = _mean_stats(history)
 
@@ -307,6 +370,11 @@ def _batch_prior_loss(
                     num_phases=num_phases,
                     temperature=temperature,
                     weight=anchor_weight,
+                    phase_probabilities=(
+                        None
+                        if stitched_probabilities is None
+                        else stitched_probabilities[slice_index]
+                    ),
                 )
             else:
                 anchor_total, _ = masked_anchor_loss(
@@ -316,6 +384,11 @@ def _batch_prior_loss(
                     num_phases=num_phases,
                     temperature=temperature,
                     weight=anchor_weight,
+                    phase_probabilities=(
+                        None
+                        if stitched_probabilities is None
+                        else stitched_probabilities[slice_index]
+                    ),
                 )
             anchor_losses.append(anchor_total)
             has_active_anchor_pixels = True
@@ -325,7 +398,7 @@ def _batch_prior_loss(
         total = total + anchor_total
         mean_stats["anchor"] = anchor_total.detach()
 
-    return stitched, total, mean_stats
+    return stitched, stitched_probabilities, total, mean_stats
 
 
 def _decode_tiled_image(
@@ -337,6 +410,7 @@ def _decode_tiled_image(
     tile_size = int(vae.image_size)
     height, width = int(image.shape[0]), int(image.shape[1])
     out = image.new_zeros(image.shape)
+    probability_out: torch.Tensor | None = None
     weight_sum = image.new_zeros(image.shape)
     window = _tile_blend_window(
         tile_size,
@@ -363,15 +437,39 @@ def _decode_tiled_image(
 
         require_finite("latent", mu)
 
-        decoded = decode_latent(vae, mu)
+        decoded, phase_probabilities = decode_latent_with_probabilities(
+            vae,
+            mu,
+            num_phases=int(getattr(vae, "num_phases", 2)),
+        )
         out[row : row + tile_size, col : col + tile_size] = (
             out[row : row + tile_size, col : col + tile_size] + decoded * window
         )
         weight_sum[row : row + tile_size, col : col + tile_size] = (
             weight_sum[row : row + tile_size, col : col + tile_size] + window
         )
+        if phase_probabilities is not None:
+            if probability_out is None:
+                probability_out = image.new_zeros(
+                    phase_probabilities.shape[0],
+                    height,
+                    width,
+                )
+            probability_out[:, row : row + tile_size, col : col + tile_size] += (
+                phase_probabilities * window.unsqueeze(0)
+            )
 
-    return _weighted_average(out, weight_sum)
+    if probability_out is None:
+        return _weighted_average(out, weight_sum)
+
+    probabilities = probability_out / weight_sum.clamp_min(
+        torch.finfo(weight_sum.dtype).tiny
+    ).unsqueeze(0)
+    return decoded_labels(
+        _weighted_average(out, weight_sum).unsqueeze(0),
+        probabilities.unsqueeze(0),
+        num_phases=int(getattr(vae, "num_phases")),
+    )[0]
 
 
 def _decode_tiles(
@@ -385,6 +483,7 @@ def _decode_tiles(
     height = int(images.shape[1])
     width = int(images.shape[2])
     out = images.new_zeros(images.shape)
+    probability_out: torch.Tensor | None = None
     weight_sum = images.new_zeros(images.shape)
     window = _tile_blend_window(
         tile_size,
@@ -411,15 +510,41 @@ def _decode_tiles(
 
         require_finite("latent", mu)
 
-        decoded = decode_latents(vae, mu)
+        num_phases = int(getattr(vae, "num_phases", 2))
+        decoded, phase_probabilities = decode_latents_with_probabilities(
+            vae,
+            mu,
+            num_phases=num_phases,
+        )
         out[:, row : row + tile_size, col : col + tile_size] = (
             out[:, row : row + tile_size, col : col + tile_size] + decoded * window
         )
         weight_sum[:, row : row + tile_size, col : col + tile_size] = (
             weight_sum[:, row : row + tile_size, col : col + tile_size] + window
         )
+        if phase_probabilities is not None:
+            if probability_out is None:
+                probability_out = images.new_zeros(
+                    batch_size,
+                    phase_probabilities.shape[1],
+                    height,
+                    width,
+                )
+            probability_out[
+                :, :, row : row + tile_size, col : col + tile_size
+            ] += phase_probabilities * window.view(1, 1, tile_size, tile_size)
 
-    return _weighted_average(out, weight_sum)
+    if probability_out is None:
+        return _weighted_average(out, weight_sum)
+
+    probabilities = probability_out / weight_sum.clamp_min(
+        torch.finfo(weight_sum.dtype).tiny
+    ).unsqueeze(1)
+    return decoded_labels(
+        _weighted_average(out, weight_sum),
+        probabilities,
+        num_phases=num_phases,
+    )
 
 
 def _tile_blend_window(

@@ -149,7 +149,64 @@ class LocalPatternRefineVAE(torch.nn.Module):
         return (rows * 10.0 + cols).expand(latent.shape[0], 1, -1, -1)
 
 
+class CategoricalScaleVAE(torch.nn.Module):
+    image_size = 2
+    latent_size = 2
+    latent_ch = 1
+    downsample_factor = 1
+    num_phases = 3
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.probability_calls = 0
+
+    def encode(self, image: torch.Tensor):
+        return image, torch.zeros_like(image)
+
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        raise AssertionError("categorical scale path must not use scalar decode")
+
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
+        axis_group = self.probability_calls // 2
+        phase = 2 if axis_group == 1 else 0
+        self.probability_calls += 1
+        probabilities = torch.zeros(
+            latent.shape[0],
+            self.num_phases,
+            self.image_size,
+            self.image_size,
+            dtype=latent.dtype,
+            device=latent.device,
+        )
+        probabilities[:, phase] = 1.0
+        return probabilities
+
+
 class PredictScaleDecodeRefineTest(unittest.TestCase):
+    def test_categorical_large_decode_votes_without_middle_phase(self):
+        volume = decode_large_volume(
+            CategoricalScaleVAE(),
+            torch.zeros(1, 2, 2, 2),
+            tile_overlap=0,
+        )
+
+        self.assertFalse(torch.any(volume == 1.0))
+        self.assertTrue(torch.any(volume == 0.0))
+        self.assertTrue(torch.any(volume == 2.0))
+
+    def test_categorical_large_refinement_votes_without_middle_phase(self):
+        volume = refine_large_volume(
+            torch.zeros(2, 2, 2),
+            CategoricalScaleVAE(),
+            steps=1,
+            tile_overlap=0,
+            tile_batch_size=1,
+        )
+
+        self.assertFalse(torch.any(volume == 1.0))
+        self.assertTrue(torch.any(volume == 0.0))
+        self.assertTrue(torch.any(volume == 2.0))
+
     def test_decode_large_volume_averages_three_axes_without_gradients(self):
         vae = DecodeValueVAE()
         vae.train()

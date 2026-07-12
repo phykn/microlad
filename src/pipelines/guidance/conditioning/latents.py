@@ -1,7 +1,9 @@
 from collections.abc import Sequence
+import math
 
 import torch
 
+from src.common.validation import require_finite_number
 from src.modeling.vae import get_downsample_factor
 from src.pipelines.guidance.conditioning.images import prepare_anchor_image
 from src.pipelines.guidance.conditioning.validation import validate_anchors
@@ -15,18 +17,26 @@ def encode_anchors(
     num_phases: int,
     segment: bool,
     device: torch.device,
+    spread_sigma: float = 0.0,
+    peak_strength: float = 1.0,
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
     if not anchors:
         return None, None
 
     image_size = int(vae.image_size)
     validate_anchors(anchors, (image_size, image_size, image_size))
+    require_finite_number("spread_sigma", spread_sigma)
+    require_finite_number("peak_strength", peak_strength)
+    if spread_sigma < 0.0:
+        raise ValueError("spread_sigma must be non-negative.")
+    if peak_strength <= 0.0 or peak_strength > 1.0:
+        raise ValueError("peak_strength must be greater than 0 and at most 1.")
 
     latent_size = int(vae.latent_size)
     latent_ch = int(vae.latent_ch)
     shape = (latent_size, latent_ch, latent_size, latent_size)
-    anchor_latent = torch.zeros(shape, device=device)
-    anchor_mask = torch.zeros(shape, device=device)
+    latent_sum = torch.zeros(shape, device=device)
+    weight_sum = torch.zeros(shape, device=device)
     factor = get_downsample_factor(vae)
     written_planes: set[tuple[int, int]] = set()
 
@@ -48,13 +58,19 @@ def encode_anchors(
         )
 
         _write_anchor_latent(
-            anchor_latent,
-            anchor_mask,
+            latent_sum,
+            weight_sum,
             latent,
             axis=anchor.axis,
             index=latent_index,
+            spread_sigma=spread_sigma,
+            peak_strength=peak_strength,
         )
 
+    active = weight_sum > 0.0
+    anchor_latent = torch.zeros_like(latent_sum)
+    anchor_latent[active] = latent_sum[active] / weight_sum[active]
+    anchor_mask = weight_sum.clamp(max=1.0)
     return anchor_latent, anchor_mask
 
 
@@ -91,26 +107,69 @@ def _encode_anchor_latent(
 
 
 def _write_anchor_latent(
-    anchor_latent: torch.Tensor,
-    anchor_mask: torch.Tensor,
+    latent_sum: torch.Tensor,
+    weight_sum: torch.Tensor,
     latent: torch.Tensor,
     *,
     axis: int,
     index: int,
+    spread_sigma: float,
+    peak_strength: float,
 ) -> None:
-    mask = torch.ones_like(latent)
+    size = int(latent_sum.shape[0])
+    propagated = _propagate_anchor_latent(
+        latent,
+        size=size,
+        index=index,
+        spread_sigma=spread_sigma,
+    )
+    for plane_index in range(size):
+        distance = abs(plane_index - index)
+        if spread_sigma == 0.0:
+            if distance != 0:
+                continue
+            weight = peak_strength
+        else:
+            weight = peak_strength * math.exp(
+                -0.5 * (distance / spread_sigma) ** 2
+            )
+        latent_plane = propagated[plane_index]
+        oriented_plane = latent_plane.permute(1, 0, 2).contiguous()
 
-    if axis == 0:
-        anchor_latent[index] = latent
-        anchor_mask[index] = mask
-        return
+        if axis == 0:
+            latent_sum[plane_index].add_(latent_plane, alpha=weight)
+            weight_sum[plane_index].add_(weight)
+        elif axis == 1:
+            latent_sum[:, :, plane_index, :].add_(oriented_plane, alpha=weight)
+            weight_sum[:, :, plane_index, :].add_(weight)
+        else:
+            latent_sum[:, :, :, plane_index].add_(oriented_plane, alpha=weight)
+            weight_sum[:, :, :, plane_index].add_(weight)
 
-    plane = latent.permute(1, 0, 2).contiguous()
-    plane_mask = mask.permute(1, 0, 2).contiguous()
 
-    if axis == 1:
-        anchor_latent[:, :, index, :] = plane
-        anchor_mask[:, :, index, :] = plane_mask
-    else:
-        anchor_latent[:, :, :, index] = plane
-        anchor_mask[:, :, :, index] = plane_mask
+def _propagate_anchor_latent(
+    latent: torch.Tensor,
+    *,
+    size: int,
+    index: int,
+    spread_sigma: float,
+) -> list[torch.Tensor]:
+    planes = [latent] * size
+    if spread_sigma == 0.0:
+        return planes
+
+    correlation_length = max(2.0 * spread_sigma, 1.0)
+    rho = math.exp(-0.5 / correlation_length**2)
+    innovation_scale = math.sqrt(max(0.0, 1.0 - rho**2))
+    planes[index] = latent
+    for direction in (-1, 1):
+        current = latent
+        plane_index = index + direction
+        while 0 <= plane_index < size:
+            current = (
+                rho * current
+                + innovation_scale * torch.randn_like(current)
+            )
+            planes[plane_index] = current
+            plane_index += direction
+    return planes

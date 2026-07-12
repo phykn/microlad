@@ -142,6 +142,31 @@ class PredictAnchorTest(unittest.TestCase):
         self.assertTrue(torch.equal(mask[1], torch.ones(1, 2, 2)))
         self.assertTrue(torch.equal(mask[0], torch.zeros(1, 2, 2)))
 
+    def test_encode_anchors_can_spread_a_soft_condition_across_planes(self):
+        torch.manual_seed(0)
+        anchor = AnchorSlice(image=np.ones((2, 2), dtype=np.uint8), axis=0, index=0)
+
+        latent, mask = encode_anchors(
+            IdentityVAE(),
+            [anchor],
+            num_phases=2,
+            segment=False,
+            device=torch.device("cpu"),
+            spread_sigma=1.0,
+            peak_strength=0.8,
+        )
+
+        self.assertTrue(torch.equal(latent[0], torch.ones(1, 2, 2)))
+        self.assertFalse(torch.equal(latent[1], latent[0]))
+        self.assertTrue(torch.allclose(mask[0], torch.full((1, 2, 2), 0.8)))
+        expected_neighbor = 0.8 * np.exp(-0.5)
+        self.assertTrue(
+            torch.allclose(
+                mask[1],
+                torch.full((1, 2, 2), expected_neighbor),
+            )
+        )
+
     def test_encode_anchors_rejects_same_latent_plane_collision(self):
         anchors = [
             AnchorSlice(image=np.zeros((4, 4), dtype=np.uint8), axis=0, index=0),

@@ -1,6 +1,7 @@
 import torch
 
 from src.pipelines.scaling.blending import blend_window
+from src.modeling.phases.representation import probabilities_to_calibrated_labels
 from src.pipelines.scaling.tiles import tile_grid
 from src.common.tensors.validation import require_finite, require_float
 
@@ -43,6 +44,20 @@ def _refine_once(
     tile_overlap: int,
     tile_batch_size: int,
 ) -> torch.Tensor:
+    num_phases = getattr(vae, "num_phases", None)
+    if (
+        isinstance(num_phases, int)
+        and not isinstance(num_phases, bool)
+        and callable(getattr(vae, "decode_probs", None))
+    ):
+        return _refine_categorical_once(
+            volume,
+            vae,
+            tile_overlap=tile_overlap,
+            tile_batch_size=tile_batch_size,
+            num_phases=num_phases,
+        )
+
     depth, height, width = volume.shape
     out = torch.zeros_like(volume)
     count = torch.zeros_like(volume)
@@ -78,6 +93,57 @@ def _refine_once(
         count[:, :, index] += 1
 
     return (out / count.clamp_min(1)).float()
+
+
+def _refine_categorical_once(
+    volume: torch.Tensor,
+    vae: torch.nn.Module,
+    *,
+    tile_overlap: int,
+    tile_batch_size: int,
+    num_phases: int,
+) -> torch.Tensor:
+    depth, height, width = volume.shape
+    probabilities = torch.zeros(
+        num_phases,
+        depth,
+        height,
+        width,
+        dtype=torch.float32,
+        device=volume.device,
+    )
+
+    for index in range(depth):
+        probabilities[:, index, :, :] += _refine_tiled_plane_probabilities(
+            volume[index, :, :],
+            vae,
+            tile_overlap=tile_overlap,
+            tile_batch_size=tile_batch_size,
+            num_phases=num_phases,
+        )
+
+    for index in range(height):
+        probabilities[:, :, index, :] += _refine_tiled_plane_probabilities(
+            volume[:, index, :],
+            vae,
+            tile_overlap=tile_overlap,
+            tile_batch_size=tile_batch_size,
+            num_phases=num_phases,
+        )
+
+    for index in range(width):
+        probabilities[:, :, :, index] += _refine_tiled_plane_probabilities(
+            volume[:, :, index],
+            vae,
+            tile_overlap=tile_overlap,
+            tile_batch_size=tile_batch_size,
+            num_phases=num_phases,
+        )
+
+    return probabilities_to_calibrated_labels(
+        (probabilities / 3.0).unsqueeze(0),
+        num_phases,
+    )[0, 0].float()
 
 
 def _refine_tiled_plane(
@@ -162,6 +228,76 @@ def _encode_decode_tiles(
     require_finite("decoded tile", decoded)
 
     return decoded.float()
+
+
+def _refine_tiled_plane_probabilities(
+    image: torch.Tensor,
+    vae: torch.nn.Module,
+    *,
+    tile_overlap: int,
+    tile_batch_size: int,
+    num_phases: int,
+) -> torch.Tensor:
+    tile_size = int(vae.image_size)
+    height, width = int(image.shape[0]), int(image.shape[1])
+    out = torch.zeros(
+        num_phases,
+        height,
+        width,
+        dtype=torch.float32,
+        device=image.device,
+    )
+    weight_sum = torch.zeros(height, width, dtype=torch.float32, device=image.device)
+    window = (
+        torch.ones(tile_size, tile_size, dtype=out.dtype, device=out.device)
+        if tile_overlap == 0
+        else blend_window(
+            tile_size,
+            tile_size,
+            device=out.device,
+            dtype=out.dtype,
+        )
+    )
+    positions = list(
+        tile_grid(
+            height,
+            width,
+            tile_size=tile_size,
+            overlap=tile_overlap,
+        )
+    )
+
+    for start in range(0, len(positions), tile_batch_size):
+        chunk = positions[start : start + tile_batch_size]
+        batch = torch.stack(
+            [
+                image[row : row + tile_size, col : col + tile_size]
+                for row, col in chunk
+            ],
+            dim=0,
+        ).view(len(chunk), 1, tile_size, tile_size)
+        mu, _ = vae.encode(batch)
+        if mu.ndim != 4 or mu.shape[0] != len(chunk):
+            raise ValueError("encode output must have shape [B, C, H, W].")
+        require_finite("encoded latent", mu)
+
+        decoded = vae.decode_probs(mu)
+        expected_shape = (len(chunk), num_phases, tile_size, tile_size)
+        if decoded.shape != expected_shape:
+            raise ValueError(
+                "decode_probs output must have shape [B, num_phases, H, W]."
+            )
+        require_finite("decoded probabilities", decoded)
+
+        for tile, (row, col) in zip(decoded, chunk):
+            out[:, row : row + tile_size, col : col + tile_size] += (
+                tile.float() * window.unsqueeze(0)
+            )
+            weight_sum[row : row + tile_size, col : col + tile_size] += window
+
+    return out / weight_sum.clamp_min(
+        torch.finfo(weight_sum.dtype).tiny
+    ).unsqueeze(0)
 
 
 def _validate_volume(volume: torch.Tensor) -> None:

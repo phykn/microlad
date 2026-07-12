@@ -6,6 +6,24 @@ from src.pipelines.guidance.descriptors.volume_fraction import volume_fraction_l
 
 
 class PredictSDSVolumeFractionTest(unittest.TestCase):
+    def test_categorical_probabilities_do_not_collapse_into_middle_phase(self):
+        values = torch.ones(2, 2)
+        probabilities = torch.zeros(3, 2, 2)
+        probabilities[0] = 0.5
+        probabilities[2] = 0.5
+
+        loss, stats = volume_fraction_loss(
+            values,
+            torch.tensor([0.5, 0.0, 0.5]),
+            num_phases=3,
+            phase_probabilities=probabilities,
+        )
+
+        self.assertLess(float(loss), 1e-8)
+        self.assertTrue(
+            torch.allclose(stats["actual_vf"], torch.tensor([0.5, 0.0, 0.5]))
+        )
+
     def test_volume_fraction_loss_matches_each_phase_fraction_directly(self):
         values = torch.tensor([[0.0, 1.0, 2.0]])
         targets = {0: 1.0 / 3.0, 1: 1.0 / 3.0, 2: 1.0 / 3.0}

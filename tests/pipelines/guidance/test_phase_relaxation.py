@@ -2,10 +2,29 @@ import unittest
 
 import torch
 
-from src.modeling.phases.relaxation import calc_phase_probs
+from src.modeling.phases.relaxation import (
+    calc_phase_probs,
+    sharpen_phase_probabilities,
+)
 
 
 class PredictSDSPhaseTest(unittest.TestCase):
+    def test_sharpen_probabilities_aligns_soft_loss_with_argmax(self):
+        probabilities = torch.tensor(
+            [[[[0.6]], [[0.3]], [[0.1]]]],
+            requires_grad=True,
+        )
+
+        sharpened = sharpen_phase_probabilities(
+            probabilities,
+            num_phases=3,
+            temperature=0.1,
+        )
+        sharpened[:, 0].sum().backward()
+
+        self.assertGreater(float(sharpened[0, 0, 0, 0].detach()), 0.99)
+        self.assertIsNotNone(probabilities.grad)
+
     def test_calc_phase_probs_sums_to_one_over_phase_axis(self):
         probability = calc_phase_probs(
             torch.tensor([0.0, 1.0, 2.0]),

@@ -33,6 +33,7 @@ def descriptor_loss(
     temperature: float = 0.1,
     sa_kernel_size: int = 7,
     sa_sigma: float = 1.0,
+    phase_probabilities: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     require_finite("decoded", decoded)
 
@@ -55,6 +56,7 @@ def descriptor_loss(
             num_phases=num_phases,
             temperature=temperature,
             weight=vf_weight,
+            phase_probabilities=phase_probabilities,
         )
         total = total + loss
         stats["vf"] = loss.detach()
@@ -66,6 +68,7 @@ def descriptor_loss(
             num_phases=num_phases,
             temperature=temperature,
             weight=tpc_weight,
+            phase_probabilities=phase_probabilities,
         )
         total = total + loss
         stats["tpc"] = loss.detach()
@@ -79,6 +82,7 @@ def descriptor_loss(
             kernel_size=sa_kernel_size,
             sigma=sa_sigma,
             weight=sa_weight,
+            phase_probabilities=phase_probabilities,
         )
         total = total + loss
         stats["sa"] = loss.detach()
@@ -94,6 +98,7 @@ def descriptor_loss(
             num_phases=num_phases,
             temperature=temperature,
             weight=diffusivity_weight,
+            phase_probabilities=phase_probabilities,
         )
         total = total + loss
         stats["diffusivity"] = loss.detach()
@@ -117,6 +122,7 @@ def sample_descriptor_loss(
     temperature: float = 0.1,
     sa_kernel_size: int = 7,
     sa_sigma: float = 1.0,
+    phase_probabilities: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if decoded.ndim < 3:
         return descriptor_loss(
@@ -134,12 +140,18 @@ def sample_descriptor_loss(
             temperature=temperature,
             sa_kernel_size=sa_kernel_size,
             sa_sigma=sa_sigma,
+            phase_probabilities=phase_probabilities,
         )
 
     losses = []
     history: dict[str, list[torch.Tensor]] = {}
 
-    for sample in decoded:
+    for sample_index, sample in enumerate(decoded):
+        sample_probabilities = (
+            None
+            if phase_probabilities is None
+            else phase_probabilities[sample_index]
+        )
         loss, stats = descriptor_loss(
             sample,
             num_phases=num_phases,
@@ -155,6 +167,7 @@ def sample_descriptor_loss(
             temperature=temperature,
             sa_kernel_size=sa_kernel_size,
             sa_sigma=sa_sigma,
+            phase_probabilities=sample_probabilities,
         )
         losses.append(loss)
 

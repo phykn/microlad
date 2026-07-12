@@ -1,6 +1,10 @@
 import torch
 
 from src.common.tensors.validation import require_finite, require_float
+from src.modeling.phases.representation import (
+    geometric_probability_consensus,
+    probabilities_to_calibrated_labels,
+)
 
 
 @torch.no_grad()
@@ -32,6 +36,14 @@ def refine_axes(
 
 
 def _refine_once(volume: torch.Tensor, vae: torch.nn.Module) -> torch.Tensor:
+    num_phases = getattr(vae, "num_phases", None)
+    if (
+        isinstance(num_phases, int)
+        and not isinstance(num_phases, bool)
+        and callable(getattr(vae, "decode_probs", None))
+    ):
+        return _refine_categorical_once(volume, vae, num_phases=num_phases)
+
     depth, height, width = volume.shape
     new_volume = torch.zeros_like(volume)
 
@@ -54,6 +66,62 @@ def _refine_once(volume: torch.Tensor, vae: torch.nn.Module) -> torch.Tensor:
     new_volume += decoded[:, 0, :, :].permute(1, 2, 0)
 
     return (new_volume / 3.0).float()
+
+
+def _refine_categorical_once(
+    volume: torch.Tensor,
+    vae: torch.nn.Module,
+    *,
+    num_phases: int,
+) -> torch.Tensor:
+    depth, height, width = volume.shape
+
+    depth_probs = _encode_decode_probabilities(
+        vae,
+        volume.reshape(depth, 1, height, width),
+        num_phases=num_phases,
+    ).permute(1, 0, 2, 3)
+    height_probs = _encode_decode_probabilities(
+        vae,
+        volume.permute(1, 0, 2).contiguous().view(height, 1, depth, width),
+        num_phases=num_phases,
+    ).permute(1, 2, 0, 3)
+    width_probs = _encode_decode_probabilities(
+        vae,
+        volume.permute(2, 0, 1).contiguous().view(width, 1, depth, height),
+        num_phases=num_phases,
+    ).permute(1, 2, 3, 0)
+
+    axis_probabilities = torch.stack(
+        [depth_probs, height_probs, width_probs],
+        dim=0,
+    )
+    probabilities = geometric_probability_consensus(
+        axis_probabilities,
+        num_phases,
+    ).unsqueeze(0)
+    return probabilities_to_calibrated_labels(probabilities, num_phases)[0, 0].float()
+
+
+def _encode_decode_probabilities(
+    vae: torch.nn.Module,
+    images: torch.Tensor,
+    *,
+    num_phases: int,
+) -> torch.Tensor:
+    mu, _ = vae.encode(images)
+    if mu.ndim != 4 or mu.shape[0] != images.shape[0]:
+        raise ValueError("encode output must have shape [B, C, H, W].")
+    require_finite("encoded latent", mu)
+
+    probabilities = vae.decode_probs(mu)
+    expected_shape = (images.shape[0], num_phases, *images.shape[-2:])
+    if probabilities.shape != expected_shape:
+        raise ValueError(
+            "decode_probs output must have shape [B, num_phases, H, W]."
+        )
+    require_finite("decoded probabilities", probabilities)
+    return probabilities.float()
 
 
 def _encode_decode_batch(vae: torch.nn.Module, images: torch.Tensor) -> torch.Tensor:

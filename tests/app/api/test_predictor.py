@@ -90,6 +90,12 @@ class PredictOptionsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "sds_batch_size"):
             PredictOptions(num_phases=2, sds_batch_size=1.5)
 
+    def test_predict_options_rejects_non_boolean_balanced_slices(self):
+        with self.assertRaisesRegex(ValueError, "sds_balanced_slices"):
+            PredictOptions(num_phases=2, sds_balanced_slices=1)
+        with self.assertRaisesRegex(ValueError, "sds_consensus"):
+            PredictOptions(num_phases=2, sds_consensus=1)
+
     def test_predict_options_rejects_non_integer_step_counts(self):
         cases = [
             ("sds_steps", {"sds_steps": 1.5}),
@@ -97,6 +103,15 @@ class PredictOptionsTest(unittest.TestCase):
             ("sds_t_min", {"sds_t_min": 1.5}),
             ("sds_t_max", {"sds_t_max": 2.5}),
             ("refine_steps", {"refine_steps": 1.5}),
+            ("anchor_fit_steps", {"anchor_fit_steps": 1.5}),
+            ("anchor_slab_radius", {"anchor_slab_radius": 1.5}),
+            ("joint_3d_steps", {"joint_3d_steps": 1.5}),
+            ("joint_3d_batch_size", {"joint_3d_batch_size": 1.5}),
+            ("slicegan_steps", {"slicegan_steps": 1.5}),
+            ("slicegan_hybrid_steps", {"slicegan_hybrid_steps": 1.5}),
+            ("slicegan_condition_steps", {"slicegan_condition_steps": 1.5}),
+            ("slicegan_finetune_steps", {"slicegan_finetune_steps": 1.5}),
+            ("slicegan_seed", {"slicegan_seed": 1.5}),
         ]
 
         for message, kwargs in cases:
@@ -104,8 +119,74 @@ class PredictOptionsTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, f"{message}.*integer"):
                     PredictOptions(num_phases=2, **kwargs)
 
+    def test_predict_options_rejects_invalid_anchor_fit_lr(self):
+        with self.assertRaisesRegex(ValueError, "anchor_fit_lr"):
+            PredictOptions(num_phases=2, anchor_fit_lr=0.0)
+
+    def test_predict_options_rejects_invalid_anchor_slab_values(self):
+        with self.assertRaisesRegex(ValueError, "anchor_slab_radius"):
+            PredictOptions(num_phases=2, anchor_slab_radius=-1)
+        with self.assertRaisesRegex(ValueError, "anchor_slab_weight"):
+            PredictOptions(num_phases=2, anchor_slab_weight=1.1)
+
+    def test_predict_options_rejects_invalid_joint_3d_values(self):
+        with self.assertRaisesRegex(ValueError, "lmpdd_axis_consensus"):
+            PredictOptions(num_phases=2, lmpdd_axis_consensus=1)
+        with self.assertRaisesRegex(ValueError, "anchor_latent_sigma"):
+            PredictOptions(num_phases=2, anchor_latent_sigma=-1.0)
+        with self.assertRaisesRegex(ValueError, "anchor_latent_strength"):
+            PredictOptions(num_phases=2, anchor_latent_strength=0.0)
+        with self.assertRaisesRegex(ValueError, "joint_3d_batch_size"):
+            PredictOptions(num_phases=2, joint_3d_batch_size=0)
+        with self.assertRaisesRegex(ValueError, "joint_3d_lr"):
+            PredictOptions(num_phases=2, joint_3d_lr=0.0)
+        with self.assertRaisesRegex(ValueError, "joint_3d_entropy_weight"):
+            PredictOptions(num_phases=2, joint_3d_entropy_weight=-1.0)
+        with self.assertRaisesRegex(ValueError, "joint_3d_transition_weight"):
+            PredictOptions(num_phases=2, joint_3d_transition_weight=-1.0)
+        with self.assertRaisesRegex(ValueError, "joint_3d_run_weight"):
+            PredictOptions(num_phases=2, joint_3d_run_weight=-1.0)
+        with self.assertRaisesRegex(ValueError, "joint_3d_patch_weight"):
+            PredictOptions(num_phases=2, joint_3d_patch_weight=-1.0)
+        with self.assertRaisesRegex(ValueError, "joint_3d_texture_weight"):
+            PredictOptions(num_phases=2, joint_3d_texture_weight=-1.0)
+        with self.assertRaisesRegex(ValueError, "joint_3d_interface_weight"):
+            PredictOptions(num_phases=2, joint_3d_interface_weight=-1.0)
+        with self.assertRaisesRegex(ValueError, "joint_3d_discriminator_lr"):
+            PredictOptions(num_phases=2, joint_3d_discriminator_lr=0.0)
+        with self.assertRaisesRegex(ValueError, "cannot both"):
+            PredictOptions(num_phases=2, joint_3d_steps=1, sds_steps=1)
+        with self.assertRaisesRegex(ValueError, "replaces refine_steps"):
+            PredictOptions(num_phases=2, joint_3d_steps=1, refine_steps=1)
+        with self.assertRaisesRegex(ValueError, "conditional SliceGAN replaces"):
+            PredictOptions(num_phases=2, slicegan_steps=1, joint_3d_steps=1)
+
+    def test_predict_options_rejects_negative_slicegan_values(self):
+        for name in (
+            "slicegan_steps",
+            "slicegan_hybrid_steps",
+            "slicegan_condition_steps",
+            "slicegan_finetune_steps",
+            "slicegan_seed",
+        ):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, name):
+                    PredictOptions(num_phases=2, **{name: -1})
+
 
 class PredictorTest(unittest.TestCase):
+    def test_balanced_schedule_visits_every_slice_once_per_sweep(self):
+        predictor = Predictor(IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu")
+
+        schedule = predictor._build_balanced_schedule(
+            steps=6,
+            batch_size=1,
+            volume_size=2,
+        )
+
+        self.assertEqual(len(schedule), 6)
+        self.assertEqual(set(schedule), {(axis, index) for axis in range(3) for index in range(2)})
+
     def test_predict_returns_quantized_phase_volume(self):
         predictor = Predictor(IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu")
         options = PredictOptions(num_phases=2)
@@ -150,6 +231,77 @@ class PredictorTest(unittest.TestCase):
         self.assertIn("vf", stats)
         self.assertIn("loss", stats)
 
+    def test_predict_routes_joint_3d_optimization_when_enabled(self):
+        predictor = Predictor(IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu")
+        options = PredictOptions(num_phases=2, joint_3d_steps=1)
+        joint_volume = torch.ones(2, 2, 2)
+
+        with (
+            patch("torch.randn", return_value=torch.zeros(2, 1, 2, 2)),
+            patch.object(
+                predictor,
+                "_run_joint_3d",
+                return_value=(joint_volume, {"joint_steps": torch.tensor(1)}),
+            ) as run_joint,
+        ):
+            volume, stats = predictor.predict(options)
+
+        run_joint.assert_called_once()
+        self.assertTrue(torch.equal(volume, torch.ones(2, 2, 2, dtype=torch.uint8)))
+        self.assertEqual(int(stats["joint_steps"]), 1)
+
+    def test_predict_routes_conditional_slicegan_without_generating_base(self):
+        predictor = Predictor(IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu")
+        options = PredictOptions(num_phases=2, slicegan_steps=1)
+        anchor = AnchorSlice(
+            image=np.ones((2, 2), dtype=np.uint8),
+            axis=0,
+            index=1,
+        )
+        generated = torch.ones(2, 2, 2)
+
+        with (
+            patch.object(
+                predictor,
+                "_run_slicegan",
+                return_value=(generated, {"slicegan_steps": torch.tensor(1)}),
+            ) as run_slicegan,
+            patch.object(predictor, "_generate_base") as generate_base,
+        ):
+            volume, stats = predictor.predict(options, anchors=[anchor])
+
+        run_slicegan.assert_called_once()
+        generate_base.assert_not_called()
+        self.assertTrue(torch.equal(volume, torch.ones(2, 2, 2, dtype=torch.uint8)))
+        self.assertEqual(int(stats["slicegan_steps"]), 1)
+
+    def test_joint_prediction_applies_anchor_only_in_image_space(self):
+        predictor = Predictor(IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu")
+        anchor = AnchorSlice(
+            image=np.ones((2, 2), dtype=np.uint8),
+            axis=0,
+            index=1,
+        )
+
+        with (
+            patch("torch.randn", return_value=torch.zeros(2, 1, 2, 2)),
+            patch(
+                "src.app.api.predictor.encode_anchors",
+                return_value=(None, None),
+            ) as encode,
+            patch.object(
+                predictor,
+                "_run_joint_3d",
+                return_value=(torch.zeros(2, 2, 2), {}),
+            ),
+        ):
+            predictor.predict(
+                anchors=[anchor],
+                options=PredictOptions(num_phases=2, joint_3d_steps=1),
+            )
+
+        self.assertIsNone(encode.call_args.args[1])
+
     def test_predict_blends_anchor_latent_without_forced_overwrite(self):
         predictor = Predictor(IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu")
         anchor = AnchorSlice(
@@ -167,6 +319,37 @@ class PredictorTest(unittest.TestCase):
         self.assertTrue(torch.equal(volume[1], torch.ones(2, 2, dtype=torch.uint8)))
         self.assertTrue(torch.equal(volume[0], torch.zeros(2, 2, dtype=torch.uint8)))
         self.assertIsInstance(stats, dict)
+
+    def test_predict_fits_anchor_after_refinement_when_enabled(self):
+        predictor = Predictor(IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu")
+        anchor = AnchorSlice(
+            image=np.ones((2, 2), dtype=np.uint8),
+            axis=0,
+            index=1,
+        )
+
+        with patch("torch.randn", return_value=torch.zeros(2, 1, 2, 2)):
+            volume, stats = predictor.predict(
+                anchors=[anchor],
+                options=PredictOptions(
+                    num_phases=2,
+                    refine_steps=1,
+                    anchor_fit_steps=2,
+                    anchor_fit_lr=0.1,
+                ),
+            )
+
+        self.assertTrue(torch.equal(volume[1], torch.ones(2, 2, dtype=torch.uint8)))
+        self.assertIn("anchor_fit", stats)
+
+    def test_predict_requires_anchor_when_anchor_fit_is_enabled(self):
+        predictor = Predictor(IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu")
+
+        with patch("torch.randn", return_value=torch.zeros(2, 1, 2, 2)):
+            with self.assertRaisesRegex(ValueError, "anchors"):
+                predictor.predict(
+                    PredictOptions(num_phases=2, anchor_fit_steps=1),
+                )
 
     def test_predict_lmpdd_anchor_axis_is_stable_for_short_schedules(self):
         predictor = Predictor(

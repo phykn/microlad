@@ -4,7 +4,10 @@ from numbers import Integral
 import torch
 import torch.nn.functional as F
 
-from src.modeling.phases.relaxation import calc_phase_probs
+from src.modeling.phases.relaxation import (
+    calc_phase_probs,
+    sharpen_phase_probabilities,
+)
 from src.common.tensors.validation import require_finite
 
 
@@ -15,6 +18,7 @@ def tpc_loss(
     num_phases: int,
     temperature: float = 0.1,
     weight: float = 1.0,
+    phase_probabilities: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if values.ndim < 2:
         raise ValueError("values must have at least two spatial dimensions.")
@@ -38,6 +42,7 @@ def tpc_loss(
         values,
         num_phases=num_phases,
         temperature=temperature,
+        phase_probabilities=phase_probabilities,
     )
     target_tpc = _target_tensor(
         targets,
@@ -64,6 +69,7 @@ def compute_tpc(
     *,
     num_phases: int,
     temperature: float = 0.1,
+    phase_probabilities: torch.Tensor | None = None,
 ) -> torch.Tensor:
     if values.ndim < 2:
         raise ValueError("values must have at least two spatial dimensions.")
@@ -89,12 +95,19 @@ def compute_tpc(
         dtype=values.dtype,
     )
 
-    probability = calc_phase_probs(
-        slices,
-        num_phases=num_phases,
-        temperature=temperature,
-        phase_dim=1,
-    )
+    if phase_probabilities is None:
+        probability = calc_phase_probs(
+            slices,
+            num_phases=num_phases,
+            temperature=temperature,
+            phase_dim=1,
+        )
+    else:
+        probability = sharpen_phase_probabilities(
+            phase_probabilities,
+            num_phases=num_phases,
+            temperature=temperature,
+        )
 
     return _phase_tpc(probability, bin_matrix, bin_counts)
 

@@ -3,7 +3,7 @@ from collections.abc import Mapping, Sequence
 import torch
 
 from src.modeling.diffusion import DDPMProcess
-from src.pipelines.guidance.anchor_objective import anchor_loss
+from src.pipelines.guidance.anchor_objective import anchor_loss, masked_anchor_loss
 from src.pipelines.guidance.objective import descriptor_loss, sample_descriptor_loss
 from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver
 from src.pipelines.guidance.prior import sds_loss
@@ -33,6 +33,8 @@ def _objective(
     temperature: float,
     sa_kernel_size: int,
     sa_sigma: float,
+    phase_probabilities: torch.Tensor | None = None,
+    anchor_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     total = latent.sum() * 0.0
     stats: dict[str, torch.Tensor] = {}
@@ -43,13 +45,22 @@ def _objective(
         stats["sds"] = (sds_weight * loss).detach()
 
     if anchor_weight > 0.0 and anchor_target is not None:
-        loss, _ = anchor_loss(
-            decoded,
-            anchor_target,
+        anchor_objective = anchor_loss if anchor_mask is None else masked_anchor_loss
+        anchor_kwargs = dict(
             num_phases=num_phases,
             temperature=temperature,
             weight=anchor_weight,
+            phase_probabilities=phase_probabilities,
         )
+        if anchor_mask is None:
+            loss, _ = anchor_objective(decoded, anchor_target, **anchor_kwargs)
+        else:
+            loss, _ = anchor_objective(
+                decoded,
+                anchor_target,
+                anchor_mask,
+                **anchor_kwargs,
+            )
         total = total + loss
         stats["anchor"] = loss.detach()
 
@@ -68,6 +79,7 @@ def _objective(
         temperature=temperature,
         sa_kernel_size=sa_kernel_size,
         sa_sigma=sa_sigma,
+        phase_probabilities=phase_probabilities,
     )
     total = total + target_total
     stats.update(target_stats)
@@ -100,6 +112,8 @@ def _objective_batch(
     temperature: float,
     sa_kernel_size: int,
     sa_sigma: float,
+    phase_probabilities: torch.Tensor | None = None,
+    anchor_masks: Sequence[torch.Tensor | None] | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     total = latent.sum() * 0.0
     stats: dict[str, torch.Tensor] = {}
@@ -110,24 +124,41 @@ def _objective_batch(
         stats["sds"] = (sds_weight * loss).detach()
 
     anchor_losses = []
-    has_anchor_target = False
     if anchor_weight > 0.0:
-        for decoded_slice, target in zip(decoded, anchor_targets, strict=True):
+        masks = anchor_masks or [None] * len(anchor_targets)
+        for batch_index, (decoded_slice, target, mask) in enumerate(
+            zip(decoded, anchor_targets, masks, strict=True)
+        ):
             if target is None:
-                anchor_losses.append(decoded_slice.sum() * 0.0)
                 continue
 
-            loss, _ = anchor_loss(
-                decoded_slice,
-                target,
-                num_phases=num_phases,
-                temperature=temperature,
-                weight=anchor_weight,
+            probability = (
+                None
+                if phase_probabilities is None
+                else phase_probabilities[batch_index]
             )
+            if mask is None:
+                loss, _ = anchor_loss(
+                    decoded_slice,
+                    target,
+                    num_phases=num_phases,
+                    temperature=temperature,
+                    weight=anchor_weight,
+                    phase_probabilities=probability,
+                )
+            else:
+                loss, _ = masked_anchor_loss(
+                    decoded_slice,
+                    target,
+                    mask,
+                    num_phases=num_phases,
+                    temperature=temperature,
+                    weight=anchor_weight,
+                    phase_probabilities=probability,
+                )
             anchor_losses.append(loss)
-            has_anchor_target = True
 
-    if has_anchor_target:
+    if anchor_losses:
         loss = torch.stack(anchor_losses).mean()
         total = total + loss
         stats["anchor"] = loss.detach()
@@ -147,6 +178,7 @@ def _objective_batch(
         temperature=temperature,
         sa_kernel_size=sa_kernel_size,
         sa_sigma=sa_sigma,
+        phase_probabilities=phase_probabilities,
     )
     total = total + target_total
     stats.update(target_stats)

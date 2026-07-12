@@ -282,7 +282,7 @@ class PredictScaleSDSTest(unittest.TestCase):
                     self.optimize(**{name: float("nan")})
 
     def test_large_slice_prior_loss_is_averaged_across_tiles(self):
-        decoded, total, stats = _local_prior_objective(
+        decoded, _, total, stats = _local_prior_objective(
             torch.zeros(4, 4),
             IdentityVAE(),
             ZeroNoiseModel(),
@@ -309,7 +309,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             ]
         )
 
-        _, total, stats = _batch_prior_loss(
+        _, _, total, stats = _batch_prior_loss(
             images,
             IdentityVAE(),
             ZeroNoiseModel(),
@@ -334,7 +334,7 @@ class PredictScaleSDSTest(unittest.TestCase):
         images = torch.zeros(2, 2, 2)
         target = torch.ones(2, 2)
 
-        _, single_total, _ = _local_prior_objective(
+        _, _, single_total, _ = _local_prior_objective(
             images[0],
             IdentityVAE(),
             ZeroNoiseModel(),
@@ -348,7 +348,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             temperature=0.5,
             tile_overlap=0,
         )
-        _, batch_total, stats = _batch_prior_loss(
+        _, _, batch_total, stats = _batch_prior_loss(
             images,
             IdentityVAE(),
             ZeroNoiseModel(),
@@ -370,7 +370,7 @@ class PredictScaleSDSTest(unittest.TestCase):
     def test_local_prior_objective_uses_weighted_tile_stitching(self):
         vae = LocalPatternVAE()
 
-        decoded, total, stats = _local_prior_objective(
+        decoded, _, total, stats = _local_prior_objective(
             torch.zeros(4, 4),
             vae,
             ZeroNoiseModel(),
@@ -394,7 +394,7 @@ class PredictScaleSDSTest(unittest.TestCase):
     def test_batch_prior_loss_uses_weighted_tile_stitching(self):
         vae = LocalPatternVAE()
 
-        decoded, _, _ = _batch_prior_loss(
+        decoded, _, _, _ = _batch_prior_loss(
             torch.zeros(2, 4, 4),
             vae,
             ZeroNoiseModel(),

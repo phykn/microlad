@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -7,6 +8,7 @@ from torch import nn
 from src.modeling.diffusion import DDPMProcess
 from src.app.api import AnchorSlice
 from src.pipelines.guidance.optimization import optimize_slice, optimize_volume
+from src.pipelines.guidance.optimization import _smooth_anchor_slabs
 from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver
 from src.pipelines.guidance.evaluation import _objective, _objective_batch
 
@@ -45,6 +47,28 @@ class NonFiniteFinalDecodeVAE(IdentityVAE):
         return z
 
 
+class CategoricalVAE(IdentityVAE):
+    num_phases = 2
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.probability_calls = 0
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        raise AssertionError("categorical optimization must not use scalar decode")
+
+    def decode_probs(self, z: torch.Tensor) -> torch.Tensor:
+        self.probability_calls += 1
+        return torch.softmax(torch.cat([-z, z], dim=1), dim=1)
+
+
+class ThreePhaseCategoricalVAE(IdentityVAE):
+    num_phases = 3
+
+    def decode_probs(self, z: torch.Tensor) -> torch.Tensor:
+        return torch.softmax(torch.cat([-z, torch.zeros_like(z), z], dim=1), dim=1)
+
+
 class ZeroNoiseModel(nn.Module):
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return torch.zeros_like(x)
@@ -61,6 +85,32 @@ class RecordingNoiseModel(nn.Module):
 
 
 class PredictSDSOptimizeTest(unittest.TestCase):
+    def test_optimize_slice_uses_categorical_decoder_probabilities(self):
+        vae = CategoricalVAE()
+        volume = torch.zeros(4, 4, 4)
+
+        updated, stats = optimize_slice(
+            volume,
+            vae,
+            ZeroNoiseModel(),
+            DDPMProcess(timesteps=4),
+            axis=0,
+            index=1,
+            steps=2,
+            lr=0.5,
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            sds_weight=0.0,
+            vf_targets={0: 1.0, 1: 0.0},
+            vf_weight=1.0,
+        )
+
+        self.assertGreaterEqual(vae.probability_calls, 3)
+        self.assertTrue(torch.all(updated[1] == updated[1].round()))
+        self.assertLess(float(updated[1].mean()), 0.5)
+        self.assertIn("vf", stats)
+
     def test_optimize_slice_updates_only_selected_slice(self):
         volume = torch.zeros(4, 4, 4)
         vae = IdentityVAE()
@@ -326,7 +376,7 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
         self.assertGreater(float(total.detach()), 0.1)
         self.assertGreater(float(stats["vf"]), 0.1)
 
-    def test_objective_batch_anchor_loss_includes_unanchored_slices_in_mean(self):
+    def test_objective_batch_anchor_loss_is_not_diluted_by_unanchored_slices(self):
         decoded = torch.zeros(2, 4, 4)
         latent = decoded.view(2, 1, 4, 4).clone()
         target = torch.ones(4, 4)
@@ -380,8 +430,8 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
             sa_sigma=1.0,
         )
 
-        self.assertTrue(torch.allclose(batch_total, single_total / 2.0))
-        self.assertTrue(torch.allclose(stats["anchor"], single_total.detach() / 2.0))
+        self.assertTrue(torch.allclose(batch_total, single_total))
+        self.assertTrue(torch.allclose(stats["anchor"], single_total.detach()))
 
     def test_optimize_volume_rejects_cross_axis_slice_batch(self):
         with self.assertRaisesRegex(ValueError, "same axis"):
@@ -432,6 +482,94 @@ class PredictSDSOptimizeVolumeTest(unittest.TestCase):
         self.assertLess(float(updated[2].mean()), 1.0)
         self.assertTrue(torch.allclose(updated[0], volume[0]))
         self.assertIn("anchor", stats)
+
+    def test_optimize_volume_applies_anchor_to_cross_axis_intersection(self):
+        volume = torch.zeros(4, 4, 4)
+        anchor = AnchorSlice(
+            image=np.ones((4, 4), dtype=np.uint8),
+            axis=0,
+            index=2,
+        )
+
+        updated, stats = optimize_volume(
+            volume,
+            IdentityVAE(),
+            ZeroNoiseModel(),
+            DDPMProcess(timesteps=4),
+            steps=1,
+            slice_steps=1,
+            lr=0.1,
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            slice_schedule=[(1, 1)],
+            anchors=[anchor],
+            anchor_weight=1.0,
+            sds_weight=0.0,
+        )
+
+        self.assertGreater(float(updated[2, 1].mean()), 0.0)
+        self.assertTrue(torch.allclose(updated[0, 1], volume[0, 1]))
+        self.assertIn("anchor", stats)
+
+    def test_consensus_sweep_fuses_three_axis_probabilities(self):
+        volume = torch.zeros(4, 4, 4)
+        schedule = [
+            *[(0, index) for index in range(4)],
+            *[(1, index) for index in range(4)],
+            *[(2, index) for index in range(4)],
+        ]
+
+        def proposal(current, *args, axis, indices, **kwargs):
+            probabilities = torch.zeros(len(indices), 3, 4, 4)
+            probabilities[:, axis] = 1.0
+            return current.clone(), {}, probabilities
+
+        with patch(
+            "src.pipelines.guidance.optimization._optimize_slice_batch",
+            side_effect=proposal,
+        ):
+            updated, _ = optimize_volume(
+                volume,
+                ThreePhaseCategoricalVAE(),
+                ZeroNoiseModel(),
+                DDPMProcess(timesteps=4),
+                steps=3,
+                slice_steps=1,
+                sds_batch_size=4,
+                lr=0.1,
+                t_min=1,
+                t_max=3,
+                num_phases=3,
+                slice_schedule=schedule,
+                sds_weight=0.0,
+                vf_targets=torch.tensor([0.5, 0.25, 0.25]),
+                consensus_sweeps=True,
+            )
+
+        counts = torch.bincount(updated.to(torch.long).flatten(), minlength=3)
+        self.assertTrue(torch.equal(counts, torch.tensor([32, 16, 16])))
+
+    def test_anchor_slab_smoothing_reduces_center_plane_jump(self):
+        probabilities = torch.zeros(2, 5, 2, 2)
+        probabilities[0] = 1.0
+        probabilities[:, 2] = torch.tensor([0.0, 1.0]).view(2, 1, 1)
+        anchor = AnchorSlice(
+            image=np.zeros((2, 2), dtype=np.uint8),
+            axis=0,
+            index=2,
+        )
+
+        before = (probabilities[:, 2] - probabilities[:, 1]).abs().mean()
+        smoothed = _smooth_anchor_slabs(
+            probabilities,
+            [anchor],
+            radius=1,
+            weight=1.0,
+        )
+        after = (smoothed[:, 2] - smoothed[:, 1]).abs().mean()
+
+        self.assertLess(float(after), float(before))
 
     def test_optimize_volume_rejects_non_finite_batched_encoded_latent(self):
         with self.assertRaisesRegex(ValueError, "latent.*finite"):

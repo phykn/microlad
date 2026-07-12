@@ -19,8 +19,8 @@ optimization:
 
 training:
   steps: 50000
-  save_every: 1000
+  save_every: 5000
 
 output:
-  vae_run_dir:
-  run_root: run/20260706-145958-609474
+  vae_run_dir: run/20260712-120359-181168
+  run_root: run
