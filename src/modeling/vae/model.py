@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
-from src.common.neural.normalization import norm_groups
-from src.common.neural.spatial import downsample_steps
+from src.modeling.normalization import norm_groups
+from src.modeling.vae.spatial import downsample_steps
 from src.modeling.phases.representation import (
     logits_to_probabilities,
     logits_to_relaxed_labels,

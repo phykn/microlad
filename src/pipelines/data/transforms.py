@@ -1,10 +1,17 @@
 import numpy as np
 from PIL import Image
 
+from src.validation import require_int
+
 
 def crop_square(image: np.ndarray, size: int) -> np.ndarray:
     if image.ndim != 2:
         raise ValueError("image must have shape [H, W].")
+    if image.dtype != np.uint8:
+        raise ValueError("image must have dtype uint8.")
+
+    require_int("size", size)
+
     if size <= 0:
         raise ValueError("size must be positive.")
     if image.shape[0] < size or image.shape[1] < size:
@@ -20,10 +27,15 @@ def crop_square(image: np.ndarray, size: int) -> np.ndarray:
 def resize_patch(patch: np.ndarray, size: int) -> np.ndarray:
     if patch.ndim != 2:
         raise ValueError("patch must have shape [H, W].")
+    if patch.dtype != np.uint8:
+        raise ValueError("patch must have dtype uint8.")
+
+    require_int("size", size)
+
     if size <= 0:
         raise ValueError("size must be positive.")
     if patch.shape == (size, size):
-        return patch
+        return patch.copy()
 
     image = Image.fromarray(patch)
     image = image.resize((size, size), Image.Resampling.NEAREST)
@@ -33,6 +45,8 @@ def resize_patch(patch: np.ndarray, size: int) -> np.ndarray:
 def augment_patch(patch: np.ndarray) -> np.ndarray:
     if patch.ndim != 2 or patch.shape[0] != patch.shape[1]:
         raise ValueError("patch must be a square 2D array.")
+    if patch.dtype != np.uint8:
+        raise ValueError("patch must have dtype uint8.")
 
     transform = int(np.random.randint(0, 8))
     if transform >= 4:

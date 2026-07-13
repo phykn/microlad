@@ -7,21 +7,58 @@ from src.pipelines.guidance.conditioning.model import (
     AnchorSlice,
     VolumeAnchor,
 )
+from src.validation import require_int
 
 
 def validate_anchor(anchor: AnchorSlice, volume_shape: Sequence[int]) -> None:
+    _validate_anchor_position(anchor, volume_shape)
+    _validate_anchor_image(anchor, volume_shape)
+
+
+def validate_anchor_positions(
+    anchors: Sequence[AnchorSlice],
+    volume_shape: Sequence[int],
+) -> None:
+    seen: set[tuple[int, int]] = set()
+    for anchor in anchors:
+        _validate_anchor_position(anchor, volume_shape)
+        key = (anchor.axis, anchor.index)
+        if key in seen:
+            raise ValueError(
+                f"Duplicate anchor slice: axis={anchor.axis}, index={anchor.index}."
+            )
+        seen.add(key)
+
+
+def validate_anchors(
+    anchors: Sequence[AnchorSlice],
+    volume_shape: Sequence[int],
+) -> None:
+    validate_anchor_positions(anchors, volume_shape)
+    for anchor in anchors:
+        _validate_anchor_image(anchor, volume_shape)
+
+
+def _validate_anchor_position(
+    anchor: AnchorSlice,
+    volume_shape: Sequence[int],
+) -> None:
     if len(volume_shape) != 3:
         raise ValueError("volume_shape must have three values: [D, H, W].")
-
+    require_int("axis", anchor.axis)
+    require_int("index", anchor.index)
     if anchor.axis not in (0, 1, 2):
         raise ValueError("axis must be 0, 1, or 2.")
-
     if anchor.index < 0 or anchor.index >= volume_shape[anchor.axis]:
         raise ValueError("index is outside the selected axis.")
 
+
+def _validate_anchor_image(
+    anchor: AnchorSlice,
+    volume_shape: Sequence[int],
+) -> None:
     if not isinstance(anchor.image, np.ndarray):
         raise TypeError("anchor image must be a numpy array.")
-
     if anchor.image.ndim != 2:
         raise ValueError("anchor image must be 2D.")
 
@@ -32,32 +69,11 @@ def validate_anchor(anchor: AnchorSlice, volume_shape: Sequence[int]) -> None:
         )
 
 
-def validate_anchors(
-    anchors: Sequence[AnchorSlice],
-    volume_shape: Sequence[int],
-) -> None:
-    seen: set[tuple[int, int]] = set()
-
-    for anchor in anchors:
-        validate_anchor(anchor, volume_shape)
-
-        key = (anchor.axis, anchor.index)
-
-        if key in seen:
-            raise ValueError(
-                f"Duplicate anchor slice: axis={anchor.axis}, index={anchor.index}."
-            )
-
-        seen.add(key)
-
-
 def validate_anchor_intersections(
     anchors: Sequence[VolumeAnchor],
     *,
     tolerance: float,
 ) -> None:
-    """Ensure different-axis categorical constraints agree where they cross."""
-
     if not np.isfinite(tolerance) or tolerance < 0.0 or tolerance > 1.0:
         raise ValueError("anchor intersection tolerance must be between 0 and 1.")
     seen: set[tuple[int, int]] = set()

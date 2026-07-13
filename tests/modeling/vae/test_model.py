@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.common.neural import downsample_steps
+from src.modeling.vae.spatial import downsample_steps
 from src.modeling.vae import PatchVAE, get_downsample_factor, reparameterize
 
 

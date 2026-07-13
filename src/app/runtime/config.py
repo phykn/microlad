@@ -1,10 +1,9 @@
 import argparse
-import shutil
 from pathlib import Path
 
 import yaml
 
-from src.pipelines.guidance.config import (
+from src.app.api.options import (
     SliceGANConditionConfig,
     SliceGANConfig,
     SliceGANRenderConfig,
@@ -42,41 +41,11 @@ def _flatten_config(config: dict) -> dict:
     return defaults
 
 
-def _last_checkpoint(run_dir: str | Path, component: str) -> Path:
-    return Path(run_dir) / "weight" / component / "last" / "model.pt"
-
-
-def _require_file(path: str | Path, label: str) -> Path:
-    path = Path(path)
-
-    if not path.is_file():
-        raise FileNotFoundError(f"{label} is required: {path}")
-
-    return path
-
-
-def _require_value(config: dict, label: str, *names: str):
-    for name in names:
-        if name in config:
-            return config[name]
-    raise ValueError(f"{label} is missing required value: {' or '.join(names)}")
-
-
-def _require_values(config: dict, label: str, *names: str) -> None:
-    missing = [name for name in names if name not in config]
-
-    if missing:
-        raise ValueError(f"{label} is missing required value: {', '.join(missing)}")
-
-
 def _to_yaml(value):
     if isinstance(value, Path):
         return str(value)
 
-    if isinstance(value, list):
-        return [_to_yaml(item) for item in value]
-
-    if isinstance(value, tuple):
+    if isinstance(value, (list, tuple)):
         return [_to_yaml(item) for item in value]
 
     if isinstance(value, dict):
@@ -86,13 +55,10 @@ def _to_yaml(value):
 
 
 def load_defaults(
-    config_path: str | Path | None,
+    config_path: str | Path,
     *,
     label: str = "config file",
 ) -> dict:
-    if not config_path:
-        return {}
-
     return _flatten_config(_load_mapping(config_path, label=label))
 
 
@@ -100,21 +66,21 @@ def load_slicegan_config(config_path: str | Path) -> SliceGANConfig:
     """Load the grouped conditional 3D generation settings from YAML."""
 
     values = _load_mapping(config_path, label="SliceGAN config")
-    training = values.pop("training", {})
-    conditioning = values.pop("conditioning", {})
-    rendering = values.pop("rendering", {})
+    train = values.pop("train", {})
+    condition = values.pop("condition", {})
+    render = values.pop("render", {})
     for name, section in (
-        ("training", training),
-        ("conditioning", conditioning),
-        ("rendering", rendering),
+        ("train", train),
+        ("condition", condition),
+        ("render", render),
     ):
         if not isinstance(section, dict):
             raise ValueError(f"SliceGAN config {name} must contain a mapping.")
     try:
         return SliceGANConfig(
-            training=SliceGANTrainConfig(**training),
-            conditioning=SliceGANConditionConfig(**conditioning),
-            rendering=SliceGANRenderConfig(**rendering),
+            train=SliceGANTrainConfig(**train),
+            condition=SliceGANConditionConfig(**condition),
+            render=SliceGANRenderConfig(**render),
             **values,
         )
     except TypeError as exc:
@@ -132,62 +98,3 @@ def save_run_config(run_dir: str | Path, args: argparse.Namespace, name: str) ->
 
     with open(path / f"{name}.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(config, f, sort_keys=False)
-
-
-def copy_vae_run(source_run_dir: str | Path, target_run_dir: str | Path) -> None:
-    source = Path(source_run_dir)
-    target = Path(target_run_dir)
-
-    target.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source / "vae.yaml", target / "vae.yaml")
-
-    source_weight = _last_checkpoint(source, "vae")
-    target_weight = _last_checkpoint(target, "vae")
-    target_weight.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_weight, target_weight)
-
-
-def apply_vae_defaults(args: argparse.Namespace) -> argparse.Namespace:
-    run_dir = getattr(args, "vae_run_dir", None)
-
-    if run_dir is None:
-        return args
-
-    vae_config = load_defaults(
-        _require_file(Path(run_dir) / "vae.yaml", "vae config"),
-        label="vae config",
-    )
-    vae_size = _require_value(vae_config, "vae config", "image_size", "size")
-
-    for arg_name, value in (
-        (
-            "crop_size",
-            _require_value(vae_config, "vae config", "crop_size"),
-        ),
-        ("size", vae_size),
-        (
-            "segment",
-            _require_value(vae_config, "vae config", "segment"),
-        ),
-        (
-            "num_phases",
-            _require_value(vae_config, "vae config", "num_phases"),
-        ),
-        (
-            "latent_ch",
-            _require_value(vae_config, "vae config", "latent_ch"),
-        ),
-    ):
-        existing = getattr(args, arg_name, None)
-
-        if existing is not None and existing != value:
-            raise ValueError(f"{arg_name} must match VAE run config.")
-
-        setattr(args, arg_name, value)
-
-    latent_size = vae_config.get("latent_size")
-
-    if latent_size is not None and int(latent_size) % 4 != 0:
-        raise ValueError("latent_size must be divisible by 4 for diffusion.")
-
-    return args

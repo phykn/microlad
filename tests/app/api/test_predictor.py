@@ -5,18 +5,21 @@ import numpy as np
 import torch
 
 from src.app.api import (
-    AnchorConfig,
     AnchorSlice,
+    DiffusionAnchorConfig,
     JointConfig,
     PredictOptions,
     Predictor,
+    PriorConfig,
     RefineConfig,
+    ScaleConfig,
     SDSConfig,
     SliceGANConditionConfig,
     SliceGANConfig,
     SliceGANTrainConfig,
     TargetConfig,
 )
+from src.pipelines.guidance.conditioning.model import VolumeAnchor
 
 
 class IdentityDDPM:
@@ -52,12 +55,19 @@ class IdentityVAE(torch.nn.Module):
         self.latent_size = 2
         self.latent_ch = 1
         self.downsample_factor = 1
+        self.num_phases = 2
 
     def encode(self, image: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         return image.clone(), torch.zeros_like(image)
 
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        return latent.clone()
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
+        base = torch.where(
+            latent >= 0.0,
+            torch.tanh(latent),
+            torch.zeros_like(latent),
+        )
+        phase_one = 1e-3 + (1.0 - 2e-3) * base
+        return torch.cat([1.0 - phase_one, phase_one], dim=1)
 
 
 class ZeroDownsampleVAE(IdentityVAE):
@@ -68,7 +78,7 @@ class ZeroDownsampleVAE(IdentityVAE):
 
 def fast_slicegan_config(*, intersection_tolerance: float = 0.1) -> SliceGANConfig:
     return SliceGANConfig(
-        training=SliceGANTrainConfig(steps=1),
+        train=SliceGANTrainConfig(steps=1),
         intersection_tolerance=intersection_tolerance,
     )
 
@@ -76,16 +86,16 @@ def fast_slicegan_config(*, intersection_tolerance: float = 0.1) -> SliceGANConf
 class PredictOptionsTest(unittest.TestCase):
     def test_predict_options_accepts_grouped_slicegan_config(self):
         config = SliceGANConfig(
-            training=SliceGANTrainConfig(steps=12, hybrid_steps=3),
-            conditioning=SliceGANConditionConfig(steps=7, finetune_steps=2),
+            train=SliceGANTrainConfig(steps=12, mix_steps=3),
+            condition=SliceGANConditionConfig(noise_steps=7, tune_steps=2),
             intersection_tolerance=0.05,
         )
 
         options = PredictOptions(num_phases=2, slicegan=config)
 
         self.assertIs(options.slicegan, config)
-        self.assertEqual(options.slicegan.training.steps, 12)
-        self.assertEqual(options.slicegan.conditioning.steps, 7)
+        self.assertEqual(options.slicegan.train.steps, 12)
+        self.assertEqual(options.slicegan.condition.noise_steps, 7)
 
     def test_predict_options_rejects_non_integer_num_phases(self):
         with self.assertRaisesRegex(ValueError, "num_phases"):
@@ -95,21 +105,26 @@ class PredictOptionsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "num_phases"):
             PredictOptions(num_phases=257)
 
-    def test_predict_options_rejects_weights_outside_zero_to_one(self):
+    def test_loss_weights_accept_values_above_one(self):
+        self.assertEqual(PriorConfig(weight=2.0).weight, 2.0)
+        self.assertEqual(DiffusionAnchorConfig(weight=2.0).weight, 2.0)
+        self.assertEqual(TargetConfig(vf_weight=2.0).vf_weight, 2.0)
+
+    def test_predict_options_rejects_negative_weights(self):
         with self.assertRaisesRegex(ValueError, "weight"):
-            SDSConfig(weight=1.1)
+            PriorConfig(weight=-0.1)
         with self.assertRaisesRegex(ValueError, "weight"):
-            AnchorConfig(weight=-0.1)
+            DiffusionAnchorConfig(weight=-0.1)
         with self.assertRaisesRegex(ValueError, "vf_weight"):
-            TargetConfig(vf_weight=2.0)
+            TargetConfig(vf_weight=-0.1)
 
     def test_predict_options_rejects_non_finite_numeric_values(self):
         cases = (
-            ("weight", lambda: SDSConfig(weight=float("nan"))),
-            ("weight", lambda: AnchorConfig(weight=float("nan"))),
+            ("weight", lambda: PriorConfig(weight=float("nan"))),
+            ("weight", lambda: DiffusionAnchorConfig(weight=float("nan"))),
             (
-                "low_conductivity",
-                lambda: TargetConfig(low_conductivity=float("nan")),
+                "low_phase_conductivity",
+                lambda: TargetConfig(low_phase_conductivity=float("nan")),
             ),
             ("learning_rate", lambda: SDSConfig(learning_rate=float("nan"))),
         )
@@ -119,32 +134,54 @@ class PredictOptionsTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     build()
 
-    def test_predict_options_rejects_invalid_sds_batch_size(self):
+    def test_sds_config_rejects_invalid_batch_size(self):
         with self.assertRaisesRegex(ValueError, "batch_size"):
             SDSConfig(batch_size=0)
         with self.assertRaisesRegex(ValueError, "batch_size"):
             SDSConfig(batch_size=1.5)
 
+    def test_target_config_validates_diffusivity_grid_size(self):
+        self.assertEqual(
+            TargetConfig(diffusivity_grid_size=2).diffusivity_grid_size,
+            2,
+        )
+
+        invalid_values = (True, 1, (2,), (1, 2), (2, 1), (2.5, 2))
+        for value in invalid_values:
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "diffusivity_grid_size"):
+                    TargetConfig(diffusivity_grid_size=value)
+
+        with self.assertRaisesRegex(ValueError, "diffusivity_grid_size"):
+            TargetConfig(diffusivity_weight=1.0)
+
     def test_predict_options_rejects_non_boolean_balanced_slices(self):
         with self.assertRaisesRegex(ValueError, "balanced_slices"):
             SDSConfig(balanced_slices=1)
-        with self.assertRaisesRegex(ValueError, "consensus"):
-            SDSConfig(consensus=1)
+        with self.assertRaisesRegex(ValueError, "consensus_sweeps"):
+            SDSConfig(consensus_sweeps=1)
+
+    def test_predict_options_rejects_non_boolean_segment_anchors(self):
+        with self.assertRaisesRegex(ValueError, "segment_anchors"):
+            PredictOptions(num_phases=2, segment_anchors=1)
 
     def test_predict_options_rejects_non_integer_step_counts(self):
         cases = (
             ("steps", lambda: SDSConfig(steps=1.5)),
             ("slice_steps", lambda: SDSConfig(slice_steps=True)),
-            ("t_min", lambda: SDSConfig(t_min=1.5)),
-            ("t_max", lambda: SDSConfig(t_max=2.5)),
+            ("t_min", lambda: PriorConfig(t_min=1.5)),
+            ("t_max", lambda: PriorConfig(t_max=2.5)),
             ("steps", lambda: RefineConfig(steps=1.5)),
-            ("fit_steps", lambda: AnchorConfig(fit_steps=1.5)),
-            ("slab_radius", lambda: AnchorConfig(slab_radius=1.5)),
+            ("batch_size", lambda: RefineConfig(batch_size=1.5)),
+            ("fit_steps", lambda: DiffusionAnchorConfig(fit_steps=1.5)),
+            ("slab_radius", lambda: DiffusionAnchorConfig(slab_radius=1.5)),
             ("steps", lambda: JointConfig(steps=1.5)),
             ("batch_size", lambda: JointConfig(batch_size=1.5)),
             ("steps", lambda: SliceGANTrainConfig(steps=1.5)),
-            ("steps", lambda: SliceGANConditionConfig(steps=1.5)),
-            ("seed", lambda: SliceGANConfig(seed=1.5)),
+            ("preview_count", lambda: SliceGANTrainConfig(preview_count=1.5)),
+            ("noise_steps", lambda: SliceGANConditionConfig(noise_steps=1.5)),
+            ("min_trials", lambda: SliceGANConditionConfig(min_trials=1.5)),
+            ("batch_size", lambda: ScaleConfig(batch_size=1.5)),
         )
 
         for message, build in cases:
@@ -152,23 +189,23 @@ class PredictOptionsTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, f"{message}.*integer"):
                     build()
 
-    def test_predict_options_rejects_invalid_anchor_fit_lr(self):
+    def test_diffusion_anchor_config_rejects_invalid_fit_lr(self):
         with self.assertRaisesRegex(ValueError, "fit_lr"):
-            AnchorConfig(fit_lr=0.0)
+            DiffusionAnchorConfig(fit_lr=0.0)
 
-    def test_predict_options_rejects_invalid_anchor_slab_values(self):
+    def test_diffusion_anchor_config_rejects_invalid_slab_values(self):
         with self.assertRaisesRegex(ValueError, "slab_radius"):
-            AnchorConfig(slab_radius=-1)
+            DiffusionAnchorConfig(slab_radius=-1)
         with self.assertRaisesRegex(ValueError, "slab_weight"):
-            AnchorConfig(slab_weight=1.1)
+            DiffusionAnchorConfig(slab_weight=1.1)
 
     def test_predict_options_rejects_invalid_joint_values(self):
         with self.assertRaisesRegex(ValueError, "axis_consensus"):
-            AnchorConfig(axis_consensus=1)
+            DiffusionAnchorConfig(axis_consensus=1)
         with self.assertRaisesRegex(ValueError, "latent_sigma"):
-            AnchorConfig(latent_sigma=-1.0)
+            DiffusionAnchorConfig(latent_sigma=-1.0)
         with self.assertRaisesRegex(ValueError, "latent_strength"):
-            AnchorConfig(latent_strength=0.0)
+            DiffusionAnchorConfig(latent_strength=0.0)
         with self.assertRaisesRegex(ValueError, "batch_size"):
             JointConfig(batch_size=0)
         with self.assertRaisesRegex(ValueError, "learning_rate"):
@@ -201,12 +238,24 @@ class PredictOptionsTest(unittest.TestCase):
     def test_slicegan_config_rejects_negative_values(self):
         with self.assertRaisesRegex(ValueError, "steps"):
             SliceGANTrainConfig(steps=-1)
-        with self.assertRaisesRegex(ValueError, "hybrid_steps"):
-            SliceGANTrainConfig(hybrid_steps=-1)
-        with self.assertRaisesRegex(ValueError, "steps"):
-            SliceGANConditionConfig(steps=-1)
-        with self.assertRaisesRegex(ValueError, "seed"):
-            SliceGANConfig(seed=-1)
+        with self.assertRaisesRegex(ValueError, "mix_steps"):
+            SliceGANTrainConfig(mix_steps=-1)
+        with self.assertRaisesRegex(ValueError, "noise_steps"):
+            SliceGANConditionConfig(noise_steps=-1)
+        with self.assertRaisesRegex(ValueError, "min_trials"):
+            SliceGANConditionConfig(min_trials=0)
+        with self.assertRaisesRegex(ValueError, "morphology_tolerance"):
+            SliceGANConditionConfig(morphology_tolerance=-0.1)
+        with self.assertRaisesRegex(ValueError, "continuity_tolerance"):
+            SliceGANConditionConfig(continuity_tolerance=1.1)
+
+    def test_scale_config_rejects_invalid_values(self):
+        for overlap in (-0.1, 1.0, float("nan")):
+            with self.subTest(overlap=overlap):
+                with self.assertRaisesRegex(ValueError, "overlap"):
+                    ScaleConfig(overlap=overlap)
+        with self.assertRaisesRegex(ValueError, "batch_size"):
+            ScaleConfig(batch_size=0)
 
     def test_predict_options_accepts_and_normalizes_phase_fractions(self):
         options = PredictOptions(
@@ -253,22 +302,6 @@ class PredictOptionsTest(unittest.TestCase):
 
 
 class PredictorTest(unittest.TestCase):
-    def test_balanced_schedule_visits_every_slice_once_per_sweep(self):
-        predictor = Predictor(
-            IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu"
-        )
-
-        schedule = predictor._build_balanced_schedule(
-            steps=6,
-            batch_size=1,
-            volume_size=2,
-        )
-
-        self.assertEqual(len(schedule), 6)
-        self.assertEqual(
-            set(schedule), {(axis, index) for axis in range(3) for index in range(2)}
-        )
-
     def test_predict_returns_quantized_phase_volume(self):
         predictor = Predictor(
             IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu"
@@ -300,7 +333,8 @@ class PredictorTest(unittest.TestCase):
         )
         options = PredictOptions(
             num_phases=2,
-            sds=SDSConfig(steps=1, slice_steps=1, t_min=1, t_max=3, weight=0.0),
+            prior=PriorConfig(weight=0.0, t_min=1, t_max=3),
+            sds=SDSConfig(steps=1, slice_steps=1),
             targets=TargetConfig(vf_weight=1.0),
         )
         target_images = [np.zeros((2, 2), dtype=np.uint8)]
@@ -312,10 +346,94 @@ class PredictorTest(unittest.TestCase):
             )
 
         self.assertEqual(volume.shape, torch.Size([2, 2, 2]))
-        self.assertIn("vf", stats)
-        self.assertIn("loss", stats)
+        self.assertIn("history_vf", stats)
+        self.assertIn("history_loss", stats)
 
-    def test_predict_routes_joint_3d_optimization_when_enabled(self):
+    def test_sds_uses_phase_fractions_without_target_images(self):
+        predictor = Predictor(
+            IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu"
+        )
+        options = PredictOptions(
+            num_phases=2,
+            phase_fractions=(0.25, 0.75),
+            prior=PriorConfig(weight=0.4, t_min=0, t_max=3),
+            sds=SDSConfig(steps=1),
+        )
+        volume = torch.zeros(2, 2, 2)
+
+        with patch(
+            "src.app.api.predictor.optimize_volume",
+            return_value=(volume, {}),
+        ) as optimize:
+            predictor._run_sds(
+                volume,
+                options=options,
+                anchors=None,
+                target_labels=None,
+                descriptor_tile_size=None,
+                t_max=3,
+            )
+
+        self.assertTrue(
+            torch.equal(
+                optimize.call_args.kwargs["vf_targets"],
+                torch.tensor([0.25, 0.75]),
+            )
+        )
+        self.assertEqual(optimize.call_args.kwargs["vf_weight"], 1.0)
+        self.assertEqual(optimize.call_args.kwargs["sds_weight"], 0.4)
+        self.assertEqual(optimize.call_args.kwargs["t_min"], 0)
+        self.assertEqual(optimize.call_args.kwargs["t_max"], 3)
+
+    def test_joint_uses_phase_fractions_without_target_images(self):
+        predictor = Predictor(
+            IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu"
+        )
+        options = PredictOptions(
+            num_phases=2,
+            phase_fractions=(0.25, 0.75),
+            prior=PriorConfig(weight=0.6, t_min=0, t_max=3),
+            joint=JointConfig(steps=1),
+        )
+        volume = torch.zeros(2, 2, 2)
+
+        with patch(
+            "src.app.api.predictor.optimize_joint_volume",
+            return_value=(volume, {}),
+        ) as optimize:
+            predictor._run_joint(
+                volume,
+                options=options,
+                anchors=None,
+                target_labels=None,
+                t_max=3,
+            )
+
+        self.assertTrue(
+            torch.equal(
+                optimize.call_args.kwargs["vf_targets"],
+                torch.tensor([0.25, 0.75]),
+            )
+        )
+        self.assertEqual(optimize.call_args.kwargs["vf_weight"], 1.0)
+        self.assertEqual(optimize.call_args.kwargs["sds_weight"], 0.6)
+        self.assertEqual(optimize.call_args.kwargs["t_min"], 0)
+        self.assertEqual(optimize.call_args.kwargs["t_max"], 3)
+
+    def test_predict_rejects_phase_fractions_without_guidance(self):
+        predictor = Predictor(
+            IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu"
+        )
+
+        with self.assertRaisesRegex(ValueError, "sds.steps or joint.steps"):
+            predictor.predict(
+                PredictOptions(
+                    num_phases=2,
+                    phase_fractions=(0.25, 0.75),
+                )
+            )
+
+    def test_predict_routes_joint_optimization_when_enabled(self):
         predictor = Predictor(
             IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu"
         )
@@ -326,7 +444,7 @@ class PredictorTest(unittest.TestCase):
             patch("torch.randn", return_value=torch.zeros(2, 1, 2, 2)),
             patch.object(
                 predictor,
-                "_run_joint_3d",
+                "_run_joint",
                 return_value=(joint_volume, {"joint_steps": torch.tensor(1)}),
             ) as run_joint,
         ):
@@ -399,6 +517,7 @@ class PredictorTest(unittest.TestCase):
         self.assertEqual(kwargs["config"].intersection_tolerance, 0.05)
         self.assertEqual(kwargs["phase_fraction_tolerance"], 0.01)
         self.assertEqual(kwargs["volume_size"], 64)
+        self.assertEqual(kwargs["scale_batch_size"], options.scale.batch_size)
 
     def test_run_slicegan_preserves_absolute_index_in_scaled_volume(self):
         predictor = Predictor(
@@ -408,8 +527,14 @@ class PredictorTest(unittest.TestCase):
             device="cpu",
         )
         predictor.vae.image_size = 64
-        image = np.zeros((64, 64), dtype=np.uint8)
-        anchors = [AnchorSlice(image=image, axis=2, index=84)]
+        anchors = [
+            VolumeAnchor(
+                image=torch.zeros(64, 64, dtype=torch.long),
+                axis=2,
+                index=84,
+                start=32,
+            )
+        ]
         options = PredictOptions(num_phases=2, slicegan=fast_slicegan_config())
 
         with patch(
@@ -422,6 +547,53 @@ class PredictorTest(unittest.TestCase):
         target = kwargs["anchors"][0]
         self.assertEqual((target.axis, target.index, target.start), (2, 84, 32))
         self.assertEqual(kwargs["volume_size"], 128)
+
+    def test_run_slicegan_uses_128_vae_anchor_for_scaled_volume(self):
+        predictor = Predictor(
+            IdentityVAE(),
+            ZeroDenoiser(),
+            IdentityDDPM(),
+            device="cpu",
+        )
+        predictor.vae.image_size = 128
+        anchor = VolumeAnchor(
+            image=torch.zeros(128, 128, dtype=torch.long),
+            axis=2,
+            index=160,
+            start=64,
+        )
+        options = PredictOptions(num_phases=2, slicegan=fast_slicegan_config())
+
+        with patch(
+            "src.app.api.predictor.generate_conditional_slicegan",
+            return_value=(torch.zeros(1), {}),
+        ) as generate:
+            predictor._run_slicegan(256, options=options, anchors=[anchor])
+
+        target = generate.call_args.kwargs["anchors"][0]
+        self.assertEqual(target.image.shape, torch.Size([128, 128]))
+        self.assertEqual((target.axis, target.index, target.start), (2, 160, 64))
+        self.assertEqual(generate.call_args.kwargs["volume_size"], 256)
+
+    def test_predict_rejects_slicegan_anchor_that_differs_from_vae_size(self):
+        predictor = Predictor(
+            IdentityVAE(),
+            ZeroDenoiser(),
+            IdentityDDPM(),
+            device="cpu",
+        )
+        predictor.vae.image_size = 64
+        anchor = AnchorSlice(
+            image=np.zeros((128, 128), dtype=np.uint8),
+            axis=0,
+            index=64,
+        )
+
+        with self.assertRaisesRegex(ValueError, "match vae.image_size"):
+            predictor.predict(
+                PredictOptions(num_phases=2, slicegan=fast_slicegan_config()),
+                anchors=[anchor],
+            )
 
     def test_predict_accepts_multiple_same_axis_absolute_scale_anchors(self):
         predictor = Predictor(
@@ -469,7 +641,7 @@ class PredictorTest(unittest.TestCase):
             index=128,
         )
 
-        with self.assertRaisesRegex(ValueError, "output axis"):
+        with self.assertRaisesRegex(ValueError, "selected axis"):
             predictor.predict(
                 PredictOptions(num_phases=2, slicegan=fast_slicegan_config()),
                 anchors=[anchor],
@@ -494,7 +666,7 @@ class PredictorTest(unittest.TestCase):
             ) as encode,
             patch.object(
                 predictor,
-                "_run_joint_3d",
+                "_run_joint",
                 return_value=(torch.zeros(2, 2, 2), {}),
             ),
         ):
@@ -521,7 +693,8 @@ class PredictorTest(unittest.TestCase):
                 options=PredictOptions(num_phases=2),
             )
 
-        self.assertTrue(torch.equal(volume[1], torch.ones(2, 2, dtype=torch.uint8)))
+        self.assertGreater(float(volume[1].float().mean()), 0.0)
+        self.assertLess(float(volume[1].float().mean()), 1.0)
         self.assertTrue(torch.equal(volume[0], torch.zeros(2, 2, dtype=torch.uint8)))
         self.assertIsInstance(stats, dict)
 
@@ -541,12 +714,17 @@ class PredictorTest(unittest.TestCase):
                 options=PredictOptions(
                     num_phases=2,
                     refine=RefineConfig(steps=1),
-                    anchor=AnchorConfig(fit_steps=2, fit_lr=0.1),
+                    diffusion_anchor=DiffusionAnchorConfig(
+                        fit_steps=2,
+                        fit_lr=0.1,
+                    ),
                 ),
             )
 
-        self.assertTrue(torch.equal(volume[1], torch.ones(2, 2, dtype=torch.uint8)))
-        self.assertIn("anchor_fit", stats)
+        self.assertGreater(float(volume[1].float().mean()), 0.0)
+        self.assertLess(float(volume[1].float().mean()), 1.0)
+        self.assertIn("anchor_fit_history", stats)
+        self.assertGreater(float(stats["anchor_mismatch"]), 0.0)
 
     def test_predict_requires_anchor_when_anchor_fit_is_enabled(self):
         predictor = Predictor(
@@ -558,7 +736,7 @@ class PredictorTest(unittest.TestCase):
                 predictor.predict(
                     PredictOptions(
                         num_phases=2,
-                        anchor=AnchorConfig(fit_steps=1),
+                        diffusion_anchor=DiffusionAnchorConfig(fit_steps=1),
                     ),
                 )
 
@@ -581,7 +759,8 @@ class PredictorTest(unittest.TestCase):
                 options=PredictOptions(num_phases=2),
             )
 
-        self.assertTrue(torch.equal(volume[1], torch.ones(2, 2, dtype=torch.uint8)))
+        self.assertGreater(float(volume[1].float().mean()), 0.0)
+        self.assertLess(float(volume[1].float().mean()), 1.0)
         self.assertTrue(torch.equal(volume[0], torch.zeros(2, 2, dtype=torch.uint8)))
 
     def test_predict_rejects_target_loss_without_target_images(self):
@@ -597,21 +776,50 @@ class PredictorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "target_images"):
             predictor.predict(options)
 
+    def test_predict_rejects_joint_reference_weight_without_joint_steps(self):
+        predictor = Predictor(
+            IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu"
+        )
+        options = PredictOptions(
+            num_phases=2,
+            sds=SDSConfig(steps=1),
+            joint=JointConfig(transition_weight=1.0),
+        )
+
+        with self.assertRaisesRegex(ValueError, "joint reference weights"):
+            predictor.predict(
+                options,
+                target_images=[np.zeros((2, 2), dtype=np.uint8)],
+            )
+
+    def test_predict_requires_target_images_for_joint_patch_guidance(self):
+        predictor = Predictor(
+            IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu"
+        )
+        options = PredictOptions(
+            num_phases=2,
+            joint=JointConfig(steps=1, patch_weight=1.0),
+        )
+
+        with self.assertRaisesRegex(ValueError, "target_images"):
+            predictor.predict(options)
+
     def test_predict_rejects_small_volume_target_images_with_wrong_size(self):
         predictor = Predictor(
             IdentityVAE(), ZeroDenoiser(), IdentityDDPM(), device="cpu"
         )
         options = PredictOptions(
             num_phases=2,
-            sds=SDSConfig(steps=1, weight=0.0),
-            targets=TargetConfig(surface_weight=1.0),
+            prior=PriorConfig(weight=0.0),
+            sds=SDSConfig(steps=1),
+            targets=TargetConfig(surface_area_weight=1.0),
         )
         target_images = [np.zeros((4, 4), dtype=np.uint8)]
 
         with self.assertRaisesRegex(ValueError, "target images"):
             predictor.predict(options, target_images=target_images)
 
-    def test_predict_accepts_exclusive_sds_t_max_equal_to_num_timesteps(self):
+    def test_predict_accepts_exclusive_t_max_equal_to_num_timesteps(self):
         predictor = Predictor(
             IdentityVAE(),
             ZeroDenoiser(),
@@ -623,13 +831,8 @@ class PredictorTest(unittest.TestCase):
             volume, stats = predictor.predict(
                 PredictOptions(
                     num_phases=2,
-                    sds=SDSConfig(
-                        steps=1,
-                        slice_steps=1,
-                        t_min=1,
-                        t_max=4,
-                        weight=0.0,
-                    ),
+                    prior=PriorConfig(weight=0.0, t_min=1, t_max=4),
+                    sds=SDSConfig(steps=1, slice_steps=1),
                 ),
             )
 
@@ -646,13 +849,43 @@ class PredictorTest(unittest.TestCase):
 
         with patch("torch.randn", return_value=torch.zeros(1, 4, 4, 4)):
             volume, stats = predictor.predict(
-                PredictOptions(num_phases=2),
+                PredictOptions(num_phases=2, scale=ScaleConfig(overlap=0.0)),
                 volume_size=4,
             )
 
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
         self.assertEqual(volume.dtype, torch.uint8)
         self.assertIsInstance(stats, dict)
+        self.assertEqual(stats["tile_overlap"], 0)
+
+    def test_predict_applies_scale_batch_size_to_sampling_and_decoding(self):
+        predictor = Predictor(
+            IdentityVAE(),
+            ZeroDenoiser(),
+            IdentityDDPM(timesteps=1),
+            device="cpu",
+        )
+
+        with (
+            patch(
+                "src.app.api.predictor.sample_large_lmpdd",
+                return_value=torch.zeros(1, 4, 4, 4),
+            ) as sample,
+            patch(
+                "src.app.api.predictor.decode_large_volume",
+                return_value=torch.zeros(4, 4, 4),
+            ) as decode,
+        ):
+            predictor.predict(
+                PredictOptions(
+                    num_phases=2,
+                    scale=ScaleConfig(overlap=0.0, batch_size=3),
+                ),
+                volume_size=4,
+            )
+
+        self.assertEqual(sample.call_args.kwargs["batch_size"], 3)
+        self.assertEqual(decode.call_args.kwargs["batch_size"], 3)
 
     def test_predict_rejects_non_integer_volume_size(self):
         predictor = Predictor(
@@ -697,7 +930,8 @@ class PredictorTest(unittest.TestCase):
             )
 
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
-        self.assertTrue(torch.equal(volume[1], torch.ones(4, 4, dtype=torch.uint8)))
+        self.assertGreater(float(volume[1].float().mean()), 0.0)
+        self.assertLess(float(volume[1].float().mean()), 1.0)
         self.assertTrue(torch.equal(volume[0], torch.zeros(4, 4, dtype=torch.uint8)))
 
     def test_predict_scale_up_accepts_vae_size_anchor_and_larger_volume(self):
@@ -710,7 +944,7 @@ class PredictorTest(unittest.TestCase):
         anchor = AnchorSlice(
             image=np.ones((2, 2), dtype=np.uint8),
             axis=0,
-            index=1,
+            index=3,
         )
 
         with patch("torch.randn", return_value=torch.zeros(1, 4, 4, 4)):
@@ -722,9 +956,8 @@ class PredictorTest(unittest.TestCase):
 
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
         self.assertEqual(stats["condition_start"], 1)
-        self.assertTrue(
-            torch.equal(volume[2, 1:3, 1:3], torch.ones(2, 2, dtype=torch.uint8))
-        )
+        self.assertGreater(float(volume[3, 1:3, 1:3].float().mean()), 0.0)
+        self.assertLess(float(volume[3, 1:3, 1:3].float().mean()), 1.0)
 
     def test_predict_refines_large_volume_when_enabled(self):
         predictor = Predictor(
@@ -734,14 +967,26 @@ class PredictorTest(unittest.TestCase):
             device="cpu",
         )
 
-        with patch("torch.randn", return_value=torch.zeros(1, 4, 4, 4)):
+        with (
+            patch("torch.randn", return_value=torch.zeros(1, 4, 4, 4)),
+            patch(
+                "src.app.api.predictor.refine_large_volume",
+                return_value=torch.zeros(4, 4, 4),
+            ) as refine,
+        ):
             volume, stats = predictor.predict(
-                PredictOptions(num_phases=2, refine=RefineConfig(steps=1)),
+                PredictOptions(
+                    num_phases=2,
+                    scale=ScaleConfig(overlap=0.5, batch_size=3),
+                    refine=RefineConfig(steps=1),
+                ),
                 volume_size=4,
             )
 
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
         self.assertIsInstance(stats, dict)
+        self.assertEqual(refine.call_args.kwargs["tile_overlap"], 1)
+        self.assertEqual(refine.call_args.kwargs["tile_batch_size"], 3)
 
     def test_predict_runs_sds_for_large_volume_anchor(self):
         predictor = Predictor(
@@ -760,8 +1005,9 @@ class PredictorTest(unittest.TestCase):
             volume, stats = predictor.predict(
                 PredictOptions(
                     num_phases=2,
-                    sds=SDSConfig(steps=1, slice_steps=1, weight=0.0),
-                    anchor=AnchorConfig(weight=1.0),
+                    prior=PriorConfig(weight=0.0),
+                    sds=SDSConfig(steps=1, slice_steps=1),
+                    diffusion_anchor=DiffusionAnchorConfig(weight=1.0),
                 ),
                 anchors=[anchor],
             )
@@ -786,20 +1032,16 @@ class PredictorTest(unittest.TestCase):
             volume, stats = predictor.predict(
                 PredictOptions(
                     num_phases=2,
-                    sds=SDSConfig(
-                        steps=1,
-                        slice_steps=1,
-                        batch_size=2,
-                        weight=0.0,
-                    ),
-                    anchor=AnchorConfig(weight=1.0),
+                    prior=PriorConfig(weight=0.0),
+                    sds=SDSConfig(steps=1, slice_steps=1, batch_size=2),
+                    diffusion_anchor=DiffusionAnchorConfig(weight=1.0),
                 ),
                 anchors=[anchor],
                 volume_size=4,
             )
 
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
-        self.assertIn("anchor", stats)
+        self.assertIn("history_anchor", stats)
         self.assertEqual(stats["volume_size"], 4)
         self.assertEqual(stats["latent_size"], 4)
         self.assertEqual(stats["tile_size"], 2)
@@ -814,7 +1056,8 @@ class PredictorTest(unittest.TestCase):
         )
         options = PredictOptions(
             num_phases=2,
-            sds=SDSConfig(steps=1, slice_steps=1, t_min=1, t_max=3, weight=0.0),
+            prior=PriorConfig(weight=0.0, t_min=1, t_max=3),
+            sds=SDSConfig(steps=1, slice_steps=1),
             targets=TargetConfig(vf_weight=1.0, tpc_weight=1.0),
         )
         target_images = [np.zeros((4, 4), dtype=np.uint8)]
@@ -827,8 +1070,8 @@ class PredictorTest(unittest.TestCase):
             )
 
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
-        self.assertIn("vf", stats)
-        self.assertIn("tpc", stats)
+        self.assertIn("history_vf", stats)
+        self.assertIn("history_tpc", stats)
 
     def test_predict_runs_scale_sds_with_vae_size_tpc_targets(self):
         predictor = Predictor(
@@ -839,7 +1082,8 @@ class PredictorTest(unittest.TestCase):
         )
         options = PredictOptions(
             num_phases=2,
-            sds=SDSConfig(steps=1, slice_steps=1, t_min=1, t_max=3, weight=0.0),
+            prior=PriorConfig(weight=0.0, t_min=1, t_max=3),
+            sds=SDSConfig(steps=1, slice_steps=1),
             targets=TargetConfig(tpc_weight=1.0),
         )
         target_images = [np.zeros((2, 2), dtype=np.uint8)]
@@ -852,7 +1096,7 @@ class PredictorTest(unittest.TestCase):
             )
 
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
-        self.assertIn("tpc", stats)
+        self.assertIn("history_tpc", stats)
 
 
 if __name__ == "__main__":

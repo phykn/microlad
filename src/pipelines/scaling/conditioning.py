@@ -6,15 +6,18 @@ import torch
 from src.modeling.vae import get_downsample_factor
 from src.pipelines.guidance.conditioning.images import prepare_anchor_image
 from src.pipelines.guidance.conditioning.reconstruction import reconstruct_target
-from src.pipelines.guidance.conditioning.validation import validate_anchor, validate_anchors
+from src.pipelines.guidance.conditioning.validation import validate_anchor_positions
 from src.pipelines.scaling.tiles import tile_grid
 from src.pipelines.guidance.conditioning.model import AnchorSlice
-from src.common.tensors.validation import require_finite
+from src.validation import require_finite, require_int
 
 
 def center_start(*, volume_size: int, base_size: int) -> int:
-    volume_size = int(volume_size)
-    base_size = int(base_size)
+    require_int("volume_size", volume_size)
+    require_int("base_size", base_size)
+
+    if volume_size <= 0 or base_size <= 0:
+        raise ValueError("volume_size and base_size must be positive.")
 
     if volume_size < base_size:
         raise ValueError("volume_size must be at least base_size.")
@@ -29,7 +32,8 @@ def _aligned_center_start(
     downsample_factor: int,
 ) -> int:
     start = center_start(volume_size=volume_size, base_size=base_size)
-    factor = int(downsample_factor)
+    require_int("downsample_factor", downsample_factor)
+    factor = downsample_factor
 
     if factor <= 0:
         raise ValueError("downsample_factor must be positive.")
@@ -40,7 +44,7 @@ def _aligned_center_start(
     return start
 
 
-def shift_anchor_slices(
+def anchor_positions(
     anchors: Sequence[AnchorSlice] | None,
     *,
     volume_size: int,
@@ -48,17 +52,21 @@ def shift_anchor_slices(
     downsample_factor: int | None = None,
 ) -> list[tuple[int, int]]:
     if downsample_factor is None:
-        start = center_start(volume_size=volume_size, base_size=base_size)
+        center_start(volume_size=volume_size, base_size=base_size)
     else:
-        start = _aligned_center_start(
+        _aligned_center_start(
             volume_size=volume_size,
             base_size=base_size,
             downsample_factor=downsample_factor,
         )
 
-    validate_anchors(anchors or [], (base_size, base_size, base_size))
+    _validate_base_anchors(
+        anchors or [],
+        base_size=base_size,
+        volume_size=volume_size,
+    )
 
-    return [(int(anchor.axis), start + int(anchor.index)) for anchor in anchors or []]
+    return [(int(anchor.axis), int(anchor.index)) for anchor in anchors or []]
 
 
 def encode_scale_anchors(
@@ -75,7 +83,7 @@ def encode_scale_anchors(
         return None, None
 
     factor = get_downsample_factor(vae)
-    volume_size = int(volume_size)
+    require_int("volume_size", volume_size)
     if volume_size % factor != 0:
         raise ValueError("volume_size must be divisible by VAE downsample factor.")
 
@@ -118,7 +126,7 @@ def encode_scale_anchors(
                 segment=segment,
                 device=device,
             )
-            index = start + int(anchor.index) // factor
+            index = int(anchor.index) // factor
             plane_start = start
         elif scope == "volume":
             encoded = _encode_large_anchor(
@@ -174,9 +182,13 @@ def build_scale_targets(
     if not anchors:
         return {}, {}
 
-    volume_size = int(volume_size)
-    base_size = int(base_size)
-    validate_anchors(anchors, (base_size, base_size, base_size))
+    require_int("volume_size", volume_size)
+    require_int("base_size", base_size)
+    _validate_base_anchors(
+        anchors,
+        base_size=base_size,
+        volume_size=volume_size,
+    )
 
     if downsample_factor is None:
         start = center_start(volume_size=volume_size, base_size=base_size)
@@ -203,8 +215,8 @@ def build_scale_targets(
         target[start : start + base_size, start : start + base_size] = image
         mask[start : start + base_size, start : start + base_size] = 1
 
-        targets[(int(anchor.axis), start + int(anchor.index))] = target
-        masks[(int(anchor.axis), start + int(anchor.index))] = mask
+        targets[(int(anchor.axis), int(anchor.index))] = target
+        masks[(int(anchor.axis), int(anchor.index))] = mask
 
     return targets, masks
 
@@ -219,17 +231,44 @@ def _scale_anchor_scope(
         image_shape = tuple(int(size) for size in anchor.image.shape)
 
         if image_shape == (base_size, base_size):
-            validate_anchor(anchor, (base_size, base_size, base_size))
+            validate_anchor_positions(
+                [anchor],
+                (volume_size, volume_size, volume_size),
+            )
             return "base"
 
         if image_shape == (volume_size, volume_size):
-            validate_anchor(anchor, (volume_size, volume_size, volume_size))
+            validate_anchor_positions(
+                [anchor],
+                (volume_size, volume_size, volume_size),
+            )
             return "volume"
 
         raise ValueError("anchor image size must match vae.image_size or volume_size.")
 
-    validate_anchor(anchor, (base_size, base_size, base_size))
+    validate_anchor_positions(
+        [anchor],
+        (volume_size, volume_size, volume_size),
+    )
     raise ValueError("anchor image size must match vae.image_size or volume_size.")
+
+
+def _validate_base_anchors(
+    anchors: Sequence[AnchorSlice],
+    *,
+    base_size: int,
+    volume_size: int,
+) -> None:
+    validate_anchor_positions(
+        anchors,
+        (volume_size, volume_size, volume_size),
+    )
+    expected = (base_size, base_size)
+    for anchor in anchors:
+        if not isinstance(anchor.image, np.ndarray):
+            raise TypeError("anchor image must be a numpy array.")
+        if anchor.image.shape != expected:
+            raise ValueError(f"anchor image shape must be {expected}.")
 
 
 def _encode_anchor(

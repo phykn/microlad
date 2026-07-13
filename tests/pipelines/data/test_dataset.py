@@ -14,6 +14,18 @@ def save_image(path: Path, pixels: np.ndarray) -> None:
 
 
 class PatchDatasetTest(unittest.TestCase):
+    def test_requires_integer_sizes_and_phase_count(self):
+        cases = (
+            {"crop_size": 4.5, "image_size": 4, "num_phases": 2},
+            {"crop_size": 4, "image_size": 4.5, "num_phases": 2},
+            {"crop_size": 4, "image_size": 4, "num_phases": 2.5},
+        )
+
+        for options in cases:
+            with self.subTest(options=options):
+                with self.assertRaisesRegex(ValueError, "integer"):
+                    PatchDataset(["unused.png"], **options)
+
     def test_phase_image_returns_float_tensor_with_phase_indices(self):
         with tempfile.TemporaryDirectory() as tmp:
             image_dir = Path(tmp)
@@ -31,7 +43,7 @@ class PatchDatasetTest(unittest.TestCase):
             dataset = PatchDataset(
                 [image_dir / "phase.png"],
                 crop_size=4,
-                size=4,
+                image_size=4,
                 num_phases=3,
                 segment=False,
             )
@@ -60,7 +72,7 @@ class PatchDatasetTest(unittest.TestCase):
             dataset = PatchDataset(
                 [image_dir / "gray.png"],
                 crop_size=4,
-                size=4,
+                image_size=4,
                 num_phases=3,
                 segment=True,
             )
@@ -87,7 +99,7 @@ class PatchDatasetTest(unittest.TestCase):
             dataset = PatchDataset(
                 [image_dir / "gray-float.tif"],
                 crop_size=4,
-                size=4,
+                image_size=4,
                 num_phases=3,
                 segment=True,
             )
@@ -111,7 +123,7 @@ class PatchDatasetTest(unittest.TestCase):
             dataset = PatchDataset(
                 [image_dir / "gray-float.tif"],
                 crop_size=2,
-                size=2,
+                image_size=2,
                 num_phases=3,
                 segment=False,
             )
@@ -128,7 +140,7 @@ class PatchDatasetTest(unittest.TestCase):
             dataset = PatchDataset(
                 [image_dir / "phase.png"],
                 crop_size=2,
-                size=2,
+                image_size=2,
                 num_phases=4,
                 segment=False,
             )
@@ -146,7 +158,7 @@ class PatchDatasetTest(unittest.TestCase):
                 PatchDataset(
                     [image_dir / "phase.png"],
                     crop_size=1,
-                    size=1,
+                    image_size=1,
                     num_phases=257,
                     segment=False,
                 )
@@ -160,7 +172,7 @@ class PatchDatasetTest(unittest.TestCase):
                 dataset = PatchDataset(
                     [image_dir / "phase.png"],
                     crop_size=2,
-                    size=2,
+                    image_size=2,
                     num_phases=3,
                     segment=False,
                 )
@@ -174,7 +186,7 @@ class PatchDatasetTest(unittest.TestCase):
             dataset = PatchDataset(
                 [image_dir / "phase.png"],
                 crop_size=8,
-                size=4,
+                image_size=4,
                 num_phases=2,
                 segment=False,
             )
@@ -191,7 +203,7 @@ class PatchDatasetTest(unittest.TestCase):
                 dataset = PatchDataset(
                     [image_dir / "phase.png"],
                     crop_size=8,
-                    size=4,
+                    image_size=4,
                     num_phases=2,
                     segment=False,
                 )
@@ -206,7 +218,7 @@ class PatchDatasetTest(unittest.TestCase):
             dataset = PatchDataset(
                 [image_dir / "phase.png", image_dir / "missing.png"],
                 crop_size=4,
-                size=4,
+                image_size=4,
                 num_phases=2,
                 segment=False,
             )
@@ -232,7 +244,7 @@ class PatchDatasetTest(unittest.TestCase):
             dataset = PatchDataset(
                 [image_dir / "phase.png"],
                 crop_size=4,
-                size=4,
+                image_size=4,
                 num_phases=3,
                 segment=False,
                 augment=True,

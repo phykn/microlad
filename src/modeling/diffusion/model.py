@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.common.neural.normalization import norm_groups
+from src.modeling.normalization import norm_groups
 
 
 class TimeEmbedding(nn.Module):

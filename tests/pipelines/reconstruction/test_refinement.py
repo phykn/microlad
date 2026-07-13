@@ -2,62 +2,76 @@ import unittest
 
 import torch
 
-from src.pipelines.reconstruction.refinement import refine_axes
+from src.pipelines.reconstruction.refinement import refine_volume
 
 
 class CountingVAE(torch.nn.Module):
+    image_size = 2
+    num_phases = 3
+
     def __init__(self) -> None:
         super().__init__()
-        self.image_size = 2
         self.encode_inputs: list[torch.Tensor] = []
         self.decode_inputs: list[torch.Tensor] = []
         self.grad_enabled: list[bool] = []
-        self.decoded_slices = 0
 
     def encode(self, image: torch.Tensor):
         self.encode_inputs.append(image.detach().clone())
         self.grad_enabled.append(torch.is_grad_enabled())
         return image, torch.zeros_like(image)
 
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
         self.decode_inputs.append(latent.detach().clone())
-        batch_size = latent.shape[0]
-        values = torch.arange(
-            self.decoded_slices + 1,
-            self.decoded_slices + batch_size + 1,
+        probabilities = torch.zeros(
+            latent.shape[0],
+            self.num_phases,
+            self.image_size,
+            self.image_size,
             dtype=latent.dtype,
             device=latent.device,
-        ).view(batch_size, 1, 1, 1)
-        self.decoded_slices += batch_size
-        return torch.ones_like(latent) * values
+        )
+        probabilities[:, 0] = 1.0
+        return probabilities
 
 
 class NonFiniteEncodeVAE(CountingVAE):
     def encode(self, image: torch.Tensor):
-        self.encode_inputs.append(image.detach().clone())
-        self.grad_enabled.append(torch.is_grad_enabled())
         return torch.full_like(image, float("nan")), torch.zeros_like(image)
 
 
 class NonFiniteDecodeVAE(CountingVAE):
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        self.decode_inputs.append(latent.detach().clone())
-        return torch.full_like(latent, float("nan"))
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
+        return torch.full(
+            (
+                latent.shape[0],
+                self.num_phases,
+                self.image_size,
+                self.image_size,
+            ),
+            float("nan"),
+            dtype=latent.dtype,
+            device=latent.device,
+        )
 
 
-class CategoricalRefineVAE(CountingVAE):
-    num_phases = 3
+class BadDecodeVAE(CountingVAE):
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
+        return torch.zeros(
+            latent.shape[0],
+            self.num_phases - 1,
+            self.image_size,
+            self.image_size,
+        )
 
+
+class AxisVAE(CountingVAE):
     def __init__(self) -> None:
         super().__init__()
-        self.probability_calls = 0
-
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        raise AssertionError("categorical refinement must not use scalar decode")
+        self.calls = 0
 
     def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
-        phase = 2 if self.probability_calls == 1 else 0
-        self.probability_calls += 1
+        phase = 2 if self.calls == 1 else 0
+        self.calls += 1
         probabilities = torch.zeros(
             latent.shape[0],
             self.num_phases,
@@ -70,96 +84,91 @@ class CategoricalRefineVAE(CountingVAE):
         return probabilities
 
 
+class BatchedVAE(CountingVAE):
+    image_size = 4
+
+
 class PredictRefineTest(unittest.TestCase):
-    def test_categorical_refinement_votes_in_probability_space(self):
-        refined = refine_axes(
+    def test_refine_volume_uses_cross_axis_probability_consensus(self):
+        refined = refine_volume(
             torch.zeros(2, 2, 2),
-            CategoricalRefineVAE(),
+            AxisVAE(),
             steps=1,
         )
 
         self.assertFalse(torch.any(refined == 1.0))
         self.assertTrue(torch.all(refined == 0.0))
 
-    def test_refine_axes_averages_encode_decode_from_three_axes(self):
-        vae = CountingVAE()
-        volume = torch.zeros(2, 2, 2)
+    def test_refine_volume_chunks_axis_slices(self):
+        vae = BatchedVAE()
 
-        refined = refine_axes(volume, vae, steps=1)
-
-        expected = torch.empty(2, 2, 2)
-        for z in range(2):
-            z_value = 1.0 if z == 0 else 2.0
-            for y in range(2):
-                y_value = 3.0 if y == 0 else 4.0
-                for x in range(2):
-                    x_value = 5.0 if x == 0 else 6.0
-                    expected[z, y, x] = (z_value + y_value + x_value) / 3.0
-
-        self.assertEqual(refined.shape, torch.Size([2, 2, 2]))
-        self.assertTrue(torch.allclose(refined, expected))
-        self.assertEqual(len(vae.encode_inputs), 3)
-        self.assertEqual(len(vae.decode_inputs), 3)
-        self.assertEqual(
-            [tuple(image.shape) for image in vae.encode_inputs],
-            [(2, 1, 2, 2), (2, 1, 2, 2), (2, 1, 2, 2)],
+        refined = refine_volume(
+            torch.zeros(4, 4, 4),
+            vae,
+            steps=1,
+            batch_size=2,
         )
 
-    def test_refine_axes_runs_without_gradients_and_sets_eval(self):
+        self.assertEqual(refined.shape, torch.Size([4, 4, 4]))
+        self.assertEqual([image.shape[0] for image in vae.encode_inputs], [2] * 6)
+
+    def test_refine_volume_runs_without_gradients_and_sets_eval(self):
         vae = CountingVAE()
         vae.train()
 
-        refine_axes(torch.zeros(2, 2, 2), vae, steps=1)
+        refine_volume(torch.zeros(2, 2, 2), vae, steps=1)
 
         self.assertFalse(vae.training)
         self.assertEqual(vae.grad_enabled, [False] * 3)
 
-    def test_refine_axes_zero_steps_returns_clamped_input(self):
+    def test_refine_volume_zero_steps_returns_float_input(self):
         vae = CountingVAE()
-        volume = torch.tensor([[[-2.0, 0.0], [0.5, 2.0]], [[1.5, -1.5], [0.0, 1.0]]])
+        volume = torch.tensor(
+            [[[-2.0, 0.0], [0.5, 2.0]], [[1.5, -1.5], [0.0, 1.0]]]
+        )
 
-        refined = refine_axes(volume, vae, steps=0)
+        refined = refine_volume(volume, vae, steps=0)
 
         self.assertTrue(torch.equal(refined, volume.float()))
         self.assertEqual(vae.encode_inputs, [])
 
-    def test_refine_axes_rejects_invalid_volume_shape(self):
+    def test_refine_volume_rejects_invalid_options(self):
+        volume = torch.zeros(2, 2, 2)
+        vae = CountingVAE()
+
+        for options in ({"steps": 1.5}, {"steps": 1, "batch_size": 1.5}):
+            with self.subTest(options=options):
+                with self.assertRaisesRegex(ValueError, "integer"):
+                    refine_volume(volume, vae, **options)
+
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            refine_volume(volume, vae, steps=-1)
+        with self.assertRaisesRegex(ValueError, "positive"):
+            refine_volume(volume, vae, steps=1, batch_size=0)
+
+    def test_refine_volume_rejects_invalid_volume(self):
         vae = CountingVAE()
 
         with self.assertRaisesRegex(ValueError, "shape"):
-            refine_axes(torch.zeros(1, 2, 2, 2), vae, steps=1)
+            refine_volume(torch.zeros(1, 2, 2, 2), vae, steps=1)
         with self.assertRaisesRegex(ValueError, "cubic"):
-            refine_axes(torch.zeros(2, 3, 2), vae, steps=1)
+            refine_volume(torch.zeros(2, 3, 2), vae, steps=1)
         with self.assertRaisesRegex(ValueError, "image_size"):
-            refine_axes(torch.zeros(3, 3, 3), vae, steps=1)
-
-    def test_refine_axes_rejects_non_integer_steps(self):
-        with self.assertRaisesRegex(ValueError, "steps.*integer"):
-            refine_axes(torch.zeros(2, 2, 2), CountingVAE(), steps=1.5)
-
-    def test_refine_axes_rejects_non_floating_volume(self):
+            refine_volume(torch.zeros(3, 3, 3), vae, steps=1)
         with self.assertRaisesRegex(ValueError, "floating"):
-            refine_axes(
-                torch.zeros(2, 2, 2, dtype=torch.int64),
-                CountingVAE(),
-                steps=1,
-            )
+            refine_volume(torch.zeros(2, 2, 2, dtype=torch.int64), vae, steps=1)
+        with self.assertRaisesRegex(ValueError, "finite"):
+            refine_volume(torch.full((2, 2, 2), float("nan")), vae, steps=1)
 
-    def test_refine_axes_rejects_non_finite_volume(self):
-        with self.assertRaisesRegex(ValueError, "volume.*finite"):
-            refine_axes(
-                torch.full((2, 2, 2), float("nan")),
-                CountingVAE(),
-                steps=1,
-            )
+    def test_refine_volume_rejects_invalid_vae_outputs(self):
+        volume = torch.zeros(2, 2, 2)
 
-    def test_refine_axes_rejects_non_finite_encoded_latent(self):
         with self.assertRaisesRegex(ValueError, "encoded.*finite"):
-            refine_axes(torch.zeros(2, 2, 2), NonFiniteEncodeVAE(), steps=1)
-
-    def test_refine_axes_rejects_non_finite_decoded_slice(self):
+            refine_volume(volume, NonFiniteEncodeVAE(), steps=1)
         with self.assertRaisesRegex(ValueError, "decoded.*finite"):
-            refine_axes(torch.zeros(2, 2, 2), NonFiniteDecodeVAE(), steps=1)
+            refine_volume(volume, NonFiniteDecodeVAE(), steps=1)
+        with self.assertRaisesRegex(ValueError, "decode_probs output"):
+            refine_volume(volume, BadDecodeVAE(), steps=1)
 
 
 if __name__ == "__main__":

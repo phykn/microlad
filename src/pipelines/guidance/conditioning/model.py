@@ -13,8 +13,6 @@ class AnchorSlice:
 
 @dataclass(frozen=True)
 class VolumeAnchor:
-    """Categorical slice constraint positioned inside a 3D output volume."""
-
     image: torch.Tensor
     axis: int
     index: int

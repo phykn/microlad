@@ -22,12 +22,21 @@
 ## 현재 채택한 기반
 
 - categorical VAE의 확률 출력을 사용한다.
-- 2D 한 장을 세 축에 독립적으로 복원하지 않고, 하나의 공유 3D generator가 만든 volume의 XY/XZ/YZ **모든 64개 단면**을 같은 2D critic으로 학습한다.
-- 기본 texture 학습에는 조건 이미지의 회전·반사·주기 이동본을 사용한다. categorical VAE와 2D diffusion이 만든 8개 단면은 조건 이미지와 같은 상분율로 보정한 뒤 `10%`만 섞는다.
-- texture 학습은 충분히 성숙한 primary `5000` step과 hybrid `+500/+1000` step만 조건화 후보로 사용한다. `3000/4000` 후보는 수치가 좋아도 길고 거친 domain을 선택하는 경우가 있어 제외했다.
-- 각 후보에서 먼저 `4³` spatial noise를 조건 이미지에 맞추고, 그 다음 critic을 고정한 채 generator와 noise를 짧게 미세조정한다.
+- SliceGAN은 voxel 확률장을 직접 생성하지 않는다. 공유 3D generator가 **VAE latent volume**을 만들고, critic은 그 volume의 XY/XZ/YZ latent slice를 판별한다. categorical voxel volume은 후보 조건화가 끝난 뒤 VAE로 한 번만 복원한다.
+- 기본 texture 학습에는 조건 이미지의 VAE latent 회전·반사·주기 이동본을 사용한다. 2D diffusion latent는 critic real batch에 `10%`만 섞는다. morphology target도 동일한 `90:10` 가중치를 사용한다.
+- 학습 후보는 여러 noise의 평균·최악 morphology 오차로 비교한다. 최종 quality gate에는 앵커·상분율뿐 아니라 수정된 transition/run-profile 오차도 포함한다.
+- 각 후보에서 먼저 spatial noise를 decoded categorical anchor loss에 맞추고, 그 다음 critic을 고정한 채 generator와 noise를 짧게 미세조정한다. 64px VAE의 latent가 16이면 noise는 `4³`, 128px VAE의 latent가 32이면 `8³`이다.
 - 앵커를 voxel에 직접 복사하거나 ±몇 칸의 slab로 고정하지 않는다. 조건은 generator의 공간장 전체를 통해 전달되므로 ±3 밖에 별도의 경계가 없다.
 - 실행마다 정확히 같은 volume을 다시 만드는 것은 목표가 아니다. 매 실행 결과 자체가 앵커 유사도·세 축 morphology·국소 연속성 기준을 통과하는지를 판정한다.
+
+### 2026-07-13 정적 리뷰 반영
+
+- 기존 run-profile의 `window 평균 → 거듭제곱` 식은 실제 연속 구간 확률이 아니었다. 현재는 window 내 확률의 직접 곱을 사용하고 값·gradient 회귀 테스트를 둔다.
+- 아래 과거 실험표의 run-profile 수치와 그 수치에 의존한 checkpoint 선택 근거는 **재실행 전까지 무효**다. 당시 저장 volume과 시각 판정까지 자동으로 무효라는 뜻은 아니다.
+- optimization 중 평균은 `history_*`, 모든 refine·calibration 뒤 실제 hard volume 재평가는 `final_*`로 분리한다. 축·phase·run-length 차원을 scalar로 없애지 않는다.
+- 모든 target image는 Predictor 입구에서 한 번만 categorical label로 준비하며, SDS 전용/Joint 전용 target 옵션이 다른 실행 모드에서 조용히 무시되지 않도록 검증한다.
+- 서로 다른 축 앵커의 교차 label 충돌은 최적화 전에 오류로 처리한다. calibration은 target label을 강제 복사하지 않고 calibration 직전 모델이 선택한 앵커 영역 label만 보호한다.
+- base/scale decoder는 모두 latent plane 사이를 trilinear interpolation한 뒤 동일한 tri-axis probability consensus를 사용한다. scale 경로의 반복 slab 복제는 제거했다.
 
 현재 채택한 다중 앵커·상분율 실행 결과(`03_predict.ipynb`):
 
@@ -105,7 +114,7 @@ conditioning: 앵커 조건화와 generator/noise 미세조정
 rendering: scale-up 타일 크기와 halo
 ```
 
-구형 flat 인자 호환 계층은 사용처가 없어 제거했다. 네트워크는 `src/modeling/slicegan.py`, 앵커 모델·교차 검증은 기존 `guidance/conditioning`, scale-up 타일 렌더는 기존 `pipelines/scaling`, 실행 조율만 `guidance/slicegan.py`가 담당한다.
+구형 flat 인자 호환 계층은 사용처가 없어 제거했다. 네트워크와 WGAN-GP loss는 `src/modeling/slicegan/`, GAN update는 `pipelines/training/slicegan.py`, 앵커 모델·교차 검증은 기존 `guidance/conditioning`, 조건화·품질 판정·실행 조율은 `guidance/slicegan/`, scale-up latent 타일 렌더는 기존 `pipelines/scaling`이 담당한다.
 
 ## SliceGAN 원 구현에서 확인한 차이
 
@@ -136,12 +145,12 @@ rendering: scale-up 타일 크기와 halo
 
 | 요구사항 | 현재 증거 | 상태 |
 |---|---|---|
-| 64³ 복수·다축 앵커, 비복사, 교차 충돌 | `03_predict.ipynb` 전체 실행과 전 축 몽타주, mismatch `[8.08%, 7.98%]`, 충돌/중복 테스트 | 완료 |
-| 사용자 phase fraction | 64³ 전체 실행 및 128³ smoke에서 목표 fraction 정확, validation/regression 테스트 | 완료 |
-| 전역 세 축 자연스러움 | 64³ 전 축 몽타주와 국소 ±6 시각 판정 통과, 공통 run/Euler/repetition/cutoff QA 추가 | 64³ 완료 |
-| 절대 좌표의 같은 축·다른 축 복수 앵커 | 128³ 실제 Predictor smoke와 offset 교차선/patch 테스트 | 코드 경로 완료 |
-| 최소 128³ 품질 | `04_scale_up.ipynb` 정식 6000-step 실행, 수치 gate 6개와 세 축 128개 전 단면 시각 검증 통과 | 완료 |
-| 임의 배수 및 bounded/tiled memory | 64 배수 fully-convolutional noise-grid API, 256³ full/tiled 최대 오차 `5.96e-8`, GPU peak `5.15→2.34 GiB`; 큰 training forward는 activation checkpoint 적용 | 최종 렌더 완료, 대형 조건 최적화는 checkpointed full-grid이며 완전 tile 방식은 미완료 |
+| 64³ 복수·다축 앵커, 비복사, 교차 충돌 | 교차 충돌·soft calibration 회귀 테스트. `[8.08%, 7.98%]`는 이전 voxel GAN 실행 기록 | latent 정식 학습 재실행 필요 |
+| 사용자 phase fraction | 새 latent 경로의 실제 64³/128³ 최소 smoke에서 목표 fraction 정확 | 코드 경로 완료 |
+| 전역 세 축 자연스러움 | transition/run/cutoff 최종 hard-volume QA 구현. 과거 시각 결과는 이전 경로 증거 | latent 정식 학습 시각 검증 필요 |
+| 절대 좌표의 같은 축·다른 축 복수 앵커 | offset patch와 교차 충돌 테스트, latent 위치 조건화 구현 | 코드 경로 완료 |
+| 최소 128³ 품질 | 새 latent 경로가 128px VAE(latent 32)에서 end-to-end smoke 통과 | 정식 장시간 품질 검증 필요 |
+| 임의 배수 및 bounded/tiled memory | voxel GAN을 제거하고 latent field/tiled render/공통 interpolating decoder로 전환 | 코드 경로 완료, 대형 GPU peak 재측정 필요 |
 | 시간 분리 기록 | reference/training/generation/total 통계 구현 및 smoke 실측 | 완료 |
 
 ## 검증 상태

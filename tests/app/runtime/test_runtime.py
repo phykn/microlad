@@ -11,32 +11,26 @@ import torch
 
 from src.app.runtime import (
     build_dataset,
-    build_ddpm,
     build_denoiser,
-    build_predictor,
-    build_diffusion_trainer,
     build_loader,
     build_vae,
     build_optimizer,
-    build_vae_trainer,
     copy_vae_run,
     cleanup_distributed,
     apply_vae_defaults,
-    load_denoiser,
     load_predictor,
     load_run_vae,
-    load_frozen_vae,
     load_defaults,
     load_slicegan_config,
     save_run_config,
     setup_device,
     wrap_distributed,
 )
+from src.app.runtime.model import build_ddpm
 from src.pipelines.data import PatchDataset
 from src.modeling.diffusion import DDPMProcess, TimeUNet
 from src.modeling.vae import PatchVAE
 from src.app.api import PredictOptions, Predictor
-from src.pipelines.training import DiffusionTrainer, VAETrainer
 
 
 def save_image(path: Path, pixels: np.ndarray) -> None:
@@ -54,7 +48,7 @@ def write_predictor_run(
     checkpoint_vae_latent_ch: int | None = None,
 ) -> None:
     vae_args = argparse.Namespace(
-        image_size=image_size,
+        size=image_size,
         crop_size=image_size,
         latent_size=latent_size,
         latent_ch=latent_ch,
@@ -73,7 +67,7 @@ def write_predictor_run(
 
     if write_vae_checkpoint:
         checkpoint_vae_args = argparse.Namespace(
-            image_size=image_size,
+            size=image_size,
             latent_size=latent_size,
             latent_ch=checkpoint_vae_latent_ch or latent_ch,
             base_ch=4,
@@ -131,14 +125,14 @@ class BuildTest(unittest.TestCase):
             path.write_text(
                 "\n".join(
                     [
-                        "training:",
+                        "train:",
                         "  steps: 12",
                         "  batch_size: 3",
-                        "conditioning:",
-                        "  steps: 7",
-                        "rendering:",
+                        "condition:",
+                        "  noise_steps: 7",
+                        "  min_trials: 2",
+                        "render:",
                         "  core_noise_size: 2",
-                        "seed: 9",
                         "intersection_tolerance: 0.05",
                     ]
                 ),
@@ -147,11 +141,11 @@ class BuildTest(unittest.TestCase):
 
             config = load_slicegan_config(path)
 
-        self.assertEqual(config.training.steps, 12)
-        self.assertEqual(config.training.batch_size, 3)
-        self.assertEqual(config.conditioning.steps, 7)
-        self.assertEqual(config.rendering.core_noise_size, 2)
-        self.assertEqual(config.seed, 9)
+        self.assertEqual(config.train.steps, 12)
+        self.assertEqual(config.train.batch_size, 3)
+        self.assertEqual(config.condition.noise_steps, 7)
+        self.assertEqual(config.condition.min_trials, 2)
+        self.assertEqual(config.render.core_noise_size, 2)
         self.assertEqual(config.intersection_tolerance, 0.05)
 
     def test_build_dataset_expands_image_files_from_data_dir(self):
@@ -172,9 +166,11 @@ class BuildTest(unittest.TestCase):
             dataset = build_dataset(args)
 
         self.assertIsInstance(dataset, PatchDataset)
-        self.assertEqual([path.name for path in dataset.image_paths], ["a.png", "b.png"])
+        self.assertEqual(
+            [path.name for path in dataset.image_paths], ["a.png", "b.png"]
+        )
         self.assertEqual(dataset.crop_size, 8)
-        self.assertEqual(dataset.size, 4)
+        self.assertEqual(dataset.image_size, 4)
 
     def test_build_dataset_accepts_single_image_path_string(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -237,7 +233,7 @@ class BuildTest(unittest.TestCase):
 
     def test_build_vae_uses_model_config(self):
         args = argparse.Namespace(
-            image_size=64,
+            size=64,
             latent_size=16,
             latent_ch=2,
             num_phases=5,
@@ -253,60 +249,6 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(vae.latent_ch, 2)
         self.assertEqual(vae.num_phases, 5)
         self.assertEqual(vae.channels, (8, 16, 16))
-
-    def test_load_frozen_vae_loads_checkpoint_and_disables_gradients(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            args = argparse.Namespace(
-                image_size=64,
-                latent_size=16,
-                latent_ch=2,
-                base_ch=8,
-                max_ch=16,
-                vae_ckpt=Path(tmp) / "vae.pt",
-            )
-            source = build_vae(args)
-            with torch.no_grad():
-                for parameter in source.parameters():
-                    parameter.fill_(0.5)
-            torch.save({"model": source.state_dict()}, args.vae_ckpt)
-
-            vae = load_frozen_vae(args, device=torch.device("cpu"))
-
-        self.assertIsInstance(vae, PatchVAE)
-        self.assertFalse(vae.training)
-        self.assertTrue(all(not parameter.requires_grad for parameter in vae.parameters()))
-        self.assertTrue(
-            all(
-                torch.allclose(parameter, torch.full_like(parameter, 0.5))
-                for parameter in vae.parameters()
-            )
-        )
-
-    def test_load_denoiser_loads_checkpoint_and_disables_gradients(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            args = argparse.Namespace(
-                latent_ch=2,
-                base_ch=8,
-                time_dim=16,
-                diffusion_ckpt=Path(tmp) / "diffusion.pt",
-            )
-            source = build_denoiser(args)
-            with torch.no_grad():
-                for parameter in source.parameters():
-                    parameter.fill_(0.25)
-            torch.save({"model": source.state_dict()}, args.diffusion_ckpt)
-
-            model = load_denoiser(args, device=torch.device("cpu"))
-
-        self.assertIsInstance(model, TimeUNet)
-        self.assertFalse(model.training)
-        self.assertTrue(all(not parameter.requires_grad for parameter in model.parameters()))
-        self.assertTrue(
-            all(
-                torch.allclose(parameter, torch.full_like(parameter, 0.25))
-                for parameter in model.parameters()
-            )
-        )
 
     def test_build_denoiser_uses_model_config(self):
         args = argparse.Namespace(latent_ch=4, base_ch=8, time_dim=16)
@@ -334,7 +276,7 @@ class BuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run"
             args = argparse.Namespace(
-                image_size=64,
+                size=64,
                 latent_size=16,
                 latent_ch=2,
                 base_ch=8,
@@ -354,7 +296,9 @@ class BuildTest(unittest.TestCase):
 
         self.assertIsInstance(vae, PatchVAE)
         self.assertFalse(vae.training)
-        self.assertTrue(all(not parameter.requires_grad for parameter in vae.parameters()))
+        self.assertTrue(
+            all(not parameter.requires_grad for parameter in vae.parameters())
+        )
 
     def test_load_predictor_uses_run_dir_for_notebook_use(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -402,7 +346,7 @@ class BuildTest(unittest.TestCase):
             (run_dir / "vae.yaml").write_text(
                 "\n".join(
                     [
-                        "image_size: 8",
+                        "size: 8",
                         "crop_size: 8",
                         "latent_size: 4",
                         "latent_ch: 2",
@@ -494,13 +438,13 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(args.latent_ch, 2)
         self.assertEqual(args.num_phases, 3)
 
-    def test_fill_diffusion_defaults_rejects_diffusion_incompatible_latent_size(self):
+    def test_apply_vae_defaults_rejects_incompatible_latent_size(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run"
             save_run_config(
                 run_dir,
                 argparse.Namespace(
-                    image_size=40,
+                    size=40,
                     crop_size=80,
                     segment=False,
                     latent_size=10,
@@ -521,7 +465,7 @@ class BuildTest(unittest.TestCase):
             save_run_config(
                 source,
                 argparse.Namespace(
-                    image_size=64,
+                    size=64,
                     crop_size=128,
                     segment=False,
                     latent_ch=2,
@@ -565,8 +509,13 @@ class BuildTest(unittest.TestCase):
     def test_setup_device_uses_plain_device_without_distributed_env(self):
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch("src.app.runtime.distributed.torch.cuda.is_available", return_value=False),
-            patch("src.app.runtime.distributed.dist.init_process_group") as init_process_group,
+            patch(
+                "src.app.runtime.distributed.torch.cuda.is_available",
+                return_value=False,
+            ),
+            patch(
+                "src.app.runtime.distributed.dist.init_process_group"
+            ) as init_process_group,
         ):
             device, local_rank, distributed = setup_device()
 
@@ -582,8 +531,13 @@ class BuildTest(unittest.TestCase):
                 {"RANK": "1", "WORLD_SIZE": "2", "LOCAL_RANK": "1"},
                 clear=True,
             ),
-            patch("src.app.runtime.distributed.torch.cuda.is_available", return_value=False),
-            patch("src.app.runtime.distributed.dist.init_process_group") as init_process_group,
+            patch(
+                "src.app.runtime.distributed.torch.cuda.is_available",
+                return_value=False,
+            ),
+            patch(
+                "src.app.runtime.distributed.dist.init_process_group"
+            ) as init_process_group,
         ):
             device, local_rank, distributed = setup_device()
 

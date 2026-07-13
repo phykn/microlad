@@ -4,6 +4,7 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 
+
 def setup_device() -> tuple[torch.device, int, bool]:
     if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu"), 0, False

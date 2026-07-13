@@ -1,7 +1,7 @@
 import torch
 
 from src.modeling.phases.representation import phase_levels
-from src.common.tensors.validation import require_finite
+from src.validation import require_finite
 
 
 def calc_phase_probs(

@@ -7,7 +7,7 @@ import torch
 
 from src.modeling.diffusion import DDPMProcess, DiffusionLoss
 from src.pipelines.training import DiffusionTrainer
-from src.pipelines.training.distributed import unwrap_model
+from src.pipelines.training.misc.distributed import unwrap_model
 
 
 def infinite_batches():
@@ -114,9 +114,9 @@ class DiffusionTrainerTest(unittest.TestCase):
         self.assertEqual(trainer.step, 1)
         self.assertIn("loss", stats)
         self.assertIn("noise", stats)
-        self.assertIn("calc_grad_norm", stats)
+        self.assertIn("grad_norm", stats)
         self.assertGreaterEqual(stats["loss"], 0.0)
-        self.assertGreater(stats["calc_grad_norm"], 0.0)
+        self.assertGreater(stats["grad_norm"], 0.0)
 
     def test_trainer_can_reuse_existing_run_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -181,6 +181,19 @@ class DiffusionTrainerTest(unittest.TestCase):
         self.assertEqual(trainer.step, 2)
         self.assertIn("loss", stats)
 
+    def test_train_rejects_exhausted_non_reiterable_iterator(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trainer = self._make_trainer(
+                tmp,
+                dataloader=iter([torch.randn(2, 1, 64, 64)]),
+                steps=2,
+                save_every=2,
+            )
+
+            with self.assertRaisesRegex(ValueError, "exhausted"):
+                trainer.train()
+            trainer.close()
+
     def test_train_shows_tqdm_progress(self):
         with tempfile.TemporaryDirectory() as tmp:
             trainer = self._make_trainer(tmp, steps=2, save_every=2)
@@ -196,7 +209,7 @@ class DiffusionTrainerTest(unittest.TestCase):
         self.assertEqual(progress.kwargs["desc"], "diffusion")
         self.assertFalse(progress.kwargs["disable"])
         self.assertEqual(len(progress.postfixes), 2)
-        self.assertEqual(set(progress.postfixes[-1]), {"loss", "calc_grad_norm"})
+        self.assertEqual(set(progress.postfixes[-1]), {"loss", "grad_norm"})
         self.assertIn("loss", stats)
 
     def test_default_gradient_clipping_limits_gradients_after_logging_raw_norm(self):
@@ -215,10 +228,18 @@ class DiffusionTrainerTest(unittest.TestCase):
             )
 
             stats = trainer.train_step()
-            clipped_norm = trainer.calc_grad_norm()
+            clipped_norm = float(
+                torch.nn.utils.get_total_norm(
+                    [
+                        parameter.grad
+                        for parameter in trainer.model.parameters()
+                        if parameter.grad is not None
+                    ]
+                )
+            )
             trainer.close()
 
-        self.assertGreater(stats["calc_grad_norm"], 1.0)
+        self.assertGreater(stats["grad_norm"], 1.0)
         self.assertLessEqual(clipped_norm, 1.0001)
 
     def test_trainer_rejects_invalid_step_settings(self):

@@ -3,7 +3,7 @@ import math
 
 import torch
 
-from src.common.validation import require_finite_number
+from src.validation import require_finite_number
 from src.modeling.vae import get_downsample_factor
 from src.pipelines.guidance.conditioning.images import prepare_anchor_image
 from src.pipelines.guidance.conditioning.validation import validate_anchors

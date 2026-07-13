@@ -3,7 +3,7 @@ from collections.abc import Sequence
 import torch
 
 from src.modeling.diffusion.process import DDPMProcess
-from src.common.tensors.validation import require_finite
+from src.validation import require_finite
 
 
 class DiffusionSampler:

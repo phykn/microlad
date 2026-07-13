@@ -5,18 +5,11 @@ import torch
 import torch.nn as nn
 from tqdm.auto import tqdm
 
-from src.pipelines.training.distributed import is_main_process, unwrap_model
-from src.pipelines.training.runtime import (
-    freeze_module,
-    unpack_batch,
+from src.pipelines.training.misc.distributed import is_main_process, unwrap_model
+from src.pipelines.training.misc.run import (
     log_stats,
-    loss_stats,
-    calc_grad_norm,
-    next_batch,
-    format_progress,
     save_checkpoint,
     setup_run_dirs,
-    validate_training,
 )
 
 
@@ -35,15 +28,18 @@ class DiffusionTrainer:
         save_every: int = 1,
         clip_grad_norm: float | None = 1.0,
     ) -> None:
-        validate_training(
-            steps=steps,
-            save_every=save_every,
-            clip_grad_norm=clip_grad_norm,
-        )
+        if steps <= 0:
+            raise ValueError("steps must be positive.")
+        if save_every <= 0:
+            raise ValueError("save_every must be positive.")
+        if clip_grad_norm is not None and clip_grad_norm <= 0:
+            raise ValueError("clip_grad_norm must be positive or None.")
 
         self.model = model.to(device)
         self.vae = vae.to(device)
-        self.freeze_vae()
+        self.vae.eval()
+        for parameter in self.vae.parameters():
+            parameter.requires_grad_(False)
         self.dataloader = dataloader
         self.iterator = iter(dataloader)
         self.loss_fn = loss_fn
@@ -67,15 +63,39 @@ class DiffusionTrainer:
             is_main_process=self.is_main_process,
             run_dir=run_dir,
         )
-
-    def freeze_vae(self) -> None:
-        freeze_module(self.vae)
+        save_checkpoint(
+            model=self.model,
+            optimizer=self.optimizer,
+            step=0,
+            save_every=self.save_every,
+            weight_dir=self.weight_dir,
+            last_weight_dir=self.last_weight_dir,
+            is_main_process=self.is_main_process,
+        )
 
     def train_step(self) -> dict[str, float]:
         self.model.train()
         self.vae.eval()
-        batch, self.iterator = next_batch(self.dataloader, self.iterator)
-        image = unpack_batch(batch).to(self.device)
+        try:
+            batch = next(self.iterator)
+        except StopIteration:
+            self.iterator = iter(self.dataloader)
+            try:
+                batch = next(self.iterator)
+            except StopIteration as exc:
+                raise ValueError(
+                    "dataloader is exhausted and cannot be restarted; "
+                    "use a re-iterable dataloader or an infinite iterator."
+                ) from exc
+        if isinstance(batch, torch.Tensor):
+            image = batch
+        elif isinstance(batch, (tuple, list)) and batch and isinstance(batch[0], torch.Tensor):
+            image = batch[0]
+        else:
+            raise TypeError(
+                "batch must be a tensor or a tuple/list whose first item is a tensor."
+            )
+        image = image.to(self.device)
 
         with torch.no_grad():
             latent, _ = unwrap_model(self.vae).encode(image)
@@ -83,18 +103,39 @@ class DiffusionTrainer:
         self.optimizer.zero_grad(set_to_none=True)
         loss, parts = self.loss_fn(self.model, latent)
         loss.backward()
-        calc_grad_norm = self.calc_grad_norm()
-
-        if self.clip_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
+        if self.clip_grad_norm is None:
+            gradients = [
+                parameter.grad
+                for parameter in self.model.parameters()
+                if parameter.grad is not None
+            ]
+            current_grad_norm = float(torch.nn.utils.get_total_norm(gradients))
+        else:
+            current_grad_norm = float(
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.clip_grad_norm,
+                )
+            )
 
         self.optimizer.step()
 
-        stats = loss_stats(loss, parts)
-        stats["calc_grad_norm"] = calc_grad_norm
+        stats = {"loss": float(loss.detach().cpu())}
+        stats.update(
+            {name: float(value.detach().cpu()) for name, value in parts.items()}
+        )
+        stats["grad_norm"] = current_grad_norm
         self.step += 1
-        self.log_step_stats(stats)
-        self.save_checkpoint()
+        log_stats(self.writer, stats, self.step)
+        save_checkpoint(
+            model=self.model,
+            optimizer=self.optimizer,
+            step=self.step,
+            save_every=self.save_every,
+            weight_dir=self.weight_dir,
+            last_weight_dir=self.last_weight_dir,
+            is_main_process=self.is_main_process,
+        )
         return stats
 
     def train(self) -> dict[str, float]:
@@ -109,26 +150,11 @@ class DiffusionTrainer:
         for _ in progress:
             stats = self.train_step()
             visible_stats = {name: value for name, value in stats.items() if name != "noise"}
-            progress.set_postfix(format_progress(visible_stats))
+            progress.set_postfix(
+                {name: f"{value:.4g}" for name, value in visible_stats.items()}
+            )
 
         return stats
-
-    def log_step_stats(self, stats: dict[str, float]) -> None:
-        log_stats(self.writer, stats, self.step)
-
-    def save_checkpoint(self) -> None:
-        save_checkpoint(
-            model=self.model,
-            optimizer=self.optimizer,
-            step=self.step,
-            save_every=self.save_every,
-            weight_dir=self.weight_dir,
-            last_weight_dir=self.last_weight_dir,
-            is_main_process=self.is_main_process,
-        )
-
-    def calc_grad_norm(self) -> float:
-        return calc_grad_norm(self.model.parameters())
 
     def close(self) -> None:
         if self.writer is not None:

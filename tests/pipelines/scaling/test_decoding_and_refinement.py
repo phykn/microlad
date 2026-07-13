@@ -1,119 +1,25 @@
 import unittest
 
 import torch
+import torch.nn.functional as F
 
-from src.pipelines.scaling.blending import blend_window
-from src.pipelines.scaling.decoding import decode_large_volume
+from src.pipelines.reconstruction.refinement import refine_volume
+from src.pipelines.reconstruction.volume import decode_volume, decode_volume_probs
+from src.pipelines.scaling.decoding import (
+    _decode_tiled_plane_probabilities,
+    decode_large_volume,
+    decode_large_volume_probabilities,
+)
 from src.pipelines.scaling.refinement import refine_large_volume
-from src.pipelines.scaling.decoding import _decode_tiled_plane
-from src.pipelines.scaling.refinement import _refine_tiled_plane
-from src.pipelines.scaling.tiles import tile_grid
+from src.pipelines.scaling.tiles import blend_window, tile_grid
 
 
-class DecodeValueVAE(torch.nn.Module):
-    image_size = 4
+class CategoricalVAE(torch.nn.Module):
+    image_size = 2
     latent_size = 2
     latent_ch = 1
-    downsample_factor = 2
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.decode_grad_enabled: list[bool] = []
-        self.decode_calls = 0
-
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        self.decode_grad_enabled.append(torch.is_grad_enabled())
-        self.decode_calls += 1
-        return torch.full(
-            (latent.shape[0], 1, self.image_size, self.image_size),
-            float(self.decode_calls),
-            dtype=latent.dtype,
-            device=latent.device,
-        )
-
-
-class BadDecodeVAE(DecodeValueVAE):
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        return torch.zeros(1, 2, self.image_size, self.image_size)
-
-
-class NonFiniteDecodeVAE(DecodeValueVAE):
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        return torch.full(
-            (latent.shape[0], 1, self.image_size, self.image_size),
-            float("nan"),
-            dtype=latent.dtype,
-            device=latent.device,
-        )
-
-
-class MeanDecodeVAE(DecodeValueVAE):
-    image_size = 3
-    latent_size = 3
     downsample_factor = 1
-
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        mean = latent.mean(dim=(1, 2, 3), keepdim=True)
-        return mean.expand(latent.shape[0], 1, self.image_size, self.image_size)
-
-
-class InconsistentScaleVAE(DecodeValueVAE):
-    image_size = 3
-    latent_size = 2
-    downsample_factor = 2
-
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        return torch.ones(
-            (latent.shape[0], 1, self.image_size, self.image_size),
-            dtype=latent.dtype,
-            device=latent.device,
-        )
-
-
-class ShiftRefineVAE(torch.nn.Module):
-    image_size = 4
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.encode_grad_enabled: list[bool] = []
-        self.decode_grad_enabled: list[bool] = []
-        self.decode_calls = 0
-
-    def encode(self, image: torch.Tensor):
-        self.encode_grad_enabled.append(torch.is_grad_enabled())
-        return image.clone(), torch.zeros_like(image)
-
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        self.decode_grad_enabled.append(torch.is_grad_enabled())
-        self.decode_calls += 1
-        return torch.full_like(latent, float(self.decode_calls))
-
-
-class BadRefineVAE(ShiftRefineVAE):
-    image_size = 2
-
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        return torch.zeros(1, 2, self.image_size, self.image_size)
-
-
-class NonFiniteEncodeRefineVAE(ShiftRefineVAE):
-    image_size = 2
-
-    def encode(self, image: torch.Tensor):
-        self.encode_grad_enabled.append(torch.is_grad_enabled())
-        return torch.full_like(image, float("nan")), torch.zeros_like(image)
-
-
-class NonFiniteDecodeRefineVAE(ShiftRefineVAE):
-    image_size = 2
-
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        self.decode_grad_enabled.append(torch.is_grad_enabled())
-        return torch.full_like(latent, float("nan"))
-
-
-class AffineRefineVAE(torch.nn.Module):
-    image_size = 3
+    num_phases = 2
 
     def __init__(self) -> None:
         super().__init__()
@@ -122,318 +28,231 @@ class AffineRefineVAE(torch.nn.Module):
 
     def encode(self, image: torch.Tensor):
         self.encode_batch_sizes.append(int(image.shape[0]))
-        return image + 0.25, torch.zeros_like(image)
+        return image.clone(), torch.zeros_like(image)
 
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
         self.decode_batch_sizes.append(int(latent.shape[0]))
-        return latent * 0.5
+        phase_one = torch.sigmoid(latent[:, :1])
+        return torch.cat([1.0 - phase_one, phase_one], dim=1)
 
 
-class LocalPatternRefineVAE(torch.nn.Module):
-    image_size = 3
+class MeanCategoricalVAE(CategoricalVAE):
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
+        self.decode_batch_sizes.append(int(latent.shape[0]))
+        mean = latent.mean(dim=(1, 2, 3), keepdim=True)
+        phase_one = torch.sigmoid(mean).expand(
+            latent.shape[0],
+            1,
+            self.image_size,
+            self.image_size,
+        )
+        return torch.cat([1.0 - phase_one, phase_one], dim=1)
 
+
+class UpsampleCategoricalVAE(CategoricalVAE):
+    image_size = 4
+    downsample_factor = 2
+
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
+        self.decode_batch_sizes.append(int(latent.shape[0]))
+        values = F.interpolate(
+            latent[:, :1],
+            size=(self.image_size, self.image_size),
+            mode="bilinear",
+            align_corners=False,
+        )
+        phase_one = torch.sigmoid(values)
+        return torch.cat([1.0 - phase_one, phase_one], dim=1)
+
+
+class BadDecodeVAE(CategoricalVAE):
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
+        return torch.zeros(latent.shape[0], 3, self.image_size, self.image_size)
+
+
+class NonFiniteDecodeVAE(CategoricalVAE):
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
+        return torch.full(
+            (latent.shape[0], 2, self.image_size, self.image_size),
+            float("nan"),
+        )
+
+
+class NonFiniteEncodeVAE(CategoricalVAE):
     def encode(self, image: torch.Tensor):
-        return image, torch.zeros_like(image)
-
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        rows = torch.arange(
-            self.image_size,
-            dtype=latent.dtype,
-            device=latent.device,
-        ).view(1, 1, self.image_size, 1)
-        cols = torch.arange(
-            self.image_size,
-            dtype=latent.dtype,
-            device=latent.device,
-        ).view(1, 1, 1, self.image_size)
-        return (rows * 10.0 + cols).expand(latent.shape[0], 1, -1, -1)
+        return torch.full_like(image, float("nan")), torch.zeros_like(image)
 
 
-class CategoricalScaleVAE(torch.nn.Module):
+class ScalarVAE(torch.nn.Module):
     image_size = 2
     latent_size = 2
     latent_ch = 1
     downsample_factor = 1
-    num_phases = 3
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.probability_calls = 0
+    num_phases = 2
 
     def encode(self, image: torch.Tensor):
         return image, torch.zeros_like(image)
 
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        raise AssertionError("categorical scale path must not use scalar decode")
 
-    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
-        axis_group = self.probability_calls // 2
-        phase = 2 if axis_group == 1 else 0
-        self.probability_calls += 1
-        probabilities = torch.zeros(
-            latent.shape[0],
-            self.num_phases,
-            self.image_size,
-            self.image_size,
-            dtype=latent.dtype,
-            device=latent.device,
-        )
-        probabilities[:, phase] = 1.0
-        return probabilities
+class ScaleDecodeRefineTest(unittest.TestCase):
+    def test_large_decode_matches_base_categorical_consensus(self):
+        latent = torch.linspace(-2.0, 2.0, steps=8).view(1, 2, 2, 2)
 
-
-class PredictScaleDecodeRefineTest(unittest.TestCase):
-    def test_categorical_large_decode_votes_without_middle_phase(self):
-        volume = decode_large_volume(
-            CategoricalScaleVAE(),
-            torch.zeros(1, 2, 2, 2),
+        base = decode_volume(CategoricalVAE(), latent)
+        large = decode_large_volume(
+            CategoricalVAE(),
+            latent,
             tile_overlap=0,
+            batch_size=1,
         )
 
-        self.assertFalse(torch.any(volume == 1.0))
-        self.assertTrue(torch.any(volume == 0.0))
-        self.assertTrue(torch.any(volume == 2.0))
+        self.assertTrue(torch.equal(large, base))
 
-    def test_categorical_large_refinement_votes_without_middle_phase(self):
-        volume = refine_large_volume(
-            torch.zeros(2, 2, 2),
-            CategoricalScaleVAE(),
+    def test_streamed_probabilities_match_base_interpolation(self):
+        latent = torch.linspace(-2.0, 2.0, steps=8).view(1, 2, 2, 2)
+
+        base = decode_volume_probs(UpsampleCategoricalVAE(), latent)
+        large = decode_large_volume_probabilities(
+            UpsampleCategoricalVAE(),
+            latent,
+            tile_overlap=0,
+            batch_size=1,
+        )
+
+        self.assertTrue(torch.allclose(large, base, atol=1e-6, rtol=1e-6))
+
+    def test_large_refinement_matches_base_categorical_consensus(self):
+        volume = torch.tensor(
+            [
+                [[0.0, 0.0], [1.0, 1.0]],
+                [[0.0, 1.0], [0.0, 1.0]],
+            ]
+        )
+
+        base = refine_volume(volume, CategoricalVAE(), steps=1, batch_size=1)
+        large = refine_large_volume(
+            volume,
+            CategoricalVAE(),
             steps=1,
             tile_overlap=0,
             tile_batch_size=1,
         )
 
-        self.assertFalse(torch.any(volume == 1.0))
-        self.assertTrue(torch.any(volume == 0.0))
-        self.assertTrue(torch.any(volume == 2.0))
+        self.assertTrue(torch.equal(large, base))
 
-    def test_decode_large_volume_averages_three_axes_without_gradients(self):
-        vae = DecodeValueVAE()
-        vae.train()
-        latent = torch.arange(8, dtype=torch.float32).view(1, 2, 2, 2)
+    def test_large_decode_limits_plane_batch_size(self):
+        vae = CategoricalVAE()
+        probabilities = decode_large_volume_probabilities(
+            vae,
+            torch.zeros(1, 4, 4, 4),
+            tile_overlap=0,
+            batch_size=2,
+        )
 
-        volume = decode_large_volume(vae, latent, tile_overlap=0)
+        self.assertEqual(probabilities.shape, torch.Size([1, 2, 4, 4, 4]))
+        self.assertLessEqual(max(vae.decode_batch_sizes), 2)
+        self.assertTrue(
+            torch.allclose(probabilities.sum(dim=1), torch.ones(1, 4, 4, 4))
+        )
 
-        expected = torch.empty(4, 4, 4)
-        for z in range(4):
-            d_value = 1.0 if z < 2 else 2.0
-            for y in range(4):
-                h_value = 3.0 if y < 2 else 4.0
-                for x in range(4):
-                    w_value = 5.0 if x < 2 else 6.0
-                    expected[z, y, x] = (d_value + h_value + w_value) / 3.0
+    def test_tiled_probability_decode_uses_weighted_blending(self):
+        vae = MeanCategoricalVAE()
+        latent = torch.arange(16, dtype=torch.float32).view(1, 1, 4, 4)
 
-        self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
-        self.assertTrue(torch.allclose(volume, expected))
-        self.assertFalse(vae.training)
-        self.assertTrue(vae.decode_grad_enabled)
-        self.assertTrue(all(enabled is False for enabled in vae.decode_grad_enabled))
-
-    def test_decode_large_volume_rejects_bad_decode_shape(self):
-        with self.assertRaisesRegex(ValueError, "decode"):
-            decode_large_volume(
-                BadDecodeVAE(),
-                torch.zeros(1, 2, 2, 2),
-                tile_overlap=0,
-            )
-
-    def test_decode_large_volume_rejects_non_floating_latent(self):
-        with self.assertRaisesRegex(ValueError, "floating"):
-            decode_large_volume(
-                DecodeValueVAE(),
-                torch.zeros(1, 2, 2, 2, dtype=torch.int64),
-                tile_overlap=0,
-            )
-
-    def test_decode_large_volume_rejects_non_finite_latent(self):
-        with self.assertRaisesRegex(ValueError, "latent volume.*finite"):
-            decode_large_volume(
-                DecodeValueVAE(),
-                torch.full((1, 2, 2, 2), float("nan")),
-                tile_overlap=0,
-            )
-
-    def test_decode_large_volume_rejects_non_finite_decode_output(self):
-        with self.assertRaisesRegex(ValueError, "decoded.*finite"):
-            decode_large_volume(
-                NonFiniteDecodeVAE(),
-                torch.zeros(1, 2, 2, 2),
-                tile_overlap=0,
-            )
-
-    def test_decode_large_volume_rejects_inconsistent_vae_scale(self):
-        with self.assertRaisesRegex(ValueError, "image_size"):
-            decode_large_volume(
-                InconsistentScaleVAE(),
-                torch.zeros(1, 2, 2, 2),
-                tile_overlap=0,
-            )
-
-    def test_decode_tiled_plane_uses_image_space_weighted_blending(self):
-        vae = MeanDecodeVAE()
-        latent_plane = torch.arange(16, dtype=torch.float32).view(1, 4, 4)
-
-        decoded = _decode_tiled_plane(vae, latent_plane, tile_overlap=2)
+        decoded = _decode_tiled_plane_probabilities(
+            vae,
+            latent,
+            tile_overlap=1,
+            num_phases=2,
+        )
 
         expected = torch.zeros(4, 4)
-        weight_sum = torch.zeros_like(expected)
-        window = blend_window(
-            vae.image_size,
-            vae.image_size,
-            device=latent_plane.device,
-            dtype=latent_plane.dtype,
-        )
+        weights = torch.zeros_like(expected)
+        window = blend_window(2, 2, device=latent.device, dtype=latent.dtype)
+        for row, col in tile_grid(4, 4, tile_size=2, overlap=1):
+            tile = latent[:, :, row : row + 2, col : col + 2]
+            probability = torch.sigmoid(tile.mean())
+            expected[row : row + 2, col : col + 2] += probability * window
+            weights[row : row + 2, col : col + 2] += window
 
-        for row, col in tile_grid(4, 4, tile_size=3, overlap=2):
-            tile = latent_plane[:, row : row + 3, col : col + 3]
-            decoded_tile = torch.full((3, 3), float(tile.mean()))
-            expected[row : row + 3, col : col + 3] += decoded_tile * window
-            weight_sum[row : row + 3, col : col + 3] += window
+        self.assertTrue(torch.allclose(decoded[0, 1], expected / weights))
 
-        self.assertTrue(torch.allclose(decoded, expected / weight_sum))
-
-    def test_refine_large_volume_runs_refine_axes_without_gradients(self):
-        vae = ShiftRefineVAE()
-        vae.train()
-
-        refined = refine_large_volume(
-            torch.zeros(4, 4, 4),
-            vae,
-            steps=1,
-            tile_overlap=0,
-        )
-
-        expected = torch.empty(4, 4, 4)
-        for z in range(4):
-            for y in range(4):
-                for x in range(4):
-                    d_value = float(z + 1)
-                    h_value = float(y + 5)
-                    w_value = float(x + 9)
-                    expected[z, y, x] = (d_value + h_value + w_value) / 3.0
-
-        self.assertTrue(torch.allclose(refined, expected))
-        self.assertFalse(vae.training)
-        self.assertTrue(vae.encode_grad_enabled)
-        self.assertTrue(vae.decode_grad_enabled)
-        self.assertTrue(all(enabled is False for enabled in vae.encode_grad_enabled))
-        self.assertTrue(all(enabled is False for enabled in vae.decode_grad_enabled))
-
-    def test_refine_large_volume_batches_tiles_without_changing_chunk_result(self):
+    def test_large_refinement_batches_tiles_without_changing_result(self):
         volume = torch.linspace(-0.5, 0.5, steps=64).view(4, 4, 4)
-
         single = refine_large_volume(
             volume,
-            AffineRefineVAE(),
+            CategoricalVAE(),
             steps=1,
-            tile_overlap=2,
+            tile_overlap=1,
             tile_batch_size=1,
         )
-        batched_vae = AffineRefineVAE()
+        batched_vae = CategoricalVAE()
         batched = refine_large_volume(
             volume,
             batched_vae,
             steps=1,
-            tile_overlap=2,
+            tile_overlap=1,
             tile_batch_size=3,
         )
 
-        expected = volume * 0.5 + 0.125
-
-        self.assertTrue(torch.allclose(single, batched))
-        self.assertTrue(torch.allclose(batched, expected))
-        self.assertIn(3, batched_vae.encode_batch_sizes)
+        self.assertTrue(torch.equal(single, batched))
         self.assertLessEqual(max(batched_vae.encode_batch_sizes), 3)
-        self.assertEqual(batched_vae.encode_batch_sizes, batched_vae.decode_batch_sizes)
+        self.assertEqual(
+            batched_vae.encode_batch_sizes,
+            batched_vae.decode_batch_sizes,
+        )
 
-    def test_refine_large_volume_rejects_invalid_tile_batch_size(self):
+    def test_decode_rejects_invalid_inputs(self):
+        cases = (
+            (CategoricalVAE(), torch.zeros(1, 2, 2, 2, dtype=torch.long), "floating"),
+            (CategoricalVAE(), torch.full((1, 2, 2, 2), float("nan")), "finite"),
+            (ScalarVAE(), torch.zeros(1, 2, 2, 2), "decode_probs"),
+            (BadDecodeVAE(), torch.zeros(1, 2, 2, 2), "decode_probs"),
+            (NonFiniteDecodeVAE(), torch.zeros(1, 2, 2, 2), "finite"),
+        )
+        for vae, latent, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    decode_large_volume(
+                        vae,
+                        latent,
+                        tile_overlap=0,
+                        batch_size=1,
+                    )
+
+        with self.assertRaisesRegex(ValueError, "batch_size"):
+            decode_large_volume(
+                CategoricalVAE(),
+                torch.zeros(1, 2, 2, 2),
+                tile_overlap=0,
+                batch_size=0,
+            )
+
+    def test_refinement_rejects_invalid_inputs(self):
+        cases = (
+            (torch.zeros(2, 2, 2, dtype=torch.long), CategoricalVAE(), "floating"),
+            (torch.full((2, 2, 2), float("nan")), CategoricalVAE(), "finite"),
+            (torch.zeros(2, 2, 2), ScalarVAE(), "decode_probs"),
+            (torch.zeros(2, 2, 2), NonFiniteEncodeVAE(), "encoded latent"),
+            (torch.zeros(2, 2, 2), NonFiniteDecodeVAE(), "decoded probabilities"),
+        )
+        for volume, vae, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    refine_large_volume(
+                        volume,
+                        vae,
+                        steps=1,
+                        tile_overlap=0,
+                        tile_batch_size=1,
+                    )
+
         with self.assertRaisesRegex(ValueError, "tile_batch_size"):
             refine_large_volume(
-                torch.zeros(4, 4, 4),
-                AffineRefineVAE(),
+                torch.zeros(2, 2, 2),
+                CategoricalVAE(),
                 steps=1,
-                tile_overlap=2,
                 tile_batch_size=0,
-            )
-
-    def test_refine_tiled_plane_uses_weighted_blending(self):
-        vae = LocalPatternRefineVAE()
-
-        refined = _refine_tiled_plane(
-            torch.zeros(4, 4),
-            vae,
-            tile_overlap=2,
-            tile_batch_size=2,
-        )
-
-        expected = torch.zeros(4, 4)
-        weight_sum = torch.zeros_like(expected)
-        window = blend_window(
-            vae.image_size,
-            vae.image_size,
-            device=refined.device,
-            dtype=refined.dtype,
-        )
-        pattern = vae.decode(torch.zeros(1, 1, 3, 3))[0, 0]
-
-        for row, col in tile_grid(4, 4, tile_size=3, overlap=2):
-            expected[row : row + 3, col : col + 3] += pattern * window
-            weight_sum[row : row + 3, col : col + 3] += window
-
-        self.assertTrue(torch.allclose(refined, expected / weight_sum))
-
-    def test_refine_large_volume_rejects_bad_decode_shape(self):
-        with self.assertRaisesRegex(ValueError, "decode"):
-            refine_large_volume(
-                torch.zeros(2, 2, 2),
-                BadRefineVAE(),
-                steps=1,
-                tile_overlap=0,
-            )
-
-    def test_refine_large_volume_rejects_non_floating_volume(self):
-        with self.assertRaisesRegex(ValueError, "floating"):
-            refine_large_volume(
-                torch.zeros(2, 2, 2, dtype=torch.int64),
-                ShiftRefineVAE(),
-                steps=1,
-                tile_overlap=0,
-            )
-
-    def test_refine_large_volume_rejects_non_finite_volume(self):
-        with self.assertRaisesRegex(ValueError, "volume.*finite"):
-            refine_large_volume(
-                torch.full((2, 2, 2), float("nan")),
-                ShiftRefineVAE(),
-                steps=1,
-                tile_overlap=0,
-            )
-
-    def test_refine_large_volume_rejects_empty_volume(self):
-        with self.assertRaisesRegex(ValueError, "positive"):
-            refine_large_volume(
-                torch.empty(0, 0, 0),
-                ShiftRefineVAE(),
-                steps=1,
-                tile_overlap=0,
-            )
-
-    def test_refine_large_volume_rejects_non_finite_encoded_latent(self):
-        with self.assertRaisesRegex(ValueError, "encoded.*finite"):
-            refine_large_volume(
-                torch.zeros(2, 2, 2),
-                NonFiniteEncodeRefineVAE(),
-                steps=1,
-                tile_overlap=0,
-            )
-
-    def test_refine_large_volume_rejects_non_finite_decoded_tile(self):
-        with self.assertRaisesRegex(ValueError, "decoded.*finite"):
-            refine_large_volume(
-                torch.zeros(2, 2, 2),
-                NonFiniteDecodeRefineVAE(),
-                steps=1,
-                tile_overlap=0,
             )
 
 

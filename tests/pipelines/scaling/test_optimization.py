@@ -5,11 +5,11 @@ import torch
 
 from src.modeling.diffusion import DDPMProcess
 from src.app.api import AnchorSlice
-from src.pipelines.scaling.blending import blend_window
+from src.pipelines.scaling.tiles import blend_window
 from src.pipelines.scaling.optimization import optimize_large_volume
-from src.pipelines.scaling.local_objective import (
-    _local_prior_objective,
-    _batch_prior_loss,
+from src.pipelines.scaling.objective import (
+    batch_objective,
+    slice_objective,
 )
 from src.pipelines.scaling.tiles import tile_grid
 
@@ -18,17 +18,31 @@ class IdentityVAE(torch.nn.Module):
     image_size = 2
     latent_size = 2
     latent_ch = 1
+    num_phases = 2
 
     def encode(self, image: torch.Tensor):
         return image.clone(), torch.zeros_like(image)
 
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        return latent
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
+        base = torch.where(
+            latent >= 0.0,
+            torch.tanh(latent),
+            torch.zeros_like(latent),
+        )
+        phase_one = 1e-3 + (1.0 - 2e-3) * base
+        return torch.cat([1.0 - phase_one, phase_one], dim=1)
 
 
 class ShiftDecodeVAE(IdentityVAE):
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        return latent + 0.25
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
+        shifted = latent + 0.25
+        base = torch.where(
+            shifted >= 0.0,
+            torch.tanh(shifted),
+            torch.zeros_like(shifted),
+        )
+        phase_one = 1e-3 + (1.0 - 2e-3) * base
+        return torch.cat([1.0 - phase_one, phase_one], dim=1)
 
 
 class NonFiniteEncodeVAE(IdentityVAE):
@@ -37,19 +51,25 @@ class NonFiniteEncodeVAE(IdentityVAE):
 
 
 class NonFiniteDecodeVAE(IdentityVAE):
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        return torch.full_like(latent, float("nan"))
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
+        return torch.full(
+            (latent.shape[0], self.num_phases, *latent.shape[-2:]),
+            float("nan"),
+            dtype=latent.dtype,
+            device=latent.device,
+        )
 
 
 class LocalPatternVAE(torch.nn.Module):
     image_size = 3
     latent_size = 3
     latent_ch = 1
+    num_phases = 2
 
     def encode(self, image: torch.Tensor):
         return image.clone(), torch.zeros_like(image)
 
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
         rows = torch.arange(
             self.image_size,
             dtype=latent.dtype,
@@ -60,7 +80,10 @@ class LocalPatternVAE(torch.nn.Module):
             dtype=latent.dtype,
             device=latent.device,
         ).view(1, 1, 1, self.image_size)
-        return (rows * 10.0 + cols).expand(latent.shape[0], 1, -1, -1)
+        phase_one = ((rows * 10.0 + cols) / 22.0).expand(
+            latent.shape[0], 1, -1, -1
+        )
+        return torch.cat([1.0 - phase_one, phase_one], dim=1)
 
 
 class ZeroNoiseModel(torch.nn.Module):
@@ -130,7 +153,7 @@ class PredictScaleSDSTest(unittest.TestCase):
         self.assertGreater(float(updated[2].mean()), 0.0)
         self.assertLess(float(updated[2].mean()), 1.0)
         self.assertTrue(torch.allclose(updated[0], volume[0]))
-        self.assertIn("anchor", stats)
+        self.assertIn("history_anchor", stats)
         self.assertIn("steps", stats)
 
     def test_optimize_large_volume_with_zero_slice_steps_preserves_slice(self):
@@ -180,9 +203,10 @@ class PredictScaleSDSTest(unittest.TestCase):
             tile_overlap=0,
         )
 
-        self.assertGreater(float(updated[2, 1:3, 1:3].mean()), 0.0)
+        self.assertTrue(torch.all(updated[2] == updated[2].round()))
+        self.assertFalse(torch.equal(updated[2], target))
         self.assertEqual(float(updated[2, 0, 0]), 0.0)
-        self.assertIn("anchor", stats)
+        self.assertIn("history_anchor", stats)
 
     def test_optimize_large_volume_applies_full_slice_vf_target_loss(self):
         updated, stats = optimize_large_volume(
@@ -205,8 +229,8 @@ class PredictScaleSDSTest(unittest.TestCase):
         )
 
         self.assertLessEqual(float(updated[1].mean()), 0.0)
-        self.assertIn("vf", stats)
-        self.assertIn("loss", stats)
+        self.assertIn("history_vf", stats)
+        self.assertIn("history_loss", stats)
 
     def test_optimize_large_volume_batches_same_axis_slices_for_sds_prior(self):
         model = RecordingNoiseModel()
@@ -218,7 +242,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             DDPMProcess(timesteps=4),
             steps=1,
             slice_steps=1,
-            sds_batch_size=2,
+            batch_size=2,
             lr=0.1,
             t_min=1,
             t_max=3,
@@ -230,7 +254,7 @@ class PredictScaleSDSTest(unittest.TestCase):
 
         self.assertEqual(model.batch_sizes, [2, 2, 2, 2])
         self.assertEqual(updated.shape, torch.Size([4, 4, 4]))
-        self.assertIn("sds", stats)
+        self.assertIn("history_sds", stats)
 
     def test_optimize_large_volume_rejects_non_floating_volume(self):
         with self.assertRaisesRegex(ValueError, "floating"):
@@ -282,7 +306,7 @@ class PredictScaleSDSTest(unittest.TestCase):
                     self.optimize(**{name: float("nan")})
 
     def test_large_slice_prior_loss_is_averaged_across_tiles(self):
-        decoded, _, total, stats = _local_prior_objective(
+        decoded, _, total, stats = slice_objective(
             torch.zeros(4, 4),
             IdentityVAE(),
             ZeroNoiseModel(),
@@ -309,7 +333,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             ]
         )
 
-        _, _, total, stats = _batch_prior_loss(
+        _, _, total, stats = batch_objective(
             images,
             IdentityVAE(),
             ZeroNoiseModel(),
@@ -334,7 +358,7 @@ class PredictScaleSDSTest(unittest.TestCase):
         images = torch.zeros(2, 2, 2)
         target = torch.ones(2, 2)
 
-        _, _, single_total, _ = _local_prior_objective(
+        _, _, single_total, _ = slice_objective(
             images[0],
             IdentityVAE(),
             ZeroNoiseModel(),
@@ -348,7 +372,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             temperature=0.5,
             tile_overlap=0,
         )
-        _, _, batch_total, stats = _batch_prior_loss(
+        _, _, batch_total, stats = batch_objective(
             images,
             IdentityVAE(),
             ZeroNoiseModel(),
@@ -367,10 +391,10 @@ class PredictScaleSDSTest(unittest.TestCase):
         self.assertTrue(torch.allclose(batch_total, single_total / 2.0))
         self.assertTrue(torch.allclose(stats["anchor"], single_total.detach() / 2.0))
 
-    def test_local_prior_objective_uses_weighted_tile_stitching(self):
+    def test_slice_objective_uses_weighted_tile_stitching(self):
         vae = LocalPatternVAE()
 
-        decoded, _, total, stats = _local_prior_objective(
+        decoded, _, total, stats = slice_objective(
             torch.zeros(4, 4),
             vae,
             ZeroNoiseModel(),
@@ -391,10 +415,10 @@ class PredictScaleSDSTest(unittest.TestCase):
         self.assertTrue(torch.equal(total.detach(), torch.tensor(0.0)))
         self.assertEqual(stats, {})
 
-    def test_batch_prior_loss_uses_weighted_tile_stitching(self):
+    def test_batch_objective_uses_weighted_tile_stitching(self):
         vae = LocalPatternVAE()
 
-        decoded, _, _, _ = _batch_prior_loss(
+        decoded, _, _, _ = batch_objective(
             torch.zeros(2, 4, 4),
             vae,
             ZeroNoiseModel(),
@@ -419,6 +443,7 @@ class PredictScaleSDSTest(unittest.TestCase):
             )
         )
 
+
 def _expected_local_pattern_stitch(
     vae: LocalPatternVAE,
     image: torch.Tensor,
@@ -432,7 +457,7 @@ def _expected_local_pattern_stitch(
         device=image.device,
         dtype=image.dtype,
     )
-    pattern = vae.decode(torch.zeros(1, 1, tile_size, tile_size))[0, 0]
+    pattern = vae.decode_probs(torch.zeros(1, 1, tile_size, tile_size))[0, 1]
 
     for row, col in tile_grid(
         int(image.shape[0]),

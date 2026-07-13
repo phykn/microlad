@@ -2,7 +2,12 @@ from collections.abc import Sequence
 
 import torch
 
-from src.common.validation import require_int
+from src.validation import require_int
+
+
+def _validate_volume(volume: torch.Tensor) -> None:
+    if volume.ndim != 3:
+        raise ValueError("volume must have shape [D, H, W].")
 
 
 def _validate_axis(axis: int) -> None:
@@ -41,6 +46,7 @@ def _slice_shape(volume: torch.Tensor, axis: int) -> torch.Size:
 
 
 def extract_slice(volume: torch.Tensor, axis: int, index: int) -> torch.Tensor:
+    _validate_volume(volume)
     _validate_axis(axis)
     _validate_index(volume, axis, index)
 
@@ -59,11 +65,16 @@ def replace_slice(
     index: int,
     image: torch.Tensor,
 ) -> None:
+    _validate_volume(volume)
     _validate_axis(axis)
     _validate_index(volume, axis, index)
 
     if image.shape != _slice_shape(volume, axis):
         raise ValueError("image shape must match the selected slice shape.")
+    if image.device != volume.device:
+        raise ValueError("image device must match volume device.")
+    if image.dtype != volume.dtype:
+        raise ValueError("image dtype must match volume dtype.")
 
     if axis == 0:
         volume[index, :, :] = image
@@ -78,6 +89,7 @@ def extract_slice_batch(
     axis: int,
     indices: Sequence[int],
 ) -> torch.Tensor:
+    _validate_volume(volume)
     _validate_axis(axis)
     _validate_indices(volume, axis, indices)
 
@@ -98,6 +110,7 @@ def replace_slice_batch(
     indices: Sequence[int],
     images: torch.Tensor,
 ) -> None:
+    _validate_volume(volume)
     _validate_axis(axis)
     _validate_indices(volume, axis, indices)
 
@@ -109,6 +122,10 @@ def replace_slice_batch(
 
     if images.shape[1:] != _slice_shape(volume, axis):
         raise ValueError("image shape must match the selected slice shape.")
+    if images.device != volume.device:
+        raise ValueError("images device must match volume device.")
+    if images.dtype != volume.dtype:
+        raise ValueError("images dtype must match volume dtype.")
 
     index_tensor = torch.as_tensor(indices, device=volume.device, dtype=torch.long)
 
@@ -118,87 +135,3 @@ def replace_slice_batch(
         volume[:, index_tensor, :] = images.permute(1, 0, 2).contiguous()
     else:
         volume[:, :, index_tensor] = images.permute(1, 2, 0).contiguous()
-
-
-def select_slice(
-    volume: torch.Tensor,
-    step: int,
-    slice_schedule: Sequence[tuple[int, int]] | None,
-) -> tuple[int, int]:
-    if slice_schedule is None:
-        axis = int(torch.randint(0, 3, (), device=volume.device).item())
-        index = int(torch.randint(0, volume.shape[axis], (), device=volume.device).item())
-    else:
-        axis, index = slice_schedule[step]
-
-    try:
-        _validate_axis(axis)
-    except ValueError as exc:
-        raise ValueError(f"slice_schedule {exc}") from exc
-
-    try:
-        _validate_index(volume, axis, index)
-    except ValueError as exc:
-        raise ValueError(f"slice_schedule {exc}") from exc
-
-    return axis, index
-
-
-def select_slice_batch(
-    volume: torch.Tensor,
-    step: int,
-    slice_schedule: Sequence[tuple[int, int]] | None,
-    batch_size: int,
-) -> tuple[int, list[int]]:
-    if not isinstance(batch_size, int) or isinstance(batch_size, bool):
-        raise ValueError("sds_batch_size must be an integer.")
-
-    if batch_size <= 0:
-        raise ValueError("sds_batch_size must be positive.")
-
-    if batch_size == 1:
-        axis, index = select_slice(volume, step, slice_schedule)
-        return axis, [index]
-
-    if slice_schedule is not None:
-        start = step * batch_size
-        entries = slice_schedule[start : start + batch_size]
-
-        if len(entries) != batch_size:
-            raise ValueError(
-                "slice_schedule must contain one entry per batched slice."
-            )
-
-        axes = [axis for axis, _ in entries]
-
-        for axis in axes:
-            try:
-                _validate_axis(axis)
-            except ValueError as exc:
-                raise ValueError(f"slice_schedule {exc}") from exc
-
-        if any(axis != axes[0] for axis in axes):
-            raise ValueError("batched SDS slices must use the same axis.")
-
-        axis = axes[0]
-        indices = [index for _, index in entries]
-    else:
-        axis = int(torch.randint(0, 3, (), device=volume.device).item())
-
-        if batch_size > volume.shape[axis]:
-            raise ValueError("sds_batch_size cannot exceed the selected axis length.")
-
-        indices = torch.randperm(
-            volume.shape[axis],
-            device=volume.device,
-        )[:batch_size].tolist()
-
-    try:
-        _validate_indices(volume, axis, indices)
-    except ValueError as exc:
-        raise ValueError(f"slice_schedule {exc}") from exc
-
-    if len(set(indices)) != len(indices):
-        raise ValueError("batched SDS slices must be unique.")
-
-    return axis, indices

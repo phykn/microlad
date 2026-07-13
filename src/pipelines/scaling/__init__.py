@@ -1,1 +1,0 @@
-"""Large-volume scaling adapters."""

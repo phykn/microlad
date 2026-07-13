@@ -53,7 +53,7 @@ def write_config(path: Path, data_dir: Path, vae_run_dir: Path, run_root: Path) 
 
 def write_vae_run(run_dir: Path) -> None:
     vae_args = argparse.Namespace(
-        image_size=64,
+        size=64,
         crop_size=64,
         latent_size=16,
         latent_ch=2,
@@ -63,7 +63,7 @@ def write_vae_run(run_dir: Path) -> None:
         segment=False,
     )
     vae = PatchVAE(
-        image_size=vae_args.image_size,
+        image_size=vae_args.size,
         latent_size=vae_args.latent_size,
         latent_ch=vae_args.latent_ch,
         num_phases=vae_args.num_phases,

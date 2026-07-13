@@ -4,15 +4,16 @@ from collections.abc import Mapping, Sequence
 import torch
 
 from src.pipelines.guidance.conditioning.model import AnchorSlice
-from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver
-from src.common.tensors.validation import require_finite, require_float
+from src.pipelines.guidance.metrics.conductance import ConductanceSolver
+from src.validation import require_finite, require_float
 
-def _validate_inputs(
+
+def validate_optimization(
     volume: torch.Tensor,
     *,
     steps: int,
     slice_steps: int,
-    sds_batch_size: int,
+    batch_size: int,
     lr: float,
     slice_schedule: Sequence[tuple[int, int]] | None,
     anchors: Sequence[AnchorSlice] | None,
@@ -27,7 +28,7 @@ def _validate_inputs(
     sa_targets: Mapping[int, float] | torch.Tensor | None,
     sa_weight: float,
     diffusivity_targets: Mapping[int, float] | torch.Tensor | None,
-    diffusivity_solver: DiffusivitySolver | None,
+    diffusivity_solver: ConductanceSolver | None,
     diffusivity_weight: float,
     temperature: float,
     num_phases: int,
@@ -57,13 +58,13 @@ def _validate_inputs(
     _require_positive("lr", lr)
     _require_positive("temperature", temperature)
 
-    if not isinstance(sds_batch_size, int) or isinstance(sds_batch_size, bool):
-        raise ValueError("sds_batch_size must be an integer.")
+    if not isinstance(batch_size, int) or isinstance(batch_size, bool):
+        raise ValueError("batch_size must be an integer.")
 
-    if sds_batch_size <= 0:
-        raise ValueError("sds_batch_size must be positive.")
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive.")
 
-    if slice_schedule is not None and len(slice_schedule) < steps * sds_batch_size:
+    if slice_schedule is not None and len(slice_schedule) < steps * batch_size:
         raise ValueError("slice_schedule must contain one entry per batched slice.")
 
     for name, weight in (
@@ -109,7 +110,7 @@ def _validate_inputs(
         raise ValueError("diffusivity_solver is required for diffusivity loss.")
 
 
-def _as_anchor_image(target: torch.Tensor) -> torch.Tensor:
+def as_anchor_image(target: torch.Tensor) -> torch.Tensor:
     if target.ndim == 4 and target.shape[:2] == (1, 1):
         return target[0, 0]
 
@@ -153,9 +154,11 @@ def _validate_anchor_map(
             key,
             volume_shape=volume_shape,
         )
-        image = _as_anchor_image(value)
+        image = as_anchor_image(value)
         if image.shape != _slice_shape(volume_shape, axis):
-            raise ValueError(f"{name}[{axis}, {index}] shape must match selected slice.")
+            raise ValueError(
+                f"{name}[{axis}, {index}] shape must match selected slice."
+            )
 
         require_finite(f"{name}[{axis}, {index}]", image)
 
@@ -200,7 +203,7 @@ def _slice_shape(volume_shape: torch.Size, axis: int) -> torch.Size:
     return torch.Size([volume_shape[0], volume_shape[1]])
 
 
-def _tensor_map(
+def move_tensor_map(
     values: Mapping[tuple[int, int], torch.Tensor] | None,
     *,
     device: torch.device,

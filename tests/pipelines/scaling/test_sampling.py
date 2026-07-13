@@ -3,10 +3,9 @@ from unittest.mock import patch
 
 import torch
 
-from src.pipelines.scaling.blending import blend_window
-from src.pipelines.scaling.denoising import denoise_tiled_plane
+from src.pipelines.scaling.tiles import blend_window
 from src.modeling.diffusion import DiffusionSampler
-from src.pipelines.scaling.sampling import sample_large_lmpdd
+from src.pipelines.scaling.sampling import denoise_tiled_plane, sample_large_lmpdd
 from src.pipelines.scaling.tiles import tile_grid
 
 
@@ -87,6 +86,21 @@ class MeanOnlyDDPM:
 
     def p_sample(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         raise AssertionError("denoise_tiled_plane must average p_mean, not p_sample.")
+
+    def _expand(self, values: torch.Tensor, t: torch.Tensor, ndim: int) -> torch.Tensor:
+        shape = (t.shape[0],) + (1,) * (ndim - 1)
+        return values.to(device=t.device)[t].view(shape)
+
+
+class RecordingBatchDDPM:
+    posterior_variance = torch.zeros(1)
+
+    def __init__(self) -> None:
+        self.batch_sizes: list[int] = []
+
+    def p_mean(self, model, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        self.batch_sizes.append(int(x.shape[0]))
+        return x
 
     def _expand(self, values: torch.Tensor, t: torch.Tensor, ndim: int) -> torch.Tensor:
         shape = (t.shape[0],) + (1,) * (ndim - 1)
@@ -397,6 +411,23 @@ class ScaleSamplerTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(denoised, expected))
         self.assertLess(float(denoised[0, 0, 1, 1]), 2.5)
+
+    def test_denoise_tiled_plane_limits_model_batch_size(self):
+        ddpm = RecordingBatchDDPM()
+        planes = torch.randn(5, 1, 4, 4)
+
+        denoised = denoise_tiled_plane(
+            ZeroModel(),
+            ddpm,
+            planes,
+            torch.zeros(5, dtype=torch.long),
+            tile_size=2,
+            overlap=0,
+            batch_size=2,
+        )
+
+        self.assertTrue(torch.equal(denoised, planes))
+        self.assertLessEqual(max(ddpm.batch_sizes), 2)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,37 @@
 import torch
 
-from src.common.validation import require_int
-from src.pipelines.scaling.blending import blend_window
+from src.validation import require_finite_number, require_int
+
+
+def blend_window(
+    height: int,
+    width: int,
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+    floor: float = 1e-3,
+) -> torch.Tensor:
+    require_int("height", height)
+    require_int("width", width)
+    require_finite_number("floor", floor)
+    if height <= 0 or width <= 0:
+        raise ValueError("height and width must be positive.")
+    if floor <= 0.0:
+        raise ValueError("floor must be positive.")
+
+    height_window = torch.hann_window(
+        height,
+        periodic=False,
+        device=device,
+        dtype=dtype,
+    )
+    width_window = torch.hann_window(
+        width,
+        periodic=False,
+        device=device,
+        dtype=dtype,
+    )
+    return torch.outer(height_window, width_window).clamp_min(floor)
 
 
 def tile_starts(size: int, *, tile_size: int, overlap: int) -> list[int]:

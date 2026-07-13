@@ -1,36 +1,30 @@
-import math
 from collections.abc import Mapping, Sequence
 
 import torch
-import torch.nn.functional as F
 
 from src.modeling.diffusion import DDPMProcess
-from src.pipelines.scaling.blending import blend_window
+from src.modeling.inference import freeze
 from src.pipelines.reconstruction.slices import (
     extract_slice,
     extract_slice_batch,
     replace_slice,
     replace_slice_batch,
-    select_slice_batch,
 )
-from src.pipelines.guidance.anchor_objective import anchor_loss, masked_anchor_loss
-from src.pipelines.guidance.preparation import build_anchor_targets, freeze_inference
-from src.pipelines.guidance.prior import sds_loss
-from src.pipelines.guidance.physics.diffusivity import DiffusivitySolver
-from src.pipelines.guidance.objective import descriptor_loss, sample_descriptor_loss
+from src.pipelines.guidance.sds.schedule import select_slice_batch
+from src.pipelines.guidance.conditioning.prepare import build_anchor_targets
+from src.pipelines.guidance.metrics.conductance import ConductanceSolver
+from src.pipelines.guidance.metrics.loss import descriptor_loss, sample_descriptor_loss
 from src.pipelines.guidance.conditioning.model import AnchorSlice
-from src.pipelines.scaling.tiles import normalize_tile_weights, tile_grid
-from src.pipelines.scaling.local_objective import (
-    _decode_tiled_image,
-    _decode_tiles,
-    _local_prior_objective,
-    _batch_prior_loss,
-    _mean_stats,
-    _record_stats,
+from src.pipelines.scaling.objective import (
+    batch_objective,
+    decode_slices,
+    slice_objective,
 )
-from src.pipelines.scaling.validation import _as_anchor_image, _tensor_map, _validate_inputs
-
-from src.common.tensors.validation import require_finite, require_float
+from src.pipelines.scaling.validation import (
+    as_anchor_image,
+    move_tensor_map,
+    validate_optimization,
+)
 
 
 def optimize_large_volume(
@@ -45,12 +39,12 @@ def optimize_large_volume(
     t_min: int,
     t_max: int,
     num_phases: int,
-    sds_batch_size: int = 1,
+    batch_size: int = 1,
     slice_schedule: Sequence[tuple[int, int]] | None = None,
     anchors: Sequence[AnchorSlice] | None = None,
     anchor_targets: Mapping[tuple[int, int], torch.Tensor] | None = None,
     anchor_masks: Mapping[tuple[int, int], torch.Tensor] | None = None,
-    anchor_segment: bool = False,
+    segment_anchors: bool = False,
     sds_weight: float = 1.0,
     anchor_weight: float = 0.0,
     vf_targets: Mapping[int, float] | torch.Tensor | None = None,
@@ -60,17 +54,17 @@ def optimize_large_volume(
     sa_targets: Mapping[int, float] | torch.Tensor | None = None,
     sa_weight: float = 0.0,
     diffusivity_targets: Mapping[int, float] | torch.Tensor | None = None,
-    diffusivity_solver: DiffusivitySolver | None = None,
+    diffusivity_solver: ConductanceSolver | None = None,
     diffusivity_weight: float = 0.0,
     descriptor_tile_size: int | None = None,
     temperature: float = 0.1,
     tile_overlap: int = 0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    _validate_inputs(
+    validate_optimization(
         volume,
         steps=steps,
         slice_steps=slice_steps,
-        sds_batch_size=sds_batch_size,
+        batch_size=batch_size,
         lr=lr,
         slice_schedule=slice_schedule,
         anchors=anchors,
@@ -95,26 +89,26 @@ def optimize_large_volume(
         anchors,
         volume_shape=volume.shape,
         num_phases=num_phases,
-        segment=anchor_segment,
+        segment=segment_anchors,
         device=volume.device,
         dtype=volume.dtype,
         tile_overlap=tile_overlap,
     )
     prepared_targets.update(
-        _tensor_map(
+        move_tensor_map(
             anchor_targets,
             device=volume.device,
             dtype=volume.dtype,
         )
     )
-    prepared_masks = _tensor_map(
+    prepared_masks = move_tensor_map(
         anchor_masks,
         device=volume.device,
         dtype=volume.dtype,
     )
 
-    freeze_inference(vae)
-    freeze_inference(diffusion_model)
+    freeze(vae)
+    freeze(diffusion_model)
 
     updated = volume.clone().float()
     history: dict[str, list[torch.Tensor]] = {}
@@ -124,7 +118,7 @@ def optimize_large_volume(
             updated,
             step,
             slice_schedule,
-            sds_batch_size,
+            batch_size,
         )
 
         if len(indices) == 1:
@@ -200,7 +194,7 @@ def optimize_large_volume(
             history.setdefault(key, []).append(value.detach())
 
     stats = {
-        key: torch.stack(values).mean()
+        f"history_{key}": torch.stack(values).mean(dim=0)
         for key, values in history.items()
         if values
     }
@@ -231,14 +225,16 @@ def _optimize_large_slice(
     sa_targets: Mapping[int, float] | torch.Tensor | None,
     sa_weight: float,
     diffusivity_targets: Mapping[int, float] | torch.Tensor | None,
-    diffusivity_solver: DiffusivitySolver | None,
+    diffusivity_solver: ConductanceSolver | None,
     diffusivity_weight: float,
     descriptor_tile_size: int | None,
     temperature: float,
     tile_overlap: int,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    target_image = _as_anchor_image(anchor_target) if anchor_target is not None else None
-    target_mask = _as_anchor_image(anchor_mask) if anchor_mask is not None else None
+    target_image = (
+        as_anchor_image(anchor_target) if anchor_target is not None else None
+    )
+    target_mask = as_anchor_image(anchor_mask) if anchor_mask is not None else None
 
     if descriptor_tile_size is not None and descriptor_tile_size != int(vae.image_size):
         raise ValueError("descriptor_tile_size must match vae.image_size.")
@@ -255,7 +251,7 @@ def _optimize_large_slice(
     for _ in range(steps):
         optimizer.zero_grad()
 
-        decoded, phase_probabilities, total, stats = _local_prior_objective(
+        decoded, phase_probabilities, total, stats = slice_objective(
             image_param,
             vae,
             diffusion_model,
@@ -302,15 +298,20 @@ def _optimize_large_slice(
         optimizer.step()
         with torch.no_grad():
             image_param.clamp_(0.0, float(num_phases - 1))
-        _record_stats(history, stats)
+        for key, value in stats.items():
+            history.setdefault(key, []).append(value.detach())
 
     with torch.no_grad():
-        decoded = _decode_tiled_image(
-            image_param.detach(),
+        decoded = decode_slices(
+            image_param.detach().unsqueeze(0),
             vae,
             tile_overlap=tile_overlap,
-        )
-    return decoded, _mean_stats(history)
+        )[0]
+    return decoded, {
+        key: torch.stack(values).mean(dim=0)
+        for key, values in history.items()
+        if values
+    }
 
 
 def _optimize_batch(
@@ -335,7 +336,7 @@ def _optimize_batch(
     sa_targets: Mapping[int, float] | torch.Tensor | None,
     sa_weight: float,
     diffusivity_targets: Mapping[int, float] | torch.Tensor | None,
-    diffusivity_solver: DiffusivitySolver | None,
+    diffusivity_solver: ConductanceSolver | None,
     diffusivity_weight: float,
     descriptor_tile_size: int | None,
     temperature: float,
@@ -362,7 +363,7 @@ def _optimize_batch(
     for _ in range(steps):
         optimizer.zero_grad()
 
-        decoded, phase_probabilities, total, stats = _batch_prior_loss(
+        decoded, phase_probabilities, total, stats = batch_objective(
             image_param,
             vae,
             diffusion_model,
@@ -413,13 +414,18 @@ def _optimize_batch(
         with torch.no_grad():
             image_param.clamp_(0.0, float(num_phases - 1))
 
-        _record_stats(history, stats)
+        for key, value in stats.items():
+            history.setdefault(key, []).append(value.detach())
 
     with torch.no_grad():
-        decoded = _decode_tiles(
+        decoded = decode_slices(
             image_param.detach(),
             vae,
             tile_overlap=tile_overlap,
         )
 
-    return decoded, _mean_stats(history)
+    return decoded, {
+        key: torch.stack(values).mean(dim=0)
+        for key, values in history.items()
+        if values
+    }
