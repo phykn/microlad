@@ -7,6 +7,7 @@ def sample_slices(
     count: int,
     crop_size: int,
 ) -> torch.Tensor:
+    """Samples balanced XY, XZ, and YZ latent crops."""
     if volume.ndim != 5:
         raise ValueError("latent volume must have shape [B, C, D, H, W].")
     if count <= 0 or crop_size <= 0:
@@ -21,7 +22,7 @@ def sample_slices(
         )
         plane = volume[batch].select(axis + 1, index)
         if min(plane.shape[-2:]) < crop_size:
-            raise ValueError("generated latent slices are smaller than crop_size.")
+            raise ValueError("latent slices are smaller than crop_size.")
         max_row = int(plane.shape[-2]) - crop_size
         max_col = int(plane.shape[-1]) - crop_size
         row = int(torch.randint(0, max_row + 1, (), device=volume.device).item())

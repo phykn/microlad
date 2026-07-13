@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.pipelines.guidance.sds.schedule import (
+from src.pipelines.scaling.schedule import (
     build_balanced_schedule,
     select_slice,
     select_slice_batch,

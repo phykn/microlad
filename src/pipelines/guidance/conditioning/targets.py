@@ -175,6 +175,8 @@ def _validate_options(
     require_finite_number("low_phase_conductivity", low_phase_conductivity)
     if low_phase_conductivity < 0.0 or low_phase_conductivity > 1.0:
         raise ValueError("low_phase_conductivity must be between 0 and 1.")
+
+
 def _diffusivity_shape(size: int | tuple[int, int] | None) -> tuple[int, int]:
     if size is None:
         raise ValueError(

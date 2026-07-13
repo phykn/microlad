@@ -130,6 +130,23 @@ class PredictSamplerTest(unittest.TestCase):
         self.assertTrue(torch.equal(latent, base))
         self.assertEqual(ddpm.steps, [2, 1, 0])
 
+    def test_sample_lmpdd_shows_optional_progress(self):
+        sampler = DiffusionSampler(
+            RecordingDenoiser(),
+            IdentityDDPM(timesteps=2),
+            device="cpu",
+        )
+
+        with patch(
+            "src.modeling.diffusion.sampler.tqdm",
+            side_effect=lambda iterable, **_: iterable,
+        ) as progress:
+            sampler.sample_lmpdd((2, 1, 2, 2), progress=True)
+
+        self.assertEqual(progress.call_args.kwargs["total"], 2)
+        self.assertEqual(progress.call_args.kwargs["desc"], "L-MPDD")
+        self.assertFalse(progress.call_args.kwargs["disable"])
+
     def test_sample_lmpdd_blends_anchor_latent(self):
         sampler = DiffusionSampler(
             RecordingDenoiser(),

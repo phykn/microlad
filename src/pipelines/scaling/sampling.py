@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 
 import torch
+from tqdm import tqdm
 
 from src.pipelines.scaling.tiles import blend_window, tile_grid
 from src.validation import require_finite, require_float, require_int
@@ -18,12 +19,15 @@ def sample_large_lmpdd(
     batch_size: int = 16,
     anchor_latent: torch.Tensor | None = None,
     anchor_mask: torch.Tensor | None = None,
+    progress: bool = False,
 ) -> torch.Tensor:
     shape = _validate_latent_shape(latent_shape, tile_size=tile_size)
     num_timesteps = _validate_num_timesteps(ddpm)
     require_int("batch_size", batch_size)
     if batch_size <= 0:
         raise ValueError("batch_size must be positive.")
+    if not isinstance(progress, bool):
+        raise ValueError("progress must be a boolean.")
     device = torch.device(device)
 
     model = model.to(device)
@@ -38,7 +42,13 @@ def sample_large_lmpdd(
         anchor_mask=anchor_mask,
     )
 
-    for pass_index, step in enumerate(range(num_timesteps - 1, -1, -1)):
+    steps = tqdm(
+        range(num_timesteps - 1, -1, -1),
+        total=num_timesteps,
+        desc="Scale L-MPDD",
+        disable=not progress,
+    )
+    for pass_index, step in enumerate(steps):
         axis = pass_index % 3
         planes = _lmpdd_pass_to_planes(latent, axis)
         timesteps = torch.full(

@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 
 import torch
+from tqdm import tqdm
 
 from src.modeling.diffusion.process import DDPMProcess
 from src.validation import require_finite
@@ -54,12 +55,15 @@ class DiffusionSampler:
         anchor_latent: torch.Tensor | None = None,
         anchor_mask: torch.Tensor | None = None,
         axis_consensus: bool = False,
+        progress: bool = False,
     ) -> torch.Tensor:
         shape = self._validate_shape(shape)
         if shape[0] != shape[2] or shape[0] != shape[3]:
             raise ValueError("L-MPDD sampling requires a cubic latent shape.")
         if not isinstance(axis_consensus, bool):
             raise ValueError("axis_consensus must be a boolean.")
+        if not isinstance(progress, bool):
+            raise ValueError("progress must be a boolean.")
         self.model.eval()
 
         x = torch.randn(shape, device=self.device)
@@ -72,7 +76,13 @@ class DiffusionSampler:
 
         batch_size = shape[0]
         if axis_consensus:
-            for step in range(self.ddpm.num_timesteps - 1, -1, -1):
+            steps = tqdm(
+                range(self.ddpm.num_timesteps - 1, -1, -1),
+                total=self.ddpm.num_timesteps,
+                desc="L-MPDD",
+                disable=not progress,
+            )
+            for step in steps:
                 t = torch.full(
                     (batch_size,),
                     step,
@@ -86,7 +96,13 @@ class DiffusionSampler:
             return x
 
         rotations = 0
-        for step in range(self.ddpm.num_timesteps - 1, -1, -1):
+        steps = tqdm(
+            range(self.ddpm.num_timesteps - 1, -1, -1),
+            total=self.ddpm.num_timesteps,
+            desc="L-MPDD",
+            disable=not progress,
+        )
+        for step in steps:
             t = torch.full((batch_size,), step, dtype=torch.long, device=self.device)
             x = self.ddpm.p_sample(self.model, x, t)
 

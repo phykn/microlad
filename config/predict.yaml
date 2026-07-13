@@ -1,0 +1,61 @@
+progress: true
+
+prior:
+  weight: 1.0
+  t_min: 10
+  t_max: 200
+
+targets:
+  segment: false
+  vf_weight: 0.0
+  tpc_weight: 0.0
+  surface_area_weight: 0.0
+  diffusivity_weight: 0.0
+  diffusivity_grid_size: null
+  low_phase_conductivity: 0.0
+
+joint:
+  steps: 500
+  batch_size: 8
+  # Use null to decode each axis in one batch on a large-memory GPU.
+  decode_batch_size: 2
+  learning_rate: 0.0001
+  continuity_weight: 0.05
+  anchor_weight: 1.0
+  residual_scale: 0.25
+  preservation_weight: 5.0
+  checkpoint_every: 100
+
+critic:
+  steps: 1000
+  batch_size: 8
+  learning_rate: 0.0001
+  betas: [0.0, 0.9]
+  gradient_weight: 10.0
+  weight: 0.02
+  candidate_count: 3
+  min_margin: 0.0
+  min_damage_margin: 0.0
+
+scale:
+  overlap: 0.25
+  steps: 500
+  batch_size: 16
+  learning_rate: 0.01
+  slice_steps: 1
+  anchor_weight: 1.0
+  balanced_slices: true
+
+refine:
+  candidates: [0, 1, 2]
+  batch_size: 16
+  strength: 0.15
+  anchor_strength: 0.05
+
+quality:
+  strict: true
+  anchor_tolerance: 0.08
+  morphology_tolerance: 0.05
+  continuity_tolerance: 0.08
+  repeat_tolerance: 0.0
+  calibration_budget: 0.05

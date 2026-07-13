@@ -106,6 +106,17 @@ class ZeroDownsampleVAE(CategoricalVAE):
     downsample_factor = 0
 
 
+class DifferentiableVAE(torch.nn.Module):
+    latent_ch = 1
+    latent_size = 2
+    image_size = 2
+    downsample_factor = 1
+    num_phases = 2
+
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
+        return torch.softmax(torch.cat([-latent, latent], dim=1), dim=1)
+
+
 class PredictVolumeTest(unittest.TestCase):
     def test_decode_latent_returns_values_and_probabilities(self):
         values, probabilities = decode_latent(
@@ -160,6 +171,21 @@ class PredictVolumeTest(unittest.TestCase):
 
         self.assertEqual(probabilities.shape, torch.Size([1, 3, 4, 4, 4]))
         self.assertTrue(torch.allclose(probabilities.sum(dim=1), torch.ones(1, 4, 4, 4)))
+
+    def test_chunked_checkpoint_decode_preserves_values_and_gradients(self):
+        latent = torch.randn(1, 2, 2, 2, requires_grad=True)
+        expected = decode_volume_probs(DifferentiableVAE(), latent)
+        actual = decode_volume_probs(
+            DifferentiableVAE(),
+            latent,
+            plane_batch_size=1,
+            checkpoint_gradients=True,
+        )
+
+        self.assertTrue(torch.allclose(actual, expected))
+        actual[:, 1].mean().backward()
+        self.assertIsNotNone(latent.grad)
+        self.assertTrue(torch.isfinite(latent.grad).all())
 
     def test_generate_initial_volume_samples_and_decodes_without_gradients(self):
         sampler = FakeSampler()

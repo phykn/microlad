@@ -4,10 +4,13 @@ from pathlib import Path
 import yaml
 
 from src.app.api.options import (
-    SliceGANConditionConfig,
-    SliceGANConfig,
-    SliceGANRenderConfig,
-    SliceGANTrainConfig,
+    CriticConfig,
+    JointConfig,
+    PriorConfig,
+    QualityConfig,
+    RefineConfig,
+    ScaleConfig,
+    TargetConfig,
 )
 
 
@@ -62,29 +65,44 @@ def load_defaults(
     return _flatten_config(_load_mapping(config_path, label=label))
 
 
-def load_slicegan_config(config_path: str | Path) -> SliceGANConfig:
-    """Load the grouped conditional 3D generation settings from YAML."""
+def load_predict_config(config_path: str | Path) -> dict:
+    """Loads grouped prediction settings from YAML."""
 
-    values = _load_mapping(config_path, label="SliceGAN config")
-    train = values.pop("train", {})
-    condition = values.pop("condition", {})
-    render = values.pop("render", {})
-    for name, section in (
-        ("train", train),
-        ("condition", condition),
-        ("render", render),
-    ):
+    values = _load_mapping(config_path, label="prediction config")
+    classes = {
+        "prior": PriorConfig,
+        "targets": TargetConfig,
+        "joint": JointConfig,
+        "critic": CriticConfig,
+        "scale": ScaleConfig,
+        "refine": RefineConfig,
+        "quality": QualityConfig,
+    }
+    unknown = sorted(set(values) - set(classes) - {"progress"})
+    if unknown:
+        raise ValueError(f"prediction config contains unknown sections: {unknown}")
+
+    config = {}
+    if "progress" in values:
+        if not isinstance(values["progress"], bool):
+            raise ValueError("prediction config progress must be a boolean.")
+        config["progress"] = values["progress"]
+    for name, cls in classes.items():
+        section = values.get(name, {})
         if not isinstance(section, dict):
-            raise ValueError(f"SliceGAN config {name} must contain a mapping.")
-    try:
-        return SliceGANConfig(
-            train=SliceGANTrainConfig(**train),
-            condition=SliceGANConditionConfig(**condition),
-            render=SliceGANRenderConfig(**render),
-            **values,
-        )
-    except TypeError as exc:
-        raise ValueError(f"SliceGAN config contains an unknown setting: {exc}") from exc
+            raise ValueError(f"prediction config {name} must contain a mapping.")
+        section = dict(section)
+        if name == "critic" and "betas" in section:
+            section["betas"] = tuple(section["betas"])
+        if name == "refine" and "candidates" in section:
+            section["candidates"] = tuple(section["candidates"])
+        try:
+            config[name] = cls(**section)
+        except TypeError as exc:
+            raise ValueError(
+                f"prediction config {name} contains an unknown setting: {exc}"
+            ) from exc
+    return config
 
 
 def save_run_config(run_dir: str | Path, args: argparse.Namespace, name: str) -> None:

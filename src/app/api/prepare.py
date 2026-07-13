@@ -68,15 +68,8 @@ def prepare_prediction(
         volume_size,
     ):
         raise ValueError("anchor image size must match vae.image_size or volume_size.")
-
-    if (
-        options.slicegan is not None
-        and condition_size is not None
-        and condition_size != image_size
-    ):
-        raise ValueError(
-            "conditional SliceGAN anchor images must match vae.image_size."
-        )
+    if volume_size < image_size:
+        raise ValueError("volume_size must be at least vae.image_size.")
 
     if volume_size > image_size and anchors:
         validate_anchor_positions(
@@ -92,43 +85,39 @@ def prepare_prediction(
             )
 
     descriptor_targets = uses_descriptor_targets(options)
-    joint_targets = uses_joint_targets(options)
-    target_losses = descriptor_targets or joint_targets
-    if options.slicegan is not None and target_losses:
+    base_size = volume_size == image_size
+    active_steps = options.joint.steps if base_size else options.scale.steps
+    if base_size and anchors and active_steps <= 0:
+        raise ValueError("base-size anchors require joint.steps to be positive.")
+    has_guidance = descriptor_targets or options.phase_fractions is not None
+    if has_guidance and active_steps <= 0:
         raise ValueError(
-            "descriptor target losses are not used by conditional SliceGAN."
+            "phase fractions require active guidance steps."
         )
-    if joint_targets and options.joint.steps <= 0:
-        raise ValueError("joint reference weights require joint.steps to be positive.")
-    has_guidance = target_losses or options.phase_fractions is not None
-    if (
-        has_guidance
-        and options.slicegan is None
-        and options.sds.steps <= 0
-        and options.joint.steps <= 0
-    ):
-        raise ValueError(
-            "phase fractions and target losses require sds.steps or "
-            "joint.steps to be positive."
-        )
-    if target_losses and target_labels is None:
-        raise ValueError("target_images are required when target losses are enabled.")
+    if descriptor_targets and target_labels is None:
+        raise ValueError("target_images are required for descriptor target losses.")
+    if base_size and options.critic.steps > 0 and target_labels is None and not anchors:
+        raise ValueError("critic training requires target_images or anchors.")
+    target_consumer = descriptor_targets or (
+        base_size and options.critic.steps > 0
+    )
+    if target_labels is not None and not target_consumer:
+        raise ValueError("target_images require an enabled target or critic setting.")
     t_max: int | None = None
-    if options.sds.steps > 0 or options.joint.steps > 0:
+    if active_steps > 0:
         t_max = resolve_t_max(options, num_timesteps)
 
     descriptor_tile_size: int | None = None
-    if target_losses and options.sds.steps > 0:
-        assert target_labels is not None
+    if target_labels is not None:
         height, width = map(int, target_labels.shape[-2:])
         if height != width:
-            raise ValueError("scale-up target images must be square.")
+            raise ValueError("target images must be square.")
         target_size = height
-        if volume_size == image_size and target_size != image_size:
+        if base_size and target_size != image_size:
             raise ValueError("target images must match vae.image_size.")
-        if volume_size != image_size:
+        if not base_size:
             if target_size == image_size:
-                descriptor_tile_size = target_size
+                descriptor_tile_size = target_size if descriptor_targets else None
             elif target_size != volume_size:
                 raise ValueError(
                     "scale-up target images must match vae.image_size or volume_size."
@@ -146,27 +135,10 @@ def resolve_t_max(options: PredictOptions, num_timesteps: int) -> int:
     return t_max
 
 
-def uses_image_targets(options: PredictOptions) -> bool:
-    return uses_descriptor_targets(options) or uses_joint_targets(options)
-
-
 def uses_descriptor_targets(options: PredictOptions) -> bool:
     return (
         (options.targets.vf_weight > 0.0 and options.phase_fractions is None)
         or options.targets.tpc_weight > 0.0
         or options.targets.surface_area_weight > 0.0
         or options.targets.diffusivity_weight > 0.0
-    )
-
-
-def uses_joint_targets(options: PredictOptions) -> bool:
-    return any(
-        weight > 0.0
-        for weight in (
-            options.joint.transition_weight,
-            options.joint.run_weight,
-            options.joint.patch_weight,
-            options.joint.texture_weight,
-            options.joint.interface_weight,
-        )
     )

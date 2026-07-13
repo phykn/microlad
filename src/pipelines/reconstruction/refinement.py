@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 
 from src.modeling.phases.calibration import probabilities_to_calibrated_labels
 from src.modeling.phases.representation import geometric_probability_consensus
@@ -12,6 +13,32 @@ def refine_volume(
     *,
     steps: int,
     batch_size: int = 16,
+) -> torch.Tensor:
+    require_int("steps", steps)
+    if steps == 0:
+        return volume.float()
+    probabilities = refine_probabilities(
+        volume,
+        vae,
+        steps=steps,
+        batch_size=batch_size,
+    )
+    return probabilities_to_calibrated_labels(
+        probabilities,
+        int(vae.num_phases),
+    )[0, 0].float()
+
+
+@torch.no_grad()
+def refine_probabilities(
+    volume: torch.Tensor,
+    vae: torch.nn.Module,
+    *,
+    steps: int,
+    batch_size: int = 16,
+    strength: float = 1.0,
+    anchor_strength: float | None = None,
+    anchor_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     require_int("steps", steps)
     require_int("batch_size", batch_size)
@@ -29,20 +56,47 @@ def refine_volume(
     if not callable(getattr(vae, "decode_probs", None)):
         raise ValueError("volume refinement requires vae.decode_probs.")
 
+    if not 0.0 <= strength <= 1.0:
+        raise ValueError("strength must be between 0 and 1.")
+    if anchor_strength is None:
+        anchor_strength = strength
+    if not 0.0 <= anchor_strength <= 1.0:
+        raise ValueError("anchor_strength must be between 0 and 1.")
+
     refined = volume.float()
+    probabilities = F.one_hot(
+        refined.round().long(),
+        num_classes=num_phases,
+    ).movedim(-1, 0).unsqueeze(0).float()
     if steps == 0:
-        return refined
+        return probabilities
+
+    if anchor_mask is not None:
+        expected = (1, 1, *volume.shape)
+        if anchor_mask.shape != expected or anchor_mask.dtype != torch.bool:
+            raise ValueError(f"anchor_mask must be boolean with shape {expected}.")
+        anchor_mask = anchor_mask.to(device=volume.device)
 
     vae.eval()
     for _ in range(steps):
-        refined = _refine_once(
+        projected = _refine_once(
             refined,
             vae,
             num_phases=num_phases,
             batch_size=batch_size,
         )
+        blend = torch.full_like(probabilities[:, :1], strength)
+        if anchor_mask is not None:
+            blend = torch.where(
+                anchor_mask,
+                blend.new_full((), anchor_strength),
+                blend,
+            )
+        probabilities = probabilities * (1.0 - blend) + projected * blend
+        probabilities = probabilities / probabilities.sum(dim=1, keepdim=True)
+        refined = probabilities.argmax(dim=1)[0].float()
 
-    return refined
+    return probabilities
 
 
 def _refine_once(
@@ -73,11 +127,10 @@ def _refine_once(
         batch_size=batch_size,
     ).permute(1, 2, 3, 0)
 
-    probabilities = geometric_probability_consensus(
+    return geometric_probability_consensus(
         torch.stack([depth_probs, height_probs, width_probs]),
         num_phases,
     ).unsqueeze(0)
-    return probabilities_to_calibrated_labels(probabilities, num_phases)[0, 0].float()
 
 
 def _encode_decode_probs(

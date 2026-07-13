@@ -6,7 +6,7 @@ from src.validation import require_finite
 
 def sds_loss(
     latent: torch.Tensor,
-    model: torch.nn.Module,
+    denoiser: torch.nn.Module,
     ddpm: DDPMProcess,
     *,
     t_min: int,
@@ -46,12 +46,12 @@ def sds_loss(
     noisy_latent = ddpm.q_sample(latent, t, noise=noise)
 
     with torch.no_grad():
-        pred_noise = model(noisy_latent, t)
+        pred_noise = denoiser(noisy_latent, t)
 
     if pred_noise.shape != latent.shape:
-        raise ValueError("model output must have the same shape as latent.")
+        raise ValueError("denoiser output must have the same shape as latent.")
 
-    require_finite("model output", pred_noise)
+    require_finite("denoiser output", pred_noise)
 
     sigma = ddpm.sqrt_one_minus_alphas_cumprod[t].view(
         (latent.shape[0],) + (1,) * (latent.ndim - 1)

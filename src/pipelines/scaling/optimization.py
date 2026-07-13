@@ -1,6 +1,7 @@
 from collections.abc import Mapping, Sequence
 
 import torch
+from tqdm import tqdm
 
 from src.modeling.diffusion import DDPMProcess
 from src.modeling.inference import freeze
@@ -10,7 +11,7 @@ from src.pipelines.reconstruction.slices import (
     replace_slice,
     replace_slice_batch,
 )
-from src.pipelines.guidance.sds.schedule import select_slice_batch
+from src.pipelines.scaling.schedule import select_slice_batch
 from src.pipelines.guidance.conditioning.prepare import build_anchor_targets
 from src.pipelines.guidance.metrics.conductance import ConductanceSolver
 from src.pipelines.guidance.metrics.loss import descriptor_loss, sample_descriptor_loss
@@ -59,6 +60,7 @@ def optimize_large_volume(
     descriptor_tile_size: int | None = None,
     temperature: float = 0.1,
     tile_overlap: int = 0,
+    progress: bool = False,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     validate_optimization(
         volume,
@@ -113,7 +115,15 @@ def optimize_large_volume(
     updated = volume.clone().float()
     history: dict[str, list[torch.Tensor]] = {}
 
-    for step in range(steps):
+    if not isinstance(progress, bool):
+        raise ValueError("progress must be a boolean.")
+    step_range = tqdm(
+        range(steps),
+        total=steps,
+        desc="Scale guidance",
+        disable=not progress,
+    )
+    for step in step_range:
         axis, indices = select_slice_batch(
             updated,
             step,

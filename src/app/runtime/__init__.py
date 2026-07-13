@@ -1,5 +1,5 @@
 from src.app.runtime.config import load_defaults as load_defaults
-from src.app.runtime.config import load_slicegan_config as load_slicegan_config
+from src.app.runtime.config import load_predict_config as load_predict_config
 from src.app.runtime.config import save_run_config as save_run_config
 from src.app.runtime.data import build_dataset as build_dataset
 from src.app.runtime.data import build_loader as build_loader

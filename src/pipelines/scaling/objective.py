@@ -8,7 +8,7 @@ from src.modeling.phases.calibration import probabilities_to_calibrated_labels
 from src.pipelines.guidance.conditioning.loss import anchor_loss
 from src.pipelines.guidance.metrics.loss import descriptor_loss, sample_descriptor_loss
 from src.pipelines.guidance.metrics.conductance import ConductanceSolver
-from src.pipelines.guidance.sds.prior import sds_loss
+from src.pipelines.guidance.prior import sds_loss
 from src.pipelines.reconstruction.volume import (
     decode_latent,
     decode_latents,

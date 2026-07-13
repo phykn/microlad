@@ -83,7 +83,7 @@ def select_slice_batch(
             except ValueError as exc:
                 raise ValueError(f"slice_schedule {exc}") from exc
         if any(axis != axes[0] for axis in axes):
-            raise ValueError("batched SDS slices must use the same axis.")
+            raise ValueError("batched scale slices must use the same axis.")
 
         axis = axes[0]
         indices = [index for _, index in entries]
@@ -105,7 +105,7 @@ def select_slice_batch(
     except ValueError as exc:
         raise ValueError(f"slice_schedule {exc}") from exc
     if len(set(indices)) != len(indices):
-        raise ValueError("batched SDS slices must be unique.")
+        raise ValueError("batched scale slices must be unique.")
 
     return axis, indices
 
@@ -129,9 +129,9 @@ def build_anchor_schedule(
     if not shifted or steps <= 0:
         return None
     if batch_size <= 0:
-        raise ValueError("sds.batch_size must be positive.")
+        raise ValueError("scale.batch_size must be positive.")
     if batch_size > volume_size:
-        raise ValueError("sds.batch_size cannot exceed volume_size.")
+        raise ValueError("scale.batch_size cannot exceed volume_size.")
 
     remaining = [(int(axis), int(index)) for axis, index in shifted]
     schedule: list[tuple[int, int]] = []
@@ -168,7 +168,7 @@ def build_anchor_schedule(
                 None,
             )
             if index is None:
-                raise ValueError("sds.batch_size cannot exceed volume_size.")
+                raise ValueError("scale.batch_size cannot exceed volume_size.")
             group.append((axis, index))
             used_indices.add(index)
 
@@ -186,12 +186,13 @@ def build_balanced_schedule(
     if steps <= 0:
         return None
     if batch_size <= 0:
-        raise ValueError("sds.batch_size must be positive.")
+        raise ValueError("scale.batch_size must be positive.")
     if batch_size > volume_size:
-        raise ValueError("sds.batch_size cannot exceed volume_size.")
+        raise ValueError("scale.batch_size cannot exceed volume_size.")
     if volume_size % batch_size != 0:
         raise ValueError(
-            "balanced SDS requires volume_size to be divisible by sds.batch_size."
+            "balanced scale guidance requires volume_size to be divisible by "
+            "scale.batch_size."
         )
 
     batches_per_axis = volume_size // batch_size

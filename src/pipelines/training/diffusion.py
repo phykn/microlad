@@ -3,7 +3,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-from tqdm.auto import tqdm
+from tqdm import tqdm
 
 from src.pipelines.training.misc.distributed import is_main_process, unwrap_model
 from src.pipelines.training.misc.run import (

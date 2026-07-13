@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from src.modeling.phases.calibration import probabilities_to_calibrated_labels
 from src.modeling.phases.representation import (
@@ -19,6 +20,26 @@ def generate_initial_volume(
     anchor_mask: torch.Tensor | None = None,
     axis_consensus: bool = False,
 ) -> torch.Tensor:
+    latent = sample_latent(
+        sampler,
+        vae,
+        anchor_latent=anchor_latent,
+        anchor_mask=anchor_mask,
+        axis_consensus=axis_consensus,
+    )
+    return decode_volume(vae, latent)
+
+
+@torch.no_grad()
+def sample_latent(
+    sampler,
+    vae: torch.nn.Module,
+    *,
+    anchor_latent: torch.Tensor | None = None,
+    anchor_mask: torch.Tensor | None = None,
+    axis_consensus: bool = False,
+    progress: bool = False,
+) -> torch.Tensor:
     latent_ch = int(vae.latent_ch)
     latent_size = int(vae.latent_size)
     vae.eval()
@@ -28,9 +49,9 @@ def generate_initial_volume(
         anchor_latent=anchor_latent,
         anchor_mask=anchor_mask,
         axis_consensus=axis_consensus,
+        progress=progress,
     )
-    latent = latent_batch.permute(1, 0, 2, 3).contiguous()
-    return decode_volume(vae, latent)
+    return latent_batch.permute(1, 0, 2, 3).contiguous()
 
 
 def decode_latent(
@@ -87,12 +108,13 @@ def decode_volume(
     )[0, 0].float()
 
 
-@torch.no_grad()
 def decode_volume_probs(
     vae: torch.nn.Module,
     latent: torch.Tensor,
     *,
     num_phases: int | None = None,
+    plane_batch_size: int | None = None,
+    checkpoint_gradients: bool = False,
 ) -> torch.Tensor:
     _validate_latent_volume(vae, latent)
     vae.eval()
@@ -100,6 +122,12 @@ def decode_volume_probs(
     if num_phases is None:
         num_phases = getattr(vae, "num_phases", None)
     _validate_decoder(vae, num_phases)
+    if plane_batch_size is not None:
+        require_int("plane_batch_size", plane_batch_size)
+        if plane_batch_size <= 0:
+            raise ValueError("plane_batch_size must be positive.")
+    if not isinstance(checkpoint_gradients, bool):
+        raise ValueError("checkpoint_gradients must be a boolean.")
 
     output_size = int(latent.shape[1]) * get_downsample_factor(vae)
     latent_batches = (
@@ -107,10 +135,29 @@ def decode_volume_probs(
         latent.permute(2, 0, 1, 3).contiguous(),
         latent.permute(3, 0, 1, 2).contiguous(),
     )
-    probability_planes = [
-        decode_latents(vae, batch, num_phases=num_phases)[1]
-        for batch in latent_batches
-    ]
+    probability_planes = []
+    for latent_batch in latent_batches:
+        chunk_size = plane_batch_size or int(latent_batch.shape[0])
+        decoded_chunks = []
+        for latent_chunk in latent_batch.split(chunk_size):
+            if checkpoint_gradients and torch.is_grad_enabled():
+                decoded = checkpoint(
+                    lambda values: decode_latents(
+                        vae,
+                        values,
+                        num_phases=num_phases,
+                    )[1],
+                    latent_chunk,
+                    use_reentrant=False,
+                )
+            else:
+                decoded = decode_latents(
+                    vae,
+                    latent_chunk,
+                    num_phases=num_phases,
+                )[1]
+            decoded_chunks.append(decoded)
+        probability_planes.append(torch.cat(decoded_chunks))
 
     depth_probs = interpolate_phase_planes(
         probability_planes[0],

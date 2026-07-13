@@ -8,7 +8,7 @@ def critic_loss(
     *,
     gradient_weight: float = 10.0,
 ) -> torch.Tensor:
-    """Return the WGAN-GP critic objective used by SliceGAN."""
+    """Computes the WGAN-GP critic objective."""
     if gradient_weight < 0.0:
         raise ValueError("gradient_weight must be non-negative.")
     if real_scores.numel() == 0 or fake_scores.numel() == 0:
@@ -16,15 +16,11 @@ def critic_loss(
     if penalty.ndim != 0:
         raise ValueError("penalty must be a scalar tensor.")
 
-    return (
-        fake_scores.mean()
-        - real_scores.mean()
-        + gradient_weight * penalty
-    )
+    return fake_scores.mean() - real_scores.mean() + gradient_weight * penalty
 
 
-def generator_loss(fake_scores: torch.Tensor) -> torch.Tensor:
-    """Return the Wasserstein generator objective used by SliceGAN."""
+def guidance_loss(fake_scores: torch.Tensor) -> torch.Tensor:
+    """Encourages latent slices to receive higher critic scores."""
     if fake_scores.numel() == 0:
         raise ValueError("critic scores must not be empty.")
     return -fake_scores.mean()
@@ -35,7 +31,7 @@ def gradient_penalty(
     real: torch.Tensor,
     fake: torch.Tensor,
 ) -> torch.Tensor:
-    """Penalize critic gradients along real/fake interpolations."""
+    """Penalizes critic gradients along real/fake interpolations."""
     if real.shape != fake.shape:
         raise ValueError("real and fake batches must have the same shape.")
     if real.ndim != 4 or real.shape[0] <= 0:

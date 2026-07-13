@@ -123,25 +123,44 @@ Load a trained run folder and call `predict`:
 
 ```python
 from src.app.api import AnchorSlice, PredictOptions
-from src.app.runtime import load_predictor, load_slicegan_config
+from src.app.runtime import load_predict_config, load_predictor
 
 predictor = load_predictor("run/20260628-xxxxxx", device="cuda")
 
 options = PredictOptions(
     num_phases=3,
     phase_fractions=(0.28, 0.12, 0.60),
-    slicegan=load_slicegan_config("config/slicegan.yaml"),
+    **load_predict_config("config/predict.yaml"),
 )
 
 anchor = AnchorSlice(image=anchor_image, axis=0, index=32)
 volume, stats = predictor.predict(options, anchors=[anchor])
 ```
 
-`config/slicegan.yaml` groups training, anchor conditioning, and large-volume rendering settings. Normal prediction code only selects that config instead of listing every optimization parameter.
+`config/predict.yaml` groups the L-MPDD prior, base-size latent refinement,
+online critic, final quality gates, and scale-up settings. Prediction always starts
+from an L-MPDD latent; the critic and residual refiner improve that same candidate
+instead of replacing it with a separate generator.
 
-Anchors are full 2D slices assigned to a volume axis and index. Conditional SliceGAN uses them as constraints; generated values are not forcibly overwritten.
+`joint.decode_batch_size` controls decoder memory use. Keep a positive batch size
+for chunked decoding with gradient checkpointing, or set it to `null` to decode
+each axis in one batch on a large-memory GPU.
 
-For scale-up, pass a larger `volume_size` or provide larger anchor slices. SDS descriptor targets live under `TargetConfig`, for example `targets=TargetConfig(vf_weight=1.0, tpc_weight=1.0)`.
+Prediction progress is shown by default for L-MPDD sampling, critic warm-up,
+Joint guidance, and scale-up guidance. Set `progress: false` in the prediction
+config to hide every progress bar. The plain-text critic bar reports loss and
+margin; Joint reports total loss and active anchor, critic, and fraction losses.
+
+Anchors are full 2D slices assigned to a volume axis and index. They are soft
+decoded constraints, so target labels are not forcibly copied into the result.
+Multiple-axis anchor intersections must request compatible categorical labels.
+
+For scale-up, pass a larger `volume_size`; the `scale` section controls its tiled
+L-MPDD guidance. Reference descriptor targets live under `TargetConfig`, for
+example `targets=TargetConfig(vf_weight=1.0, tpc_weight=1.0)`.
+
+The full pipeline design and scale-up boundary are documented in
+[`PIPELINE.md`](PIPELINE.md).
 
 ## Reference
 

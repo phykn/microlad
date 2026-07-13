@@ -1,28 +1,19 @@
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
 
 from src.app.api import AnchorSlice
 from src.modeling.diffusion import DDPMProcess
-from src.pipelines.guidance.joint.loss import (
-    axis_transition_loss,
-    interface_loss,
-    texture_loss,
-)
-from src.pipelines.guidance.joint.optimize import optimize_joint_volume
+from src.pipelines.guidance.joint.model import LatentRefiner
+from src.pipelines.guidance.joint.optimize import optimize_latent
 from src.pipelines.guidance.joint.slices import (
-    all_slices,
     extract_slices,
     phase_values,
     select_slices,
 )
-from src.pipelines.guidance.joint.targets import (
-    interface_target,
-    run_target,
-    texture_targets,
-    transition_target,
-)
+from src.pipelines.reconstruction.volume import decode_volume_probs
 
 
 class IdentityCategoricalVAE(torch.nn.Module):
@@ -30,29 +21,162 @@ class IdentityCategoricalVAE(torch.nn.Module):
     latent_size = 2
     latent_ch = 1
     num_phases = 2
-
-    def encode(self, image: torch.Tensor):
-        return image.clone(), torch.zeros_like(image)
+    downsample_factor = 1
 
     def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
         return torch.softmax(torch.cat([-latent, latent], dim=1), dim=1)
 
 
 class ZeroNoiseModel(torch.nn.Module):
-    def forward(self, latent: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def forward(self, latent: torch.Tensor, timestep: torch.Tensor) -> torch.Tensor:
         return torch.zeros_like(latent)
 
 
-class PatchCategoricalVAE(IdentityCategoricalVAE):
-    image_size = 16
-    latent_size = 16
+class FakeProgress:
+    instances = []
+
+    def __init__(self, iterable, **kwargs) -> None:
+        self.iterable = iterable
+        self.kwargs = kwargs
+        self.postfixes = []
+        self.__class__.instances.append(self)
+
+    def __iter__(self):
+        return iter(self.iterable)
+
+    def set_postfix(self, values) -> None:
+        self.postfixes.append(values)
 
 
 class JointOptimizationTest(unittest.TestCase):
-    def test_joint_rejects_fractional_volume_labels(self):
-        with self.assertRaisesRegex(ValueError, "integer phase values"):
-            optimize_joint_volume(
-                torch.full((2, 2, 2), 0.5),
+    def test_zero_initialized_refiner_preserves_lmpdd_latent(self):
+        latent = torch.randn(1, 2, 2, 2).unsqueeze(0)
+        refiner = LatentRefiner(1, scale=0.25)
+
+        refined = refiner(latent)
+
+        self.assertTrue(torch.equal(refined, latent))
+
+    def test_zero_steps_returns_only_original_latent(self):
+        latent = torch.randn(1, 2, 2, 2)
+
+        candidates, stats = optimize_latent(
+            latent,
+            IdentityCategoricalVAE(),
+            ZeroNoiseModel(),
+            DDPMProcess(timesteps=4),
+            steps=0,
+            batch_size=2,
+            lr=0.1,
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertTrue(torch.equal(candidates[0], latent))
+        self.assertEqual(stats["joint_candidate_steps"].tolist(), [0])
+
+    def test_unlimited_decode_batch_disables_checkpointing(self):
+        latent = torch.randn(1, 2, 2, 2)
+
+        with patch(
+            "src.pipelines.guidance.joint.optimize.decode_volume_probs",
+            wraps=decode_volume_probs,
+        ) as decode:
+            optimize_latent(
+                latent,
+                IdentityCategoricalVAE(),
+                ZeroNoiseModel(),
+                DDPMProcess(timesteps=4),
+                steps=1,
+                batch_size=2,
+                decode_batch_size=None,
+                lr=0.1,
+                t_min=1,
+                t_max=3,
+                num_phases=2,
+            )
+
+        self.assertIsNone(decode.call_args.kwargs["plane_batch_size"])
+        self.assertFalse(decode.call_args.kwargs["checkpoint_gradients"])
+
+    def test_joint_progress_shows_live_condition_losses(self):
+        anchor = AnchorSlice(
+            image=np.ones((2, 2), dtype=np.uint8),
+            axis=0,
+            index=1,
+        )
+        FakeProgress.instances = []
+
+        with patch(
+            "src.pipelines.guidance.joint.optimize.tqdm",
+            FakeProgress,
+        ):
+            optimize_latent(
+                torch.zeros(1, 2, 2, 2),
+                IdentityCategoricalVAE(),
+                ZeroNoiseModel(),
+                DDPMProcess(timesteps=4),
+                steps=1,
+                batch_size=2,
+                lr=0.1,
+                t_min=1,
+                t_max=3,
+                num_phases=2,
+                anchors=[anchor],
+                anchor_weight=1.0,
+                vf_targets=torch.tensor([0.5, 0.5]),
+                vf_weight=1.0,
+                progress=True,
+            )
+
+        progress = FakeProgress.instances[0]
+        self.assertEqual(progress.kwargs["desc"], "Joint guidance")
+        self.assertEqual(
+            set(progress.postfixes[-1]),
+            {"loss", "anchor", "vf"},
+        )
+
+    def test_joint_anchor_loss_changes_decoded_anchor_without_copying(self):
+        torch.manual_seed(0)
+        vae = IdentityCategoricalVAE()
+        latent = torch.zeros(1, 2, 2, 2)
+        anchor = AnchorSlice(
+            image=np.ones((2, 2), dtype=np.uint8),
+            axis=0,
+            index=1,
+        )
+        before = decode_volume_probs(vae, latent)[0, 1, 1].mean()
+
+        candidates, stats = optimize_latent(
+            latent,
+            vae,
+            ZeroNoiseModel(),
+            DDPMProcess(timesteps=4),
+            steps=12,
+            batch_size=2,
+            lr=0.1,
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            anchors=[anchor],
+            anchor_weight=1.0,
+            sds_weight=0.0,
+            continuity_weight=0.0,
+            preservation_weight=0.0,
+            checkpoint_every=6,
+        )
+
+        after = decode_volume_probs(vae, candidates[-1])[0, 1, 1].mean()
+        self.assertGreater(float(after), float(before))
+        self.assertIn("history_anchor", stats)
+        self.assertEqual(stats["joint_candidate_steps"].tolist(), [0, 6, 12])
+
+    def test_invalid_latent_shape_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "joint latent"):
+            optimize_latent(
+                torch.zeros(1, 2, 2),
                 IdentityCategoricalVAE(),
                 ZeroNoiseModel(),
                 DDPMProcess(timesteps=4),
@@ -88,264 +212,14 @@ class JointOptimizationTest(unittest.TestCase):
         self.assertTrue(torch.equal(xz[0], values[:, :, 1, :]))
         self.assertTrue(torch.equal(yz[0], values[:, :, :, 1]))
 
-    def test_all_axis_slices_include_every_plane_from_every_axis(self):
-        values = torch.arange(2 * 3 * 3 * 3).reshape(2, 3, 3, 3).float()
-
-        slices = all_slices(values)
-
-        self.assertEqual(slices.shape, torch.Size([9, 2, 3, 3]))
-        for axis in range(3):
-            expected = extract_slices(
-                values,
-                axis=axis,
-                indices=[0, 1, 2],
-            )
-            self.assertTrue(torch.equal(slices[axis * 3 : (axis + 1) * 3], expected))
-
-    def test_straight_through_values_are_categorical_with_soft_gradients(self):
-        probabilities = torch.tensor(
-            [[[[0.6]], [[0.4]]]],
-            requires_grad=True,
-        )
+    def test_straight_through_values_keep_soft_gradients(self):
+        probabilities = torch.tensor([[[[0.6]], [[0.4]]]], requires_grad=True)
 
         values = phase_values(probabilities, num_phases=2)
         values.sum().backward()
 
         self.assertEqual(float(values.item()), 0.0)
-        self.assertIsNotNone(probabilities.grad)
         self.assertGreater(float(probabilities.grad.abs().sum()), 0.0)
-
-    def test_joint_output_matches_condition_phase_fraction(self):
-        initial = torch.tensor(
-            [[[0.0, 0.0], [1.0, 1.0]], [[0.0, 0.0], [1.0, 1.0]]]
-        )
-        updated, stats = optimize_joint_volume(
-            initial,
-            IdentityCategoricalVAE(),
-            ZeroNoiseModel(),
-            DDPMProcess(timesteps=4),
-            steps=0,
-            batch_size=2,
-            lr=0.1,
-            t_min=1,
-            t_max=3,
-            num_phases=2,
-            vf_targets=torch.tensor([0.5, 0.5]),
-            entropy_weight=0.0,
-            continuity_weight=0.0,
-        )
-
-        counts = torch.bincount(updated.to(torch.long).flatten(), minlength=2)
-        self.assertTrue(torch.equal(counts, torch.tensor([4, 4])))
-        self.assertEqual(int(stats["joint_steps"]), 0)
-
-    def test_joint_anchor_loss_updates_shared_anchor_plane(self):
-        torch.manual_seed(0)
-        anchor = AnchorSlice(
-            image=np.ones((2, 2), dtype=np.uint8),
-            axis=0,
-            index=1,
-        )
-
-        updated, stats = optimize_joint_volume(
-            torch.zeros(2, 2, 2),
-            IdentityCategoricalVAE(),
-            ZeroNoiseModel(),
-            DDPMProcess(timesteps=4),
-            steps=20,
-            batch_size=2,
-            lr=0.2,
-            t_min=1,
-            t_max=3,
-            num_phases=2,
-            anchors=[anchor],
-            anchor_weight=1.0,
-            sds_weight=0.0,
-            entropy_weight=0.0,
-            continuity_weight=0.0,
-        )
-
-        self.assertTrue(torch.all(updated[1] == 1))
-        self.assertIn("history_anchor", stats)
-
-    def test_joint_anchor_is_not_hard_copied_without_optimization(self):
-        anchor = AnchorSlice(
-            image=np.ones((2, 2), dtype=np.uint8),
-            axis=0,
-            index=1,
-        )
-
-        updated, _ = optimize_joint_volume(
-            torch.zeros(2, 2, 2),
-            IdentityCategoricalVAE(),
-            ZeroNoiseModel(),
-            DDPMProcess(timesteps=4),
-            steps=0,
-            batch_size=2,
-            lr=0.2,
-            t_min=1,
-            t_max=3,
-            num_phases=2,
-            anchors=[anchor],
-            anchor_weight=1.0,
-            sds_weight=0.0,
-            entropy_weight=0.0,
-            continuity_weight=0.0,
-        )
-
-        self.assertTrue(torch.all(updated == 0))
-
-    def test_joint_patch_discriminator_uses_prepared_reference_labels(self):
-        updated, stats = optimize_joint_volume(
-            torch.zeros(16, 16, 16),
-            PatchCategoricalVAE(),
-            ZeroNoiseModel(),
-            DDPMProcess(timesteps=4),
-            steps=1,
-            batch_size=2,
-            lr=0.1,
-            t_min=1,
-            t_max=3,
-            num_phases=2,
-            sds_weight=0.0,
-            entropy_weight=0.0,
-            continuity_weight=0.0,
-            reference_labels=torch.zeros(1, 16, 16, dtype=torch.long),
-            patch_weight=0.1,
-        )
-
-        self.assertEqual(updated.shape, torch.Size([16, 16, 16]))
-        self.assertIn("history_patch", stats)
-        self.assertIn("history_patch_discriminator", stats)
-
-    def test_joint_patch_discriminator_requires_reference_labels(self):
-        with self.assertRaisesRegex(ValueError, "reference labels"):
-            optimize_joint_volume(
-                torch.zeros(16, 16, 16),
-                PatchCategoricalVAE(),
-                ZeroNoiseModel(),
-                DDPMProcess(timesteps=4),
-                steps=1,
-                batch_size=2,
-                lr=0.1,
-                t_min=1,
-                t_max=3,
-                num_phases=2,
-                sds_weight=0.0,
-                reference_labels=None,
-                patch_weight=0.1,
-            )
-
-    def test_texture_swd_is_zero_for_the_same_categorical_image(self):
-        torch.manual_seed(0)
-        image = np.zeros((16, 16), dtype=np.uint8)
-        labels = torch.from_numpy(image).to(torch.long).unsqueeze(0)
-        real = torch.nn.functional.one_hot(labels, num_classes=2).permute(0, 3, 1, 2)
-        targets = texture_targets(
-            real.float(),
-            device=torch.device("cpu"),
-            dtype=torch.float32,
-            enabled=True,
-        )
-        fake = torch.nn.functional.one_hot(labels, num_classes=2).permute(0, 3, 1, 2)
-
-        loss = texture_loss(fake.float(), targets)
-
-        self.assertAlmostEqual(float(loss), 0.0, places=6)
-
-    def test_joint_texture_guidance_requires_reference_labels(self):
-        with self.assertRaisesRegex(ValueError, "reference labels"):
-            optimize_joint_volume(
-                torch.zeros(16, 16, 16),
-                PatchCategoricalVAE(),
-                ZeroNoiseModel(),
-                DDPMProcess(timesteps=4),
-                steps=1,
-                batch_size=2,
-                lr=0.1,
-                t_min=1,
-                t_max=3,
-                num_phases=2,
-                sds_weight=0.0,
-                reference_labels=None,
-                texture_weight=0.1,
-            )
-
-    def test_interface_loss_matches_phase_pair_boundaries_per_slice(self):
-        image = (np.indices((16, 16)).sum(axis=0) % 2).astype(np.uint8)
-        labels = torch.from_numpy(image).long().unsqueeze(0)
-        real = torch.nn.functional.one_hot(labels, num_classes=2).permute(0, 3, 1, 2)
-        target = interface_target(
-            real.float(),
-            enabled=True,
-        )
-        labels = torch.from_numpy(image).to(torch.long).unsqueeze(0)
-        matching = torch.nn.functional.one_hot(labels, num_classes=2).permute(0, 3, 1, 2)
-        uniform = torch.zeros_like(matching)
-        uniform[:, 0] = 1
-
-        matching_loss = interface_loss(matching.float(), target)
-        uniform_loss = interface_loss(uniform.float(), target)
-
-        self.assertAlmostEqual(float(matching_loss), 0.0, places=6)
-        self.assertGreater(float(uniform_loss), 0.0)
-
-    def test_axis_transition_loss_matches_reference_boundary_rate(self):
-        image = (np.indices((4, 4)).sum(axis=0) % 2).astype(np.uint8)
-        labels = torch.from_numpy(image).long().unsqueeze(0)
-        real = torch.nn.functional.one_hot(labels, num_classes=2).permute(0, 3, 1, 2)
-        target = transition_target(
-            real.float(),
-            enabled=True,
-        )
-        labels = torch.from_numpy(
-            (np.indices((4, 4, 4)).sum(axis=0) % 2).astype(np.int64)
-        ).unsqueeze(0)
-        probabilities = torch.nn.functional.one_hot(
-            labels,
-            num_classes=2,
-        ).movedim(-1, 1).float()
-
-        loss, rates = axis_transition_loss(probabilities, target)
-
-        self.assertAlmostEqual(float(target), 1.0, places=6)
-        self.assertTrue(torch.allclose(rates, torch.ones(3)))
-        self.assertAlmostEqual(float(loss), 0.0, places=6)
-
-    def test_run_profile_target_averages_both_image_directions(self):
-        image = (np.indices((16, 16))[0] % 2).astype(np.uint8)
-        labels = torch.from_numpy(image).long().unsqueeze(0)
-        real = torch.nn.functional.one_hot(labels, num_classes=2).permute(0, 3, 1, 2)
-
-        target = run_target(
-            real.float(),
-            lengths=(2, 4, 8, 16),
-            enabled=True,
-        )
-
-        self.assertEqual(target.shape, torch.Size([2, 4]))
-        self.assertTrue(torch.all(target >= 0.0))
-        self.assertTrue(torch.all(target <= 1.0))
-
-    def test_joint_run_profile_requires_reference_labels(self):
-        with self.assertRaisesRegex(ValueError, "reference labels"):
-            optimize_joint_volume(
-                torch.zeros(16, 16, 16),
-                PatchCategoricalVAE(),
-                ZeroNoiseModel(),
-                DDPMProcess(timesteps=4),
-                steps=1,
-                batch_size=2,
-                lr=0.1,
-                t_min=1,
-                t_max=3,
-                num_phases=2,
-                sds_weight=0.0,
-                reference_labels=None,
-                run_weight=0.1,
-            )
-
-
 
 if __name__ == "__main__":
     unittest.main()

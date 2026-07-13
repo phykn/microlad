@@ -19,9 +19,9 @@ from src.app.runtime import (
     cleanup_distributed,
     apply_vae_defaults,
     load_predictor,
+    load_predict_config,
     load_run_vae,
     load_defaults,
-    load_slicegan_config,
     save_run_config,
     setup_device,
     wrap_distributed,
@@ -119,34 +119,39 @@ class BuildTest(unittest.TestCase):
             },
         )
 
-    def test_load_slicegan_config_preserves_grouped_settings(self):
+    def test_load_predict_config_preserves_grouped_settings(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "slicegan.yaml"
+            path = Path(tmp) / "predict.yaml"
             path.write_text(
                 "\n".join(
                     [
-                        "train:",
+                        "progress: false",
+                        "joint:",
                         "  steps: 12",
                         "  batch_size: 3",
-                        "condition:",
-                        "  noise_steps: 7",
-                        "  min_trials: 2",
-                        "render:",
-                        "  core_noise_size: 2",
-                        "intersection_tolerance: 0.05",
+                        "  decode_batch_size: null",
+                        "critic:",
+                        "  steps: 7",
+                        "  weight: 0.05",
+                        "refine:",
+                        "  candidates: [0, 1, 2]",
+                        "quality:",
+                        "  strict: true",
                     ]
                 ),
                 encoding="utf-8",
             )
 
-            config = load_slicegan_config(path)
+            config = load_predict_config(path)
 
-        self.assertEqual(config.train.steps, 12)
-        self.assertEqual(config.train.batch_size, 3)
-        self.assertEqual(config.condition.noise_steps, 7)
-        self.assertEqual(config.condition.min_trials, 2)
-        self.assertEqual(config.render.core_noise_size, 2)
-        self.assertEqual(config.intersection_tolerance, 0.05)
+        self.assertEqual(config["joint"].steps, 12)
+        self.assertEqual(config["joint"].batch_size, 3)
+        self.assertIsNone(config["joint"].decode_batch_size)
+        self.assertFalse(config["progress"])
+        self.assertEqual(config["critic"].steps, 7)
+        self.assertEqual(config["critic"].weight, 0.05)
+        self.assertEqual(config["refine"].candidates, (0, 1, 2))
+        self.assertTrue(config["quality"].strict)
 
     def test_build_dataset_expands_image_files_from_data_dir(self):
         with tempfile.TemporaryDirectory() as tmp:

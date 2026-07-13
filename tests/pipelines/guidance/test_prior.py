@@ -3,7 +3,7 @@ import unittest
 import torch
 
 from src.modeling.diffusion import DDPMProcess
-from src.pipelines.guidance.sds.prior import sds_loss
+from src.pipelines.guidance.prior import sds_loss
 
 
 class ConstantNoiseModel(torch.nn.Module):
@@ -17,7 +17,7 @@ class ConstantNoiseModel(torch.nn.Module):
         return torch.ones_like(x) * self.weight
 
 
-class PredictSDSCoreTest(unittest.TestCase):
+class DiffusionGuidanceTest(unittest.TestCase):
     def test_sds_loss_uses_sds_gradient_direction(self):
         ddpm = DDPMProcess(timesteps=4, beta_start=0.1, beta_end=0.2)
         model = ConstantNoiseModel(value=0.25)
