@@ -42,6 +42,7 @@ def write_config(path: Path, data_dir: Path, vae_run_dir: Path, run_root: Path) 
                 "training:",
                 "  steps: 1",
                 "  save_every: 1",
+                "  ema_decay: 0.9999",
                 "output:",
                 f"  vae_run_dir: {vae_run_dir.as_posix()}",
                 f"  run_root: {run_root.as_posix()}",

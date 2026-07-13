@@ -34,6 +34,19 @@ class LatentCriticTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(original, shifted, atol=1e-5, rtol=1e-5))
 
+    def test_critic_does_not_amplify_nearly_constant_channels(self):
+        torch.manual_seed(0)
+        critic = LatentCritic(8, base_ch=4)
+        latent = torch.randn(3, 8, 16, 16) * 1e-6
+        latent[:, -1] = torch.randn(3, 16, 16)
+        perturbed = latent.clone()
+        perturbed[:, :-1] = torch.randn_like(perturbed[:, :-1]) * 1e-6
+
+        original = critic(latent)
+        changed = critic(perturbed)
+
+        self.assertTrue(torch.allclose(original, changed, atol=1e-4, rtol=1e-4))
+
     def test_balanced_sampler_uses_all_axes(self):
         volume = torch.zeros(1, 1, 16, 16, 16)
         volume[:, :, 1:] = 1.0
@@ -41,6 +54,39 @@ class LatentCriticTest(unittest.TestCase):
         samples = sample_slices(volume, count=3, crop_size=16)
 
         self.assertEqual(samples.shape, torch.Size([3, 1, 16, 16]))
+
+    def test_single_slice_sampler_cycles_axes_with_step_offset(self):
+        depth = torch.arange(16).view(16, 1, 1) * 10_000
+        row = torch.arange(16).view(1, 16, 1) * 100
+        column = torch.arange(16).view(1, 1, 16)
+        volume = (depth + row + column).float().view(1, 1, 16, 16, 16)
+
+        increments = []
+        for step in range(6):
+            sampled = sample_slices(
+                volume,
+                count=1,
+                crop_size=16,
+                axis_offset=step % 3,
+            )[0, 0]
+            increments.append(
+                (
+                    int(sampled[1, 0] - sampled[0, 0]),
+                    int(sampled[0, 1] - sampled[0, 0]),
+                )
+            )
+
+        self.assertEqual(
+            increments,
+            [
+                (100, 1),
+                (10_000, 1),
+                (10_000, 100),
+                (100, 1),
+                (10_000, 1),
+                (10_000, 100),
+            ],
+        )
 
     def test_objectives_have_expected_signs(self):
         real = torch.tensor([2.0])

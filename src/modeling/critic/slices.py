@@ -6,17 +6,20 @@ def sample_slices(
     *,
     count: int,
     crop_size: int,
+    axis_offset: int = 0,
 ) -> torch.Tensor:
     """Samples balanced XY, XZ, and YZ latent crops."""
     if volume.ndim != 5:
         raise ValueError("latent volume must have shape [B, C, D, H, W].")
     if count <= 0 or crop_size <= 0:
         raise ValueError("count and crop_size must be positive.")
+    if axis_offset < 0:
+        raise ValueError("axis_offset must be non-negative.")
 
     slices = []
     for sample in range(count):
         batch = sample % int(volume.shape[0])
-        axis = sample % 3
+        axis = (axis_offset + sample) % 3
         index = int(
             torch.randint(0, volume.shape[axis + 2], (), device=volume.device).item()
         )

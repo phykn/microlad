@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn as nn
 
@@ -22,6 +24,7 @@ def vae_loss(
     logvar: torch.Tensor,
     beta: float = 1.0,
     num_phases: int = 3,
+    phase_balance: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if recon.ndim != 4:
         raise ValueError("recon must have shape [B, num_phases, H, W].")
@@ -47,7 +50,12 @@ def vae_loss(
     if beta < 0:
         raise ValueError("beta must be non-negative.")
 
-    reconstruction = phase_cross_entropy(recon, target, num_phases)
+    reconstruction = phase_cross_entropy(
+        recon,
+        target,
+        num_phases,
+        phase_balance=phase_balance,
+    )
     kl = kl_divergence(mu, logvar)
     total = reconstruction + beta * kl
     parts = {
@@ -62,14 +70,24 @@ class VAELoss(nn.Module):
         self,
         beta: float = 1.0,
         num_phases: int = 3,
+        phase_balance: float = 0.0,
     ) -> None:
         super().__init__()
 
         if beta < 0:
             raise ValueError("beta must be non-negative.")
+        if (
+            not isinstance(phase_balance, (int, float))
+            or isinstance(phase_balance, bool)
+            or not math.isfinite(phase_balance)
+            or phase_balance < 0.0
+            or phase_balance > 1.0
+        ):
+            raise ValueError("phase_balance must be between zero and one.")
 
         self.beta = beta
         self.num_phases = num_phases
+        self.phase_balance = phase_balance
 
     def forward(
         self,
@@ -85,4 +103,5 @@ class VAELoss(nn.Module):
             logvar,
             beta=self.beta,
             num_phases=self.num_phases,
+            phase_balance=self.phase_balance,
         )

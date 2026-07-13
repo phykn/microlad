@@ -154,6 +154,37 @@ class DiffusionTrainerTest(unittest.TestCase):
         self.assertIs(unwrap_model(model), model.module)
         self.assertFalse(any(key.startswith("module.") for key in checkpoint["model"]))
 
+    def test_checkpoint_uses_exponential_moving_average(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model = TinyDenoiser()
+            trainer = DiffusionTrainer(
+                model=model,
+                vae=TinyVAE(),
+                dataloader=infinite_batches(),
+                loss_fn=DiffusionLoss(DDPMProcess(timesteps=4)),
+                optimizer=torch.optim.Adam(model.parameters(), lr=1e-3),
+                steps=1,
+                device="cpu",
+                run_root=tmp,
+                ema_decay=0.5,
+            )
+            initial = {
+                name: value.detach().clone()
+                for name, value in trainer.ema_model.state_dict().items()
+            }
+
+            trainer.train_step()
+            checkpoint = torch.load(
+                trainer.weight_dir / "last" / "model.pt",
+                map_location="cpu",
+            )
+            online = unwrap_model(trainer.model).state_dict()
+            trainer.close()
+
+        for name, value in checkpoint["model"].items():
+            expected = initial[name].lerp(online[name], 0.5)
+            self.assertTrue(torch.allclose(value, expected))
+
     def test_train_consumes_fixed_number_of_steps_from_infinite_dataloader(self):
         with tempfile.TemporaryDirectory() as tmp:
             trainer = self._make_trainer(tmp, steps=2, save_every=2)
@@ -248,6 +279,21 @@ class DiffusionTrainerTest(unittest.TestCase):
                 self._make_trainer(tmp, steps=0)
             with self.assertRaisesRegex(ValueError, "save_every"):
                 self._make_trainer(tmp, save_every=0)
+            for decay in (-0.1, 1.0, float("nan"), True):
+                with self.subTest(ema_decay=decay):
+                    with self.assertRaisesRegex(ValueError, "ema_decay"):
+                        model = TinyDenoiser()
+                        DiffusionTrainer(
+                            model=model,
+                            vae=TinyVAE(),
+                            dataloader=infinite_batches(),
+                            loss_fn=DiffusionLoss(DDPMProcess(timesteps=4)),
+                            optimizer=torch.optim.Adam(model.parameters()),
+                            steps=1,
+                            device="cpu",
+                            run_root=tmp,
+                            ema_decay=decay,
+                        )
 
     def _make_trainer(
         self,

@@ -5,13 +5,14 @@ segment_anchors: false
 
 prior:
   weight: 1.0
+  anchor_strength: 0.25
   t_min: 10
   t_max: 200
 
 targets:
   segment: false
   slice_fraction_weight: 0.0
-  global_fraction_weight: 1.0
+  global_fraction_weight: 5.0
   tpc_weight: 0.0
   surface_area_weight: 0.0
   diffusivity_weight: 0.0
@@ -19,29 +20,30 @@ targets:
   low_phase_conductivity: 0.0
 
 joint:
-  steps: 500
+  steps: 700
   batch_size: 1
   # Use null to decode each axis in one batch on a large-memory GPU.
   decode_batch_size: 2
   learning_rate: 0.0003
+  axis_weight: 1.0
   continuity_weight: 0.05
-  anchor_weight: 1.0
-  residual_scale: 1.0
+  anchor_weight: 2.0
+  residual_scale: 2.0
   preservation_weight: 1.0
   checkpoint_every: 100
 
 critic:
-  steps: 1000
+  steps: 0
   batch_size: 8
   learning_rate: 0.0001
   betas: [0.0, 0.9]
   gradient_weight: 10.0
-  weight: 0.02
+  weight: 0.0
   candidate_count: 3
   validate_every: 25
   min_accuracy: 0.6
   min_damage_accuracy: 0.6
-  max_stat_sensitivity: 0.01
+  min_margin: 0.05
 
 scale:
   overlap: 0.25
@@ -59,7 +61,7 @@ refine:
   anchor_strength: 0.05
 
 quality:
-  anchor_tolerance: 0.08
+  anchor_tolerance: 0.125
   morphology_tolerance: 0.05
   continuity_tolerance: 0.08
   repeat_tolerance: 0.0

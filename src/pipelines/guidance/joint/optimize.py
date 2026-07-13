@@ -7,9 +7,15 @@ from tqdm import tqdm
 from src.modeling.critic import LatentCritic, guidance_loss, sample_slices
 from src.modeling.diffusion import DDPMProcess
 from src.modeling.inference import freeze
+from src.modeling.phases import geometric_probability_consensus
 from src.pipelines.guidance.conditioning.model import AnchorSlice
 from src.pipelines.guidance.conditioning.prepare import build_anchor_constraint_volume
-from src.pipelines.guidance.joint.loss import anchor_loss, continuity_loss
+from src.pipelines.guidance.joint.loss import (
+    anchor_loss,
+    axis_loss,
+    continuity_loss,
+    fraction_loss,
+)
 from src.pipelines.guidance.joint.model import LatentRefiner
 from src.pipelines.guidance.joint.slices import (
     extract_slices,
@@ -20,7 +26,7 @@ from src.pipelines.guidance.metrics.conductance import ConductanceSolver
 from src.pipelines.guidance.metrics.loss import sample_descriptor_loss
 from src.pipelines.guidance.metrics.targets import build_phase_target
 from src.pipelines.guidance.prior import sds_loss
-from src.pipelines.reconstruction.volume import decode_volume_probs
+from src.pipelines.reconstruction.volume import decode_axis_probs
 
 
 def optimize_latent(
@@ -52,6 +58,7 @@ def optimize_latent(
     diffusivity_targets: Mapping[int, float] | torch.Tensor | None = None,
     diffusivity_solver: ConductanceSolver | None = None,
     diffusivity_weight: float = 0.0,
+    axis_weight: float = 1.0,
     continuity_weight: float = 1e-3,
     residual_scale: float = 0.25,
     preservation_weight: float = 5.0,
@@ -82,11 +89,13 @@ def optimize_latent(
     if steps == 0:
         return tuple(candidates), {
             "joint_steps": torch.tensor(0, device=latent.device),
-            "joint_candidate_steps": torch.tensor(candidate_steps, device=latent.device),
+            "joint_candidate_steps": torch.tensor(
+                candidate_steps, device=latent.device
+            ),
         }
 
     output_size = int(vae.image_size)
-    target_volume, anchor_mask = build_anchor_constraint_volume(
+    target_volume, anchor_voxels = build_anchor_constraint_volume(
         vae,
         anchors,
         volume_shape=(output_size, output_size, output_size),
@@ -129,6 +138,7 @@ def optimize_latent(
             refined,
             count=batch_size,
             crop_size=int(vae.latent_size),
+            axis_offset=step % 3,
         )
         total = refined.sum() * 0.0
         stats: dict[str, torch.Tensor] = {}
@@ -151,13 +161,17 @@ def optimize_latent(
             stats["critic"] = (critic_weight * critic_term).detach()
             display["critic"] = critic_term.detach()
 
-        probabilities = decode_volume_probs(
+        axis_probabilities = decode_axis_probs(
             vae,
             refined[0],
             num_phases=num_phases,
             plane_batch_size=decode_batch_size,
             checkpoint_gradients=decode_batch_size is not None,
         )
+        probabilities = geometric_probability_consensus(
+            axis_probabilities,
+            num_phases,
+        ).unsqueeze(0)
         axis, indices = select_slices(
             step,
             size=output_size,
@@ -192,25 +206,42 @@ def optimize_latent(
         stats.update(descriptor_stats)
 
         if target_fractions is not None and global_fraction_weight > 0.0:
-            global_fraction = probabilities.mean(dim=(0, 2, 3, 4))
-            fraction_loss = F.mse_loss(
+            hard_probabilities = (
+                F.one_hot(
+                    probabilities.argmax(dim=1),
+                    num_classes=num_phases,
+                )
+                .movedim(-1, 1)
+                .to(probabilities.dtype)
+            )
+            categorical_probabilities = (
+                hard_probabilities + probabilities - probabilities.detach()
+            )
+            global_fraction = categorical_probabilities.mean(dim=(0, 2, 3, 4))
+            fraction_error = fraction_loss(
                 global_fraction,
                 target_fractions,
             )
-            fraction = global_fraction_weight * fraction_loss
+            fraction = global_fraction_weight * fraction_error
             total = total + fraction
             stats["global_fraction"] = fraction.detach()
-            display["global_fraction"] = fraction_loss.detach()
+            display["global_fraction"] = fraction_error.detach()
 
-        if anchor_weight > 0.0 and bool((anchor_mask > 0).any().item()):
+        if anchor_weight > 0.0 and bool((anchor_voxels > 0).any().item()):
             anchor = anchor_loss(
                 probabilities[0],
                 target_volume,
-                anchor_mask,
+                anchor_voxels,
             )
             total = total + anchor_weight * anchor
             stats["anchor"] = (anchor_weight * anchor).detach()
             display["anchor"] = anchor.detach()
+
+        if axis_weight > 0.0:
+            axis = axis_loss(axis_probabilities)
+            total = total + axis_weight * axis
+            stats["axis"] = (axis_weight * axis).detach()
+            display["axis"] = axis.detach()
 
         if continuity_weight > 0.0:
             continuity = continuity_loss(probabilities)
@@ -232,15 +263,14 @@ def optimize_latent(
         completed = step + 1
         refresh_every = max(1, steps // 100)
         if progress and (
-            completed == 1
-            or completed % refresh_every == 0
-            or completed == steps
+            completed == 1 or completed % refresh_every == 0 or completed == steps
         ):
             postfix = {"loss": f"{float(stats['loss'].item()):.4g}"}
             for name, label in (
                 ("anchor", "anchor"),
                 ("critic", "critic"),
                 ("global_fraction", "fraction"),
+                ("axis", "axis"),
             ):
                 if name in display:
                     postfix[label] = f"{float(display[name].item()):.4g}"
@@ -255,11 +285,18 @@ def optimize_latent(
         for key, values in history.items()
         if values
     }
+    summary.update(
+        {f"joint_final_{key}": values[-1] for key, values in history.items() if values}
+    )
     summary["joint_steps"] = torch.tensor(steps, device=latent.device)
     summary["joint_candidate_steps"] = torch.tensor(
         candidate_steps,
         device=latent.device,
     )
+    deltas = torch.stack([candidate - latent for candidate in candidates])
+    summary["joint_candidate_delta_rms"] = deltas.square().mean(dim=(1, 2, 3, 4)).sqrt()
+    summary["joint_candidate_delta_max"] = deltas.abs().amax(dim=(1, 2, 3, 4))
+    summary["joint_base_std"] = latent.std()
     return tuple(candidates), summary
 
 

@@ -75,7 +75,7 @@ def train_critic(
     penalties = []
     losses = []
     best_state = None
-    best_score = float("-inf")
+    best_rank = (float("-inf"), float("-inf"))
     best_step = 0
 
     step_range = tqdm(
@@ -149,8 +149,10 @@ def train_critic(
         if should_validate:
             metrics = evaluate_critic(critic, *validation)
             score = float(metrics["score"].item())
-            if score > best_score:
-                best_score = score
+            margin = float(metrics["validation_margin"].item())
+            rank = (score, margin)
+            if rank > best_rank:
+                best_rank = rank
                 best_step = completed
                 best_state = {
                     name: value.detach().clone()
@@ -186,7 +188,6 @@ def train_critic(
         "critic_validation_accuracy": metrics["validation_accuracy"],
         "critic_damage_accuracy": metrics["damage_accuracy"],
         "critic_shuffle_accuracy": metrics["shuffle_accuracy"],
-        "critic_stat_sensitivity": metrics["stat_sensitivity"],
         "critic_validation_score": metrics["score"],
         "critic_input_gradient_norm": input_gradient.flatten(1).norm(dim=1).mean(),
         "critic_input_gradient_finite": torch.isfinite(input_gradient).all(),

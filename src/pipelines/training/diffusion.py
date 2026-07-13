@@ -1,4 +1,6 @@
+import copy
 from collections.abc import Iterable
+import math
 from pathlib import Path
 
 import torch
@@ -27,6 +29,7 @@ class DiffusionTrainer:
         run_dir: str | Path | None = None,
         save_every: int = 1,
         clip_grad_norm: float | None = 1.0,
+        ema_decay: float = 0.9999,
     ) -> None:
         if steps <= 0:
             raise ValueError("steps must be positive.")
@@ -34,8 +37,23 @@ class DiffusionTrainer:
             raise ValueError("save_every must be positive.")
         if clip_grad_norm is not None and clip_grad_norm <= 0:
             raise ValueError("clip_grad_norm must be positive or None.")
+        if (
+            not isinstance(ema_decay, (int, float))
+            or isinstance(ema_decay, bool)
+            or not math.isfinite(ema_decay)
+            or ema_decay < 0.0
+            or ema_decay >= 1.0
+        ):
+            raise ValueError(
+                "ema_decay must be between zero inclusive and one exclusive."
+            )
 
+        self.device = torch.device(device)
         self.model = model.to(device)
+        self.ema_model = copy.deepcopy(unwrap_model(self.model)).to(self.device)
+        self.ema_model.eval()
+        for parameter in self.ema_model.parameters():
+            parameter.requires_grad_(False)
         self.vae = vae.to(device)
         self.vae.eval()
         for parameter in self.vae.parameters():
@@ -47,7 +65,7 @@ class DiffusionTrainer:
         self.steps = steps
         self.save_every = save_every
         self.clip_grad_norm = clip_grad_norm
-        self.device = torch.device(device)
+        self.ema_decay = float(ema_decay)
         self.step = 0
         self.is_main_process = is_main_process()
 
@@ -64,7 +82,7 @@ class DiffusionTrainer:
             run_dir=run_dir,
         )
         save_checkpoint(
-            model=self.model,
+            model=self.ema_model,
             optimizer=self.optimizer,
             step=0,
             save_every=self.save_every,
@@ -119,6 +137,7 @@ class DiffusionTrainer:
             )
 
         self.optimizer.step()
+        self._update_ema()
 
         stats = {"loss": float(loss.detach().cpu())}
         stats.update(
@@ -128,7 +147,7 @@ class DiffusionTrainer:
         self.step += 1
         log_stats(self.writer, stats, self.step)
         save_checkpoint(
-            model=self.model,
+            model=self.ema_model,
             optimizer=self.optimizer,
             step=self.step,
             save_every=self.save_every,
@@ -137,6 +156,23 @@ class DiffusionTrainer:
             is_main_process=self.is_main_process,
         )
         return stats
+
+    @torch.no_grad()
+    def _update_ema(self) -> None:
+        online = unwrap_model(self.model)
+        update = 1.0 - self.ema_decay
+        for average, current in zip(
+            self.ema_model.parameters(),
+            online.parameters(),
+            strict=True,
+        ):
+            average.lerp_(current.detach(), update)
+        for average, current in zip(
+            self.ema_model.buffers(),
+            online.buffers(),
+            strict=True,
+        ):
+            average.copy_(current.detach())
 
     def train(self) -> dict[str, float]:
         stats: dict[str, float] = {}

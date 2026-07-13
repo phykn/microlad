@@ -15,6 +15,7 @@ model:
 
 loss:
   beta: 1.0
+  phase_balance: 0.35
 
 optimization:
   lr: 1.0e-4

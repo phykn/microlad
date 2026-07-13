@@ -3,6 +3,7 @@ import unittest
 import torch
 
 from src.pipelines.reconstruction.volume import (
+    decode_axis_probs,
     decode_latent,
     decode_latents,
     decode_volume,
@@ -171,6 +172,20 @@ class PredictVolumeTest(unittest.TestCase):
 
         self.assertEqual(probabilities.shape, torch.Size([1, 3, 4, 4, 4]))
         self.assertTrue(torch.allclose(probabilities.sum(dim=1), torch.ones(1, 4, 4, 4)))
+
+    def test_decode_axis_probs_returns_aligned_axis_probabilities(self):
+        probabilities = decode_axis_probs(
+            CategoricalVAE(),
+            torch.zeros(1, 2, 2, 2),
+        )
+
+        self.assertEqual(probabilities.shape, torch.Size([3, 3, 4, 4, 4]))
+        self.assertTrue(
+            torch.allclose(
+                probabilities.sum(dim=1),
+                torch.ones(3, 4, 4, 4),
+            )
+        )
 
     def test_chunked_checkpoint_decode_preserves_values_and_gradients(self):
         latent = torch.randn(1, 2, 2, 2, requires_grad=True)

@@ -18,6 +18,7 @@ from src.modeling.vae import PatchVAE, get_downsample_factor
 from src.pipelines.guidance.critic.data import encode_refs, merge_refs
 from src.pipelines.guidance.critic.train import train_critic
 from src.pipelines.guidance.conditioning.images import prepare_volume_anchors
+from src.pipelines.guidance.conditioning.latents import encode_anchors
 from src.pipelines.guidance.conditioning.model import AnchorSlice, VolumeAnchor
 from src.pipelines.guidance.conditioning.targets import (
     DescriptorTargets,
@@ -115,6 +116,14 @@ class Predictor:
             device=self.device,
             intersection_tolerance=0.0,
         )
+        anchor_labels = (
+            torch.stack([anchor.image for anchor in volume_anchors])
+            if volume_anchors
+            else None
+        )
+        guidance_labels = target_labels
+        if guidance_labels is None and uses_descriptor_targets(options):
+            guidance_labels = anchor_labels
 
         if volume_size == image_size:
             assert t_max is not None or options.joint.steps == 0
@@ -147,7 +156,7 @@ class Predictor:
                 volume,
                 options=options,
                 anchors=anchors,
-                target_labels=target_labels,
+                target_labels=guidance_labels,
                 descriptor_tile_size=descriptor_tile_size,
                 t_max=t_max,
             )
@@ -163,7 +172,7 @@ class Predictor:
             quantize_phase(candidate, options.num_phases).float()
             for candidate in candidates
         )
-        reference_labels = self._merge_references(volume_anchors, target_labels)
+        reference_labels = target_labels if target_labels is not None else anchor_labels
         references = (
             None
             if reference_labels is None
@@ -174,7 +183,7 @@ class Predictor:
             .movedim(-1, 1)
             .float()
         )
-        target_fraction = self._resolve_fraction(options, target_labels)
+        target_fraction = self._resolve_fraction(options, guidance_labels)
         volume, final_stats = select_label_volume(
             candidates,
             candidate_steps=options.refine.candidates,
@@ -186,6 +195,13 @@ class Predictor:
             quality=options.quality,
         )
         stats.update(final_stats)
+        if "quality_passed" in final_stats and not bool(final_stats["quality_passed"]):
+            warnings.warn(
+                "prediction returned the least-violation candidate; "
+                "inspect quality_* statistics.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         return quantize_phase(volume, options.num_phases), stats
 
     def _predict_base(
@@ -197,20 +213,42 @@ class Predictor:
         target_labels: torch.Tensor | None,
         t_max: int | None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor | int]]:
+        anchor_labels = (
+            torch.stack([anchor.image for anchor in volume_anchors])
+            if volume_anchors
+            else None
+        )
+        anchor_latent, anchor_mask = (
+            encode_anchors(
+                self.vae,
+                anchors,
+                num_phases=options.num_phases,
+                segment=options.segment_anchors,
+                device=self.device,
+                peak_strength=options.prior.anchor_strength,
+            )
+            if anchors and options.prior.anchor_strength > 0.0
+            else (None, None)
+        )
         latent = sample_latent(
             self.sampler,
             self.vae,
+            anchor_latent=anchor_latent,
+            anchor_mask=anchor_mask,
             progress=options.progress,
         ).to(self.device)
-        references = self._merge_references(volume_anchors, target_labels)
+        critic_references = self._merge_references(volume_anchors, target_labels)
+        guidance_labels = target_labels
+        if guidance_labels is None and uses_descriptor_targets(options):
+            guidance_labels = anchor_labels
         critic = None
         stats: dict[str, torch.Tensor | int] = {}
         if options.critic.steps > 0:
-            if references is None:
+            if critic_references is None:
                 raise ValueError("critic training requires target images or anchors.")
             critic, critic_stats = self._fit_critic(
                 latent,
-                references,
+                critic_references,
                 options=options,
             )
             stats.update(critic_stats)
@@ -219,19 +257,22 @@ class Predictor:
             latent,
             options=options,
             anchors=anchors,
-            target_labels=target_labels,
+            target_labels=guidance_labels,
             critic=critic,
             t_max=(int(self.ddpm.num_timesteps) if t_max is None else t_max),
         )
         stats.update(joint_stats)
-        target_fraction = self._resolve_fraction(options, target_labels)
+        target_fraction = self._resolve_fraction(options, guidance_labels)
+        reference_labels = target_labels if target_labels is not None else anchor_labels
         reference_probabilities = (
             None
-            if references is None
+            if reference_labels is None
             else F.one_hot(
-                references.long(),
+                reference_labels.long(),
                 num_classes=options.num_phases,
-            ).movedim(-1, 1).float()
+            )
+            .movedim(-1, 1)
+            .float()
         )
         volume, final_stats = select_latent_volume(
             self.vae,
@@ -246,6 +287,13 @@ class Predictor:
             quality=options.quality,
         )
         stats.update(final_stats)
+        if "quality_passed" in final_stats and not bool(final_stats["quality_passed"]):
+            warnings.warn(
+                "prediction returned the least-violation candidate; "
+                "inspect quality_* statistics.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         return quantize_phase(volume, options.num_phases), stats
 
     def _fit_critic(
@@ -289,17 +337,17 @@ class Predictor:
         accuracy = float(stats["critic_validation_accuracy"].item())
         damage_accuracy = float(stats["critic_damage_accuracy"].item())
         shuffle_accuracy = float(stats["critic_shuffle_accuracy"].item())
-        stat_sensitivity = float(stats["critic_stat_sensitivity"].item())
+        validation_margin = float(stats["critic_validation_margin"].item())
         finite_gradient = bool(stats["critic_input_gradient_finite"].item())
         enabled = (
             np.isfinite(accuracy)
             and np.isfinite(damage_accuracy)
             and np.isfinite(shuffle_accuracy)
-            and np.isfinite(stat_sensitivity)
+            and np.isfinite(validation_margin)
             and accuracy >= options.critic.min_accuracy
             and damage_accuracy >= options.critic.min_damage_accuracy
             and shuffle_accuracy >= options.critic.min_damage_accuracy
-            and stat_sensitivity <= options.critic.max_stat_sensitivity
+            and validation_margin >= options.critic.min_margin
             and finite_gradient
         )
         stats["critic_enabled"] = torch.tensor(enabled, device=self.device)
@@ -338,10 +386,14 @@ class Predictor:
         if not uses_fraction or target_labels is None:
             return None
         labels = target_labels.to(self.device).long()
-        return F.one_hot(
-            labels,
-            num_classes=options.num_phases,
-        ).float().mean(dim=(0, 1, 2))
+        return (
+            F.one_hot(
+                labels,
+                num_classes=options.num_phases,
+            )
+            .float()
+            .mean(dim=(0, 1, 2))
+        )
 
     def _run_joint(
         self,
@@ -383,6 +435,7 @@ class Predictor:
             diffusivity_targets=targets.get("diffusivity_targets"),
             diffusivity_solver=solver,
             diffusivity_weight=options.targets.diffusivity_weight,
+            axis_weight=options.joint.axis_weight,
             continuity_weight=options.joint.continuity_weight,
             residual_scale=options.joint.residual_scale,
             preservation_weight=options.joint.preservation_weight,

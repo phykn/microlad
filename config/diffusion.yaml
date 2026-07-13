@@ -20,7 +20,8 @@ optimization:
 training:
   steps: 50000
   save_every: 5000
+  ema_decay: 0.9999
 
 output:
-  vae_run_dir: run/20260712-120359-181168
+  vae_run_dir: run/20260714-032419-015034
   run_root: run

@@ -36,7 +36,12 @@ such as `from src.app.runtime import load_predictor` resolve.
 - Train VAE first, then train diffusion.
 - For local diffusion training, set `output.vae_run_dir` in `config/diffusion.yaml` to the VAE run folder before launching `run_train_diffusion.py`.
 - VAE reconstruction is categorical: the decoder emits `[B, num_phases, H, W]`
-  logits and the VAE loss is `CE(logits, phase_index) + beta * KL`.
+  logits and the VAE loss is phase-balanced `CE(logits, phase_index) + beta * KL`.
+  `loss.phase_balance=0` restores ordinary CE; the default `0.35` moderately
+  raises the contribution of a rare phase without equalizing every phase fully.
+- Diffusion checkpoints store an exponential moving average of the online model.
+  `training.ema_decay` controls the update and does not change the fixed step or
+  checkpoint schedule.
 
 ## Test
 
@@ -136,20 +141,20 @@ anchor = AnchorSlice(image=anchor_image, axis=0, index=32)
 volume, stats = predictor.predict(
     options,
     anchors=[anchor],
-    target_images=[anchor_image],
 )
 ```
 
 `config/predict.yaml` groups the L-MPDD prior, base-size latent refinement,
-online critic, final quality gates, and scale-up settings. Prediction always starts
-from an L-MPDD latent; the critic and residual refiner improve that same candidate
-instead of replacing it with a separate generator.
+optional online critic, final quality gates, and scale-up settings. Prediction always
+starts from an L-MPDD latent. The critic is off by default until composition-matched
+training is available; enabling it improves the same candidate rather than replacing
+it with a separate generator.
 
 `joint.decode_batch_size` controls decoder memory use. Keep a positive batch size
 for chunked decoding with gradient checkpointing, or set it to `null` to decode
 each axis in one batch on a large-memory GPU.
 
-Prediction progress is shown by default for L-MPDD sampling, critic warm-up,
+Prediction progress is shown by default for L-MPDD sampling, enabled critic warm-up,
 Joint guidance, and scale-up guidance. Set `progress: false` in the prediction
 config to hide every progress bar. The plain-text critic bar reports loss,
 margin, and gradient penalty; Joint reports total loss and active anchor,
@@ -164,8 +169,10 @@ L-MPDD guidance. Reference descriptor targets live under `TargetConfig`, for
 example `targets=TargetConfig(slice_fraction_weight=1.0, tpc_weight=1.0)`.
 Explicit `phase_fractions` use `global_fraction_weight` and do not constrain
 every slice unless `slice_fraction_weight` is also enabled.
-Set `phase_fractions: null` to derive the target from `target_images`, or provide
-an explicit list to condition on a requested global composition.
+Set `phase_fractions: null` to derive the target from `target_images`, or from the
+anchors when no separate target bundle is provided. An explicit list conditions on a
+requested global composition. `target_images` remain optional morphology references
+for final candidate evaluation and are not merged into the anchor constraints.
 
 The full pipeline design and scale-up boundary are documented in
 [`PIPELINE.md`](PIPELINE.md).

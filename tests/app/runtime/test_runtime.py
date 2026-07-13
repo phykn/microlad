@@ -317,7 +317,8 @@ class BuildTest(unittest.TestCase):
             write_predictor_run(run_dir)
 
             predictor = load_predictor(run_dir, device="cpu")
-            volume, stats = predictor.predict(PredictOptions(num_phases=2))
+            with self.assertWarnsRegex(RuntimeWarning, "least-violation"):
+                volume, stats = predictor.predict(PredictOptions(num_phases=2))
 
         self.assertIsInstance(predictor, Predictor)
         self.assertEqual(predictor.device, torch.device("cpu"))

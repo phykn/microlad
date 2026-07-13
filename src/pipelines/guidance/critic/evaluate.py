@@ -29,7 +29,6 @@ def prepare_validation(
         generated,
         damage_slices(clean),
         _shuffle_slices(clean),
-        clean * 1.5 + 0.25,
     )
 
 
@@ -40,24 +39,19 @@ def evaluate_critic(
     fake: torch.Tensor,
     damaged: torch.Tensor,
     shuffled: torch.Tensor,
-    affine: torch.Tensor,
 ) -> dict[str, torch.Tensor]:
     real_scores = _sample_scores(critic(real))
     fake_scores = _sample_scores(critic(fake))
     damage_scores = _sample_scores(critic(damaged))
     shuffle_scores = _sample_scores(critic(shuffled))
-    affine_scores = _sample_scores(critic(affine))
     validation_accuracy = (
         real_scores[:, None] > fake_scores[None, :]
     ).float().mean()
     damage_accuracy = (real_scores > damage_scores).float().mean()
     shuffle_accuracy = (real_scores > shuffle_scores).float().mean()
-    stat_sensitivity = (real_scores - affine_scores).abs().mean() / (
-        real_scores.abs().mean() + 1.0
-    )
     score = torch.stack(
         [validation_accuracy, damage_accuracy, shuffle_accuracy]
-    ).mean() - stat_sensitivity
+    ).mean()
     return {
         "validation_margin": real_scores.mean() - fake_scores.mean(),
         "damage_margin": real_scores.mean() - damage_scores.mean(),
@@ -65,7 +59,6 @@ def evaluate_critic(
         "validation_accuracy": validation_accuracy,
         "damage_accuracy": damage_accuracy,
         "shuffle_accuracy": shuffle_accuracy,
-        "stat_sensitivity": stat_sensitivity,
         "score": score,
     }
 

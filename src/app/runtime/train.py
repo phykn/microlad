@@ -30,6 +30,7 @@ def build_vae_trainer(
     loss_fn = VAELoss(
         beta=args.beta,
         num_phases=args.num_phases,
+        phase_balance=args.phase_balance,
     )
     return VAETrainer(
         model=model,
@@ -63,4 +64,5 @@ def build_diffusion_trainer(
         run_root=args.run_root,
         save_every=args.save_every,
         clip_grad_norm=args.clip_grad_norm,
+        ema_decay=args.ema_decay,
     )

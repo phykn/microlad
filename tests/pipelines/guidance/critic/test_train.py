@@ -79,7 +79,6 @@ class CriticGuidanceTest(unittest.TestCase):
                 "validation_accuracy": value,
                 "damage_accuracy": value,
                 "shuffle_accuracy": value,
-                "stat_sensitivity": value.new_zeros(()),
                 "score": value,
             }
 

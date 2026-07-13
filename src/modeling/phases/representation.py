@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn.functional as F
 
@@ -61,6 +63,7 @@ def phase_cross_entropy(
     logits: torch.Tensor,
     target: torch.Tensor,
     num_phases: int,
+    phase_balance: float = 0.0,
 ) -> torch.Tensor:
     _validate_num_phases(num_phases)
 
@@ -76,7 +79,28 @@ def phase_cross_entropy(
     if any(size <= 0 for size in logits.shape):
         raise ValueError("recon and target must not be empty.")
 
-    return F.cross_entropy(logits, phase_target_indices(target, num_phases))
+    if (
+        not isinstance(phase_balance, (int, float))
+        or isinstance(phase_balance, bool)
+        or not math.isfinite(phase_balance)
+        or phase_balance < 0.0
+        or phase_balance > 1.0
+    ):
+        raise ValueError("phase_balance must be between zero and one.")
+
+    indices = phase_target_indices(target, num_phases)
+    if phase_balance == 0.0:
+        return F.cross_entropy(logits, indices)
+
+    counts = torch.bincount(
+        indices.flatten(),
+        minlength=num_phases,
+    ).to(device=logits.device, dtype=logits.dtype)
+    present = counts > 0
+    weights = torch.zeros_like(counts)
+    weights[present] = counts[present].pow(-float(phase_balance))
+    weights = weights / weights[present].mean()
+    return F.cross_entropy(logits, indices, weight=weights)
 
 
 def _validate_phase_logits(logits: torch.Tensor, num_phases: int) -> None:

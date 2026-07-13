@@ -94,15 +94,12 @@ def prepare_prediction(
         raise ValueError(
             "phase fractions require active guidance steps."
         )
-    if descriptor_targets and target_labels is None:
-        raise ValueError("target_images are required for descriptor target losses.")
+    if descriptor_targets and target_labels is None and not anchors:
+        raise ValueError(
+            "target_images or anchors are required for descriptor target losses."
+        )
     if base_size and options.critic.steps > 0 and target_labels is None and not anchors:
         raise ValueError("critic training requires target_images or anchors.")
-    target_consumer = descriptor_targets or (
-        base_size and options.critic.steps > 0
-    )
-    if target_labels is not None and not target_consumer:
-        raise ValueError("target_images require an enabled target or critic setting.")
     t_max: int | None = None
     if active_steps > 0:
         t_max = resolve_t_max(options, num_timesteps)

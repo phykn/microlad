@@ -44,9 +44,18 @@ def select_latent_volume(
         device=latents[0].device,
     )
     target_transition = reference_transition(references)
+    base_std = latents[0].std().clamp_min(1e-6)
     records = []
     for latent_step, latent in zip(candidate_steps, latents, strict=True):
+        latent_delta = (latent - latents[0]).square().mean().sqrt() / base_std
         decoded = decode_volume_probs(vae, latent, num_phases=num_phases)
+        decoded_stats = evaluate_phase_volume(
+            decoded.argmax(dim=1)[0].float(),
+            num_phases=num_phases,
+            references=references,
+            target_fraction=target_fraction,
+            anchors=anchors,
+        )
         for refine_steps in refine.candidates:
             probabilities = (
                 decoded
@@ -106,6 +115,8 @@ def select_latent_volume(
                     "score": score,
                     "violation": violation,
                     "changed": changed,
+                    "latent_delta": latent_delta,
+                    "decoded": decoded_stats,
                     "pre": pre_stats,
                     "post": post_stats,
                     "errors": errors,
@@ -113,18 +124,27 @@ def select_latent_volume(
             )
 
     feasible = [record for record in records if record["passed"]]
-    pool = feasible or records
-    selected = min(
-        pool,
-        key=lambda record: (
-            0.0 if record["passed"] else float(record["violation"].item()),
-            *_selection_rank(
+    if feasible:
+        selected = min(
+            feasible,
+            key=lambda record: _morphology_rank(
                 record["post"],
                 record["changed"],
                 target_transition,
+                record["latent_delta"],
             ),
-        ),
-    )
+        )
+    else:
+        selected = min(
+            records,
+            key=lambda record: _violation_rank(
+                record["errors"],
+                record["post"],
+                record["changed"],
+                target_transition,
+                record["latent_delta"],
+            ),
+        )
 
     stats = {
         "candidate_count": torch.tensor(len(records), device=latents[0].device),
@@ -135,6 +155,20 @@ def select_latent_volume(
         "candidate_scores": torch.stack([record["score"] for record in records]),
         "candidate_violations": torch.stack(
             [record["violation"] for record in records]
+        ),
+        "candidate_latent_steps": torch.tensor(
+            [record["latent_step"] for record in records],
+            device=latents[0].device,
+        ),
+        "candidate_refine_steps": torch.tensor(
+            [record["refine_steps"] for record in records],
+            device=latents[0].device,
+        ),
+        "candidate_calibration_changed_fractions": torch.stack(
+            [record["changed"] for record in records]
+        ),
+        "candidate_latent_delta_over_base_std": torch.stack(
+            [record["latent_delta"] for record in records]
         ),
         "selected_latent_step": torch.tensor(
             selected["latent_step"],
@@ -149,20 +183,43 @@ def select_latent_volume(
             device=latents[0].device,
         ),
         "calibration_changed_fraction": selected["changed"],
+        "selected_latent_delta_over_base_std": selected["latent_delta"],
     }
     stats.update(
         {f"pre_calibration_{name}": value for name, value in selected["pre"].items()}
     )
-    stats.update(
-        {f"final_{name}": value for name, value in selected["post"].items()}
-    )
+    stats.update({f"final_{name}": value for name, value in selected["post"].items()})
     stats.update(
         {f"quality_{name}": value for name, value in selected["errors"].items()}
     )
+    for stage, key in (
+        ("decoded", "decoded"),
+        ("refined", "pre"),
+        ("final", "post"),
+    ):
+        for metric in (
+            "phase_fraction",
+            "axis_transition_rate",
+            "axis_exact_repeat_rate",
+            "axis_global_boundary_jump",
+            "axis_run_profile_mae",
+        ):
+            if metric in records[0][key]:
+                stats[f"candidate_{stage}_{metric}"] = torch.stack(
+                    [record[key][metric] for record in records]
+                )
     if anchors:
+        stats["candidate_decoded_anchor_mismatches"] = torch.stack(
+            [record["decoded"]["anchor_mismatches"] for record in records]
+        )
+        stats["candidate_refined_anchor_mismatches"] = torch.stack(
+            [record["pre"]["anchor_mismatches"] for record in records]
+        )
+        stats["candidate_final_anchor_mismatches"] = torch.stack(
+            [record["post"]["anchor_mismatches"] for record in records]
+        )
         stats["calibration_anchor_delta"] = (
-            selected["post"]["anchor_mismatches"]
-            - selected["pre"]["anchor_mismatches"]
+            selected["post"]["anchor_mismatches"] - selected["pre"]["anchor_mismatches"]
         )
     stats["calibration_transition_delta"] = (
         selected["post"]["axis_transition_rate"]
@@ -193,7 +250,9 @@ def select_label_volume(
     quality: "QualityConfig",
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if len(volumes) != len(candidate_steps) or not volumes:
-        raise ValueError("volumes and candidate_steps must have the same non-zero length.")
+        raise ValueError(
+            "volumes and candidate_steps must have the same non-zero length."
+        )
     target_transition = reference_transition(references)
     records = []
     for step, volume in zip(candidate_steps, volumes, strict=True):
@@ -230,13 +289,25 @@ def select_label_volume(
             }
         )
     feasible = [record for record in records if record["passed"]]
-    selected = min(
-        feasible or records,
-        key=lambda record: (
-            0.0 if record["passed"] else float(record["violation"].item()),
-            *_selection_rank(record["stats"], volumes[0].new_zeros(()), target_transition),
-        ),
-    )
+    if feasible:
+        selected = min(
+            feasible,
+            key=lambda record: _morphology_rank(
+                record["stats"],
+                volumes[0].new_zeros(()),
+                target_transition,
+            ),
+        )
+    else:
+        selected = min(
+            records,
+            key=lambda record: _violation_rank(
+                record["errors"],
+                record["stats"],
+                volumes[0].new_zeros(()),
+                target_transition,
+            ),
+        )
     device = volumes[0].device
     result = {
         "candidate_count": torch.tensor(len(records), device=device),
@@ -252,7 +323,9 @@ def select_label_volume(
         "quality_passed": torch.tensor(bool(selected["passed"]), device=device),
     }
     result.update({f"final_{name}": value for name, value in selected["stats"].items()})
-    result.update({f"quality_{name}": value for name, value in selected["errors"].items()})
+    result.update(
+        {f"quality_{name}": value for name, value in selected["errors"].items()}
+    )
     return selected["volume"], result
 
 
@@ -303,17 +376,67 @@ def _selection_rank(
     stats: dict[str, torch.Tensor],
     changed: torch.Tensor,
     target_transition: torch.Tensor | None,
+    latent_delta: torch.Tensor | None = None,
 ) -> tuple[float, ...]:
     zero = changed.new_zeros(())
+    delta = zero if latent_delta is None else latent_delta
     return tuple(
         float(value.item())
         for value in (
             stats.get("anchor_max_mismatch", zero),
+            stats.get("anchor_max_phase_mismatch", zero),
             stats.get("phase_fraction_error", zero).abs().max(),
             changed,
             stats["axis_exact_repeat_rate"].max(),
             stats["axis_global_boundary_jump"].max(),
             transition_error(stats["axis_transition_rate"], target_transition),
             stats.get("axis_run_profile_mae", zero).mean(),
+            delta,
         )
     )
+
+
+def _morphology_rank(
+    stats: dict[str, torch.Tensor],
+    changed: torch.Tensor,
+    target_transition: torch.Tensor | None,
+    latent_delta: torch.Tensor | None = None,
+) -> tuple[float, ...]:
+    zero = changed.new_zeros(())
+    delta = zero if latent_delta is None else latent_delta
+    return tuple(
+        float(value.item())
+        for value in (
+            stats["axis_exact_repeat_rate"].max(),
+            stats["axis_global_boundary_jump"].max(),
+            stats.get("axis_run_profile_mae", zero).mean(),
+            transition_error(stats["axis_transition_rate"], target_transition),
+            changed,
+            stats.get("anchor_max_mismatch", zero),
+            stats.get("phase_fraction_error", zero).abs().max(),
+            delta,
+        )
+    )
+
+
+def _violation_rank(
+    errors: dict[str, torch.Tensor],
+    stats: dict[str, torch.Tensor],
+    changed: torch.Tensor,
+    target_transition: torch.Tensor | None,
+    latent_delta: torch.Tensor | None = None,
+) -> tuple[float, ...]:
+    return tuple(
+        float(value.item())
+        for value in (
+            errors["anchor"],
+            stats.get("anchor_max_phase_mismatch", changed.new_zeros(())),
+            errors["fraction"],
+            errors["calibration"],
+            errors["calibration_budget"],
+            errors["repetition"],
+            errors["boundary"],
+            errors["transition"],
+            errors["run"],
+        )
+    ) + _selection_rank(stats, changed, target_transition, latent_delta)

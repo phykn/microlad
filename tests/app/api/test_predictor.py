@@ -67,6 +67,7 @@ class PredictOptionsTest(unittest.TestCase):
             ("num_phases", lambda: PredictOptions(num_phases=2.5)),
             ("num_phases", lambda: PredictOptions(num_phases=257)),
             ("weight", lambda: PriorConfig(weight=-0.1)),
+            ("anchor_strength", lambda: PriorConfig(anchor_strength=1.1)),
             ("learning_rate", lambda: JointConfig(learning_rate=0.0)),
             ("batch_size", lambda: JointConfig(batch_size=0)),
             ("decode_batch_size", lambda: JointConfig(decode_batch_size=0)),
@@ -129,6 +130,13 @@ class PredictorTest(unittest.TestCase):
         options = PredictOptions(
             num_phases=2,
             refine=RefineConfig(candidates=(0,)),
+            quality=QualityConfig(
+                anchor_tolerance=1.0,
+                morphology_tolerance=1.0,
+                continuity_tolerance=1.0,
+                repeat_tolerance=1.0,
+                calibration_budget=1.0,
+            ),
         )
 
         with patch("torch.randn", return_value=torch.zeros(2, 1, 2, 2)):
@@ -157,10 +165,13 @@ class PredictorTest(unittest.TestCase):
 
         with patch(
             "src.app.api.predictor.optimize_latent",
-            return_value=((latent,), {
-                "joint_steps": torch.tensor(1),
-                "joint_candidate_steps": torch.tensor([1]),
-            }),
+            return_value=(
+                (latent,),
+                {
+                    "joint_steps": torch.tensor(1),
+                    "joint_candidate_steps": torch.tensor([1]),
+                },
+            ),
         ) as optimize:
             self.predictor._run_joint(
                 latent,
@@ -195,6 +206,93 @@ class PredictorTest(unittest.TestCase):
         target = self.predictor._resolve_fraction(options, labels)
 
         self.assertTrue(torch.equal(target, torch.tensor([0.75, 0.25])))
+
+    def test_anchor_supplies_global_fraction_without_duplicate_target_image(self):
+        options = PredictOptions(
+            num_phases=2,
+            joint=JointConfig(steps=1),
+            targets=TargetConfig(global_fraction_weight=1.0),
+            refine=RefineConfig(candidates=(0,)),
+        )
+        anchor = AnchorSlice(
+            image=np.array([[0, 0], [0, 1]], dtype=np.uint8),
+            axis=0,
+            index=1,
+        )
+        latent = torch.zeros(1, 2, 2, 2)
+
+        with (
+            patch("src.app.api.predictor.sample_latent", return_value=latent),
+            patch.object(
+                self.predictor,
+                "_run_joint",
+                return_value=(
+                    (latent,),
+                    {
+                        "joint_steps": torch.tensor(1),
+                        "joint_candidate_steps": torch.tensor([0]),
+                    },
+                ),
+            ) as run_joint,
+            patch(
+                "src.app.api.predictor.select_latent_volume",
+                return_value=(
+                    torch.zeros(2, 2, 2),
+                    {"quality_passed": torch.tensor(True)},
+                ),
+            ),
+        ):
+            self.predictor.predict(options, anchors=[anchor])
+
+        labels = run_joint.call_args.kwargs["target_labels"]
+        self.assertTrue(torch.equal(labels[0].cpu(), torch.from_numpy(anchor.image)))
+
+    def test_target_images_are_the_morphology_reference_when_anchor_is_present(self):
+        options = PredictOptions(
+            num_phases=2,
+            phase_fractions=(0.5, 0.5),
+            joint=JointConfig(steps=1),
+            targets=TargetConfig(global_fraction_weight=1.0),
+            refine=RefineConfig(candidates=(0,)),
+        )
+        anchor = AnchorSlice(
+            image=np.zeros((2, 2), dtype=np.uint8),
+            axis=0,
+            index=1,
+        )
+        target = np.ones((2, 2), dtype=np.uint8)
+        latent = torch.zeros(1, 2, 2, 2)
+
+        with (
+            patch("src.app.api.predictor.sample_latent", return_value=latent),
+            patch.object(
+                self.predictor,
+                "_run_joint",
+                return_value=(
+                    (latent,),
+                    {
+                        "joint_steps": torch.tensor(1),
+                        "joint_candidate_steps": torch.tensor([0]),
+                    },
+                ),
+            ),
+            patch(
+                "src.app.api.predictor.select_latent_volume",
+                return_value=(
+                    torch.zeros(2, 2, 2),
+                    {"quality_passed": torch.tensor(True)},
+                ),
+            ) as select,
+        ):
+            self.predictor.predict(
+                options,
+                anchors=[anchor],
+                target_images=[target],
+            )
+
+        references = select.call_args.kwargs["references"]
+        self.assertEqual(references.shape, (1, 2, 2, 2))
+        self.assertTrue(torch.equal(references[:, 1], torch.ones(1, 2, 2)))
 
     def test_joint_receives_paper_descriptor_targets(self):
         options = PredictOptions(
@@ -262,16 +360,70 @@ class PredictorTest(unittest.TestCase):
             ) as run_joint,
             patch(
                 "src.app.api.predictor.select_latent_volume",
-                return_value=(volume, {"candidate_count": torch.tensor(1)}),
+                return_value=(
+                    volume,
+                    {
+                        "candidate_count": torch.tensor(1),
+                        "quality_passed": torch.tensor(False),
+                    },
+                ),
             ),
         ):
-            result, stats = self.predictor.predict(options)
+            with self.assertWarnsRegex(RuntimeWarning, "least-violation"):
+                result, stats = self.predictor.predict(options)
 
         sample.assert_called_once()
         self.assertTrue(sample.call_args.kwargs["progress"])
         run_joint.assert_called_once()
         self.assertEqual(result.dtype, torch.uint8)
         self.assertEqual(int(stats["joint_steps"]), 1)
+
+    def test_base_lmpdd_receives_soft_anchor_condition(self):
+        options = PredictOptions(
+            num_phases=2,
+            prior=PriorConfig(anchor_strength=0.25),
+            joint=JointConfig(steps=1),
+            refine=RefineConfig(candidates=(0,)),
+        )
+        anchor = AnchorSlice(
+            image=np.zeros((2, 2), dtype=np.uint8),
+            axis=0,
+            index=1,
+        )
+        latent = torch.zeros(1, 2, 2, 2)
+        anchor_latent = torch.ones(2, 1, 2, 2)
+        anchor_mask = torch.full_like(anchor_latent, 0.25)
+
+        with (
+            patch(
+                "src.app.api.predictor.encode_anchors",
+                return_value=(anchor_latent, anchor_mask),
+            ) as encode,
+            patch(
+                "src.app.api.predictor.sample_latent",
+                return_value=latent,
+            ) as sample,
+            patch.object(
+                self.predictor,
+                "_run_joint",
+                return_value=(
+                    (latent,),
+                    {
+                        "joint_steps": torch.tensor(1),
+                        "joint_candidate_steps": torch.tensor([0]),
+                    },
+                ),
+            ),
+            patch(
+                "src.app.api.predictor.select_latent_volume",
+                return_value=(torch.zeros(2, 2, 2), {}),
+            ),
+        ):
+            self.predictor.predict(options, anchors=[anchor])
+
+        self.assertEqual(encode.call_args.kwargs["peak_strength"], 0.25)
+        self.assertIs(sample.call_args.kwargs["anchor_latent"], anchor_latent)
+        self.assertIs(sample.call_args.kwargs["anchor_mask"], anchor_mask)
 
     def test_critic_uses_anchor_or_target_references(self):
         options = PredictOptions(
@@ -298,10 +450,13 @@ class PredictorTest(unittest.TestCase):
             patch.object(
                 self.predictor,
                 "_run_joint",
-                return_value=((latent,), {
-                    "joint_steps": torch.tensor(1),
-                    "joint_candidate_steps": torch.tensor([0]),
-                }),
+                return_value=(
+                    (latent,),
+                    {
+                        "joint_steps": torch.tensor(1),
+                        "joint_candidate_steps": torch.tensor([0]),
+                    },
+                ),
             ),
             patch(
                 "src.app.api.predictor.select_latent_volume",
@@ -323,10 +478,10 @@ class PredictorTest(unittest.TestCase):
         )
         latent = torch.zeros(1, 2, 2, 2)
         failed = {
-            "critic_validation_accuracy": torch.tensor(0.5),
-            "critic_damage_accuracy": torch.tensor(0.5),
-            "critic_shuffle_accuracy": torch.tensor(0.5),
-            "critic_stat_sensitivity": torch.tensor(0.0),
+            "critic_validation_accuracy": torch.tensor(0.8),
+            "critic_damage_accuracy": torch.tensor(0.8),
+            "critic_shuffle_accuracy": torch.tensor(0.8),
+            "critic_validation_margin": torch.tensor(0.0),
             "critic_input_gradient_finite": torch.tensor(True),
         }
 
@@ -349,10 +504,13 @@ class PredictorTest(unittest.TestCase):
 
         with patch(
             "src.app.api.predictor.optimize_latent",
-            return_value=((latent,), {
-                "joint_steps": torch.tensor(1),
-                "joint_candidate_steps": torch.tensor([0]),
-            }),
+            return_value=(
+                (latent,),
+                {
+                    "joint_steps": torch.tensor(1),
+                    "joint_candidate_steps": torch.tensor([0]),
+                },
+            ),
         ) as optimize:
             self.predictor._run_joint(
                 latent,
@@ -384,6 +542,7 @@ class PredictorTest(unittest.TestCase):
                 "_refine_large",
                 return_value=(generated, {"history_loss": torch.tensor(0.0)}),
             ) as refine,
+            self.assertWarnsRegex(RuntimeWarning, "least-violation"),
         ):
             volume, stats = self.predictor.predict(options, volume_size=4)
 
@@ -391,6 +550,54 @@ class PredictorTest(unittest.TestCase):
         refine.assert_called_once()
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
         self.assertIn("final_phase_fraction", stats)
+
+    def test_large_anchor_and_target_keep_reference_roles_separate(self):
+        options = PredictOptions(
+            num_phases=2,
+            targets=TargetConfig(global_fraction_weight=1.0),
+            scale=ScaleConfig(steps=1),
+            refine=RefineConfig(candidates=(0,)),
+        )
+        anchor = AnchorSlice(
+            image=np.zeros((2, 2), dtype=np.uint8),
+            axis=0,
+            index=1,
+        )
+        target = np.ones((4, 4), dtype=np.uint8)
+        generated = torch.zeros(4, 4, 4)
+
+        with (
+            patch.object(
+                self.predictor,
+                "_generate_large",
+                return_value=(generated, {"volume_size": 4}),
+            ),
+            patch.object(
+                self.predictor,
+                "_refine_large",
+                return_value=(generated, {"history_loss": torch.tensor(0.0)}),
+            ) as refine,
+            patch(
+                "src.app.api.predictor.refine_large_candidates",
+                return_value=(generated,),
+            ),
+            patch(
+                "src.app.api.predictor.select_label_volume",
+                return_value=(
+                    generated,
+                    {"quality_passed": torch.tensor(True)},
+                ),
+            ) as select,
+        ):
+            self.predictor.predict(
+                options,
+                anchors=[anchor],
+                target_images=[target],
+                volume_size=4,
+            )
+
+        self.assertEqual(refine.call_args.kwargs["target_labels"].shape, (1, 4, 4))
+        self.assertEqual(select.call_args.kwargs["references"].shape, (1, 2, 4, 4))
 
     def test_large_prediction_warns_when_base_guidance_is_configured(self):
         options = PredictOptions(

@@ -116,6 +116,28 @@ def decode_volume_probs(
     plane_batch_size: int | None = None,
     checkpoint_gradients: bool = False,
 ) -> torch.Tensor:
+    axis_probabilities = decode_axis_probs(
+        vae,
+        latent,
+        num_phases=num_phases,
+        plane_batch_size=plane_batch_size,
+        checkpoint_gradients=checkpoint_gradients,
+    )
+    num_phases = int(axis_probabilities.shape[1])
+    return geometric_probability_consensus(
+        axis_probabilities,
+        num_phases,
+    ).unsqueeze(0)
+
+
+def decode_axis_probs(
+    vae: torch.nn.Module,
+    latent: torch.Tensor,
+    *,
+    num_phases: int | None = None,
+    plane_batch_size: int | None = None,
+    checkpoint_gradients: bool = False,
+) -> torch.Tensor:
     _validate_latent_volume(vae, latent)
     vae.eval()
 
@@ -172,10 +194,7 @@ def decode_volume_probs(
         output_size=output_size,
     ).permute(0, 2, 3, 1)
 
-    return geometric_probability_consensus(
-        torch.stack([depth_probs, height_probs, width_probs]),
-        num_phases,
-    ).unsqueeze(0)
+    return torch.stack([depth_probs, height_probs, width_probs])
 
 
 def interpolate_phase_planes(

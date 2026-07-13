@@ -35,7 +35,12 @@ class LatentRefiner(torch.nn.Module):
         if base.ndim != 5:
             raise ValueError("base latent must have shape [B, C, D, H, W].")
         residual = torch.tanh(self.to_residual(self.body(base)))
-        return base + self.scale * residual
+        channel_scale = base.std(
+            dim=(2, 3, 4),
+            keepdim=True,
+            unbiased=False,
+        ).clamp_min(1e-3)
+        return base + self.scale * channel_scale * residual
 
 
 def _block(in_channels: int, out_channels: int) -> torch.nn.Sequential:

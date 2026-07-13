@@ -121,6 +121,7 @@ def evaluate_phase_volume(
 
     if anchors:
         mismatches = []
+        phase_mismatches = []
         for anchor in anchors:
             image = anchor.image.to(device=labels.device, dtype=labels.dtype)
             size = int(image.shape[-1])
@@ -128,14 +129,29 @@ def evaluate_phase_volume(
             actual = extract_slice(labels, int(anchor.axis), int(anchor.index))
             actual = actual[start : start + size, start : start + size]
             if actual.shape != image.shape:
-                raise ValueError("anchor image must fit inside the selected volume slice.")
+                raise ValueError(
+                    "anchor image must fit inside the selected volume slice."
+                )
             mismatches.append((actual != image).float().mean())
+            phase_mismatches.append(
+                torch.stack(
+                    [
+                        (actual[image == phase] != phase).float().mean()
+                        if bool((image == phase).any().item())
+                        else actual.new_zeros((), dtype=torch.float32)
+                        for phase in range(num_phases)
+                    ]
+                )
+            )
         anchor_mismatches = torch.stack(mismatches)
+        anchor_phase_mismatches = torch.stack(phase_mismatches)
         stats.update(
             {
                 "anchor_mismatches": anchor_mismatches,
                 "anchor_mismatch": anchor_mismatches.mean(),
                 "anchor_max_mismatch": anchor_mismatches.max(),
+                "anchor_phase_mismatches": anchor_phase_mismatches,
+                "anchor_max_phase_mismatch": anchor_phase_mismatches.max(),
             }
         )
 

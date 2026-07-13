@@ -87,6 +87,41 @@ class VAELossTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(loss, expected))
 
+    def test_phase_balance_gives_rare_phase_more_influence(self):
+        logits = torch.tensor(
+            [
+                [
+                    [[4.0, 4.0, 4.0, 4.0]],
+                    [[0.0, 0.0, 0.0, 0.0]],
+                ]
+            ]
+        )
+        target = torch.tensor([[[[0.0, 0.0, 0.0, 1.0]]]])
+
+        unweighted = phase_cross_entropy(logits, target, num_phases=2)
+        balanced = phase_cross_entropy(
+            logits,
+            target,
+            num_phases=2,
+            phase_balance=1.0,
+        )
+
+        self.assertGreater(float(balanced), float(unweighted))
+
+    def test_phase_balance_validates_range(self):
+        logits = torch.zeros(1, 2, 1, 1)
+        target = torch.zeros(1, 1, 1, 1)
+
+        for balance in (-0.1, 1.1, float("nan"), True):
+            with self.subTest(balance=balance):
+                with self.assertRaisesRegex(ValueError, "phase_balance"):
+                    phase_cross_entropy(
+                        logits,
+                        target,
+                        num_phases=2,
+                        phase_balance=balance,
+                    )
+
     def test_logits_to_relaxed_labels_returns_soft_expected_phase_index_image(self):
         logits = torch.tensor(
             [
@@ -215,6 +250,10 @@ class VAELossTest(unittest.TestCase):
         )
         self.assertTrue(torch.allclose(parts["kl"], torch.tensor(0.5)))
         self.assertTrue(torch.allclose(total, expected))
+
+    def test_vae_loss_module_validates_phase_balance(self):
+        with self.assertRaisesRegex(ValueError, "phase_balance"):
+            VAELoss(phase_balance=1.1)
 
 
 if __name__ == "__main__":

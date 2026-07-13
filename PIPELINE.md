@@ -6,7 +6,7 @@
 잘라도 학습 데이터와 같은 형태를 보이는 연속적인 3D categorical volume을 만든다.
 조건 단면은 그대로 복사하지 않고 soft loss로 맞춘다.
 
-사용자에게 보이는 생성 경로는 하나다. L-MPDD, SDS, latent critic, 앵커,
+사용자에게 보이는 생성 경로는 하나다. L-MPDD, SDS, 선택적 latent critic, 앵커,
 phase fraction, Refine을 서로 대체하는 모드로 제공하지 않는다. 각 기능은 같은
 L-MPDD 후보를 개선하거나 평가하는 단계다.
 
@@ -33,8 +33,8 @@ frozen 2D diffusion
     -> L-MPDD latent candidates
     -> axis slice/crop
     -> fake latent bank
-    -> online critic warm-up and validation
-    -> frozen critic
+    -> optional online critic warm-up and validation
+    -> optional frozen critic
 
 selected L-MPDD latent Z0
     -> Z = Z0 + alpha * R(Z0)
@@ -46,6 +46,7 @@ selected L-MPDD latent Z0
        - optional per-slice fraction descriptor
        - paper descriptors (TPC, surface area, diffusivity)
        - decoded continuity and latent preservation
+       - tri-axis decoded phase agreement
     -> shared tri-axis categorical probability decoder
     -> Refine candidates (0, 1, 2 sweeps)
     -> budget-limited categorical calibration
@@ -54,7 +55,8 @@ selected L-MPDD latent Z0
 ```
 
 VAE와 diffusion weight는 prediction 중 갱신하지 않는다. 온라인으로 학습하는 것은
-critic과 zero-initialized 3D residual refiner뿐이다.
+활성화된 critic과 zero-initialized 3D residual refiner뿐이다. Critic은 조성이 다른
+real/fake를 판별 shortcut으로 사용할 가능성이 있어 기본값에서는 비활성화한다.
 
 현재 reference augmentation과 최종 morphology 평가는 세 축이 같은 통계를 따른다는
 등방성 가정을 사용한다. 축마다 다른 조직을 요구하는 anisotropic mode는 지원하지
@@ -75,6 +77,7 @@ critic과 zero-initialized 3D residual refiner뿐이다.
 - 지정한 step을 모두 학습한 뒤 validation 최적 checkpoint를 복원한다.
 - critic을 고정한 뒤 joint optimizer에 read-only guidance로 제공한다.
 - 검증에 실패한 critic은 비활성화하고 나머지 guidance는 계속 실행한다.
+- composition-matched 또는 fraction-conditioned 학습 전에는 실험 옵션으로만 사용한다.
 - random-noise 3D generator는 소유하지 않는다.
 
 ### Joint guidance
@@ -99,14 +102,15 @@ diffusion latent를 추가할 경우 real-like reference로만 사용한다.
 Fake는 여러 L-MPDD latent volume의 세 축 slice/crop이다. 최종 개선 대상 `Z0`의
 모든 slice는 holdout으로 두고, 나머지 volume만 critic 학습에 사용한다. Real도
 augmentation 뒤 섞지 않고 reference source 단위로 분할한다. Source가 한 장뿐이면
-진정한 source holdout이 불가능하다는 상태를 통계에 남긴다. Critic 입력은 slice별
-channel 평균과 분산을 정규화한다. 다음 조건을 충족한 경우에만 residual guidance에
-사용한다.
+진정한 source holdout이 불가능하다는 상태를 통계에 남긴다. Critic 입력은 channel별
+공간 평균을 제거하고 slice 전체 RMS로 정규화한다. 거의 일정한 channel의 잡음을
+per-channel 표준화로 증폭하지 않는다. 다음 조건을 충족한 경우에만 residual
+guidance에 사용한다.
 
 - held-out real/fake ranking accuracy가 기준 이상이다.
+- held-out real/fake score margin이 기준 이상이다.
 - score와 입력 gradient가 finite다.
 - alternating damage와 spatial shuffle을 clean reference보다 낮게 평가한다.
-- channel affine 통계 변화에는 지정된 민감도 이하로 반응한다.
 
 첫 구현은 critic warm-up 후 완전히 고정한다. Residual과 critic을 매 step 동시에
 갱신하지 않는다.
@@ -132,14 +136,15 @@ Calibration은 마지막에 후보당 한 번만 수행한다. 앵커 target이 
 - transition, run-profile, boundary-jump delta
 
 변경 voxel 비율이 budget을 넘으면 해당 후보를 위반 후보로 기록한다. 통과 후보가
-없어도 생성물을 버리지 않고 총 위반량이 가장 작은 후보를 반환한다. 후보 선택
-우선순위는 다음과 같다.
+없어도 생성물을 버리지 않고 아래 gate 순서의 사전식 순위가 가장 좋은 후보를
+반환한다. 후보 선택 우선순위는 다음과 같다.
 
 1. 최대 anchor mismatch
 2. phase-fraction tolerance와 calibration budget
 3. 반복 단면, boundary cutoff, 축 collapse
 4. transition과 run-profile
 5. 합격 후보 사이의 morphology score
+6. 나머지 품질이 같으면 `latent delta RMS / base std`가 작은 후보
 
 하나의 낮은 scalar score가 앵커나 fraction 실패를 상쇄하지 못한다.
 

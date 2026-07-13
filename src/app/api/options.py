@@ -35,16 +35,19 @@ class PriorConfig:
 
     Attributes:
         weight: Strength of the diffusion prior loss.
+        anchor_strength: Soft latent anchor blend used during L-MPDD sampling.
         t_min: Lowest diffusion timestep sampled during optimization.
         t_max: Exclusive upper timestep, or the full schedule when omitted.
     """
 
     weight: float = 1.0
+    anchor_strength: float = 0.0
     t_min: int = 1
     t_max: int | None = None
 
     def __post_init__(self) -> None:
         _require_non_negative("weight", self.weight)
+        _require_unit_interval("anchor_strength", self.anchor_strength)
         require_int("t_min", self.t_min)
         if self.t_min < 0:
             raise ValueError("t_min must be non-negative.")
@@ -128,9 +131,10 @@ class JointConfig:
         decode_batch_size: Number of VAE planes decoded at once during Joint.
             Set to None to decode each axis in one batch without checkpointing.
         learning_rate: Learning rate for the 3D generator.
+        axis_weight: Weight aligning decoded phase probabilities across axes.
         continuity_weight: Weight encouraging continuity between slices.
         anchor_weight: Weight of exact decoded anchor conditioning.
-        residual_scale: Maximum magnitude of the latent residual.
+        residual_scale: Maximum residual in channel standard deviations.
         preservation_weight: Weight keeping the result close to L-MPDD.
         checkpoint_every: Interval between candidate checkpoints.
     """
@@ -140,6 +144,7 @@ class JointConfig:
     decode_batch_size: int | None = 2
     learning_rate: float = 1e-4
 
+    axis_weight: float = 1.0
     continuity_weight: float = 5e-2
     anchor_weight: float = 1.0
 
@@ -162,6 +167,7 @@ class JointConfig:
         if self.learning_rate <= 0.0:
             raise ValueError("learning_rate must be positive.")
         for name in (
+            "axis_weight",
             "continuity_weight",
             "anchor_weight",
             "preservation_weight",
@@ -188,7 +194,7 @@ class CriticConfig:
         validate_every: Critic updates between validation checks.
         min_accuracy: Required held-out real/fake ranking accuracy.
         min_damage_accuracy: Required clean/damaged ranking accuracy.
-        max_stat_sensitivity: Maximum sensitivity to channel affine statistics.
+        min_margin: Required held-out real/fake score margin.
     """
 
     steps: int = 0
@@ -201,7 +207,7 @@ class CriticConfig:
     validate_every: int = 25
     min_accuracy: float = 0.6
     min_damage_accuracy: float = 0.6
-    max_stat_sensitivity: float = 0.01
+    min_margin: float = 0.05
 
     def __post_init__(self) -> None:
         _require_non_negative_int("steps", self.steps)
@@ -224,12 +230,9 @@ class CriticConfig:
         _require_non_negative_int("validate_every", self.validate_every)
         if self.validate_every == 0:
             raise ValueError("validate_every must be positive.")
-        for name in (
-            "min_accuracy",
-            "min_damage_accuracy",
-            "max_stat_sensitivity",
-        ):
+        for name in ("min_accuracy", "min_damage_accuracy"):
             _require_unit_interval(name, getattr(self, name))
+        _require_non_negative("min_margin", self.min_margin)
 
 
 @dataclass(frozen=True)

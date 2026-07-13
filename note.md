@@ -1,6 +1,6 @@
 # 3D 조건부 복원 실험 노트
 
-마지막 갱신: 2026-07-13
+마지막 갱신: 2026-07-14
 
 > 이 문서의 SliceGAN generator, noise conditioning, 6000-step 결과는
 > `144336e` 이전 레거시 경로의 실험 기록이다. 현재
@@ -42,6 +42,51 @@
 - 모든 target image는 Predictor 입구에서 한 번만 categorical label로 준비하며, SDS 전용/Joint 전용 target 옵션이 다른 실행 모드에서 조용히 무시되지 않도록 검증한다.
 - 서로 다른 축 앵커의 교차 label 충돌은 최적화 전에 오류로 처리한다. calibration은 target label을 강제 복사하지 않고 calibration 직전 모델이 선택한 앵커 영역 label만 보호한다.
 - base/scale decoder는 모두 latent plane 사이를 trilinear interpolation한 뒤 동일한 tri-axis probability consensus를 사용한다. scale 경로의 반복 slab 복제는 제거했다.
+
+### 2026-07-13 현재 L-MPDD base-size 재검증
+
+- `joint.batch_size=1`에서 SDS와 critic이 axis 0만 보던 문제를 수정했다. latent slice 축은 Joint step에 따라 `0 → 1 → 2`로 순환한다.
+- quality gate 실패 후보는 서로 다른 단위의 초과량 합계가 아니라 앵커, 공극률·calibration, 반복·boundary, transition·run 순으로 비교한다.
+- 무조건 L-MPDD의 초기 앵커 mismatch는 약 `42%`였다. Gaussian 주변 확산 없이 요청 latent plane에 강도 `0.25`의 약한 조건만 주고 exact image-space Joint를 실행하면 최종 mismatch가 VAE categorical 복원 한계 근처까지 감소했다.
+- 현재 채택은 **약한 center-only latent 초기 조건 + exact Joint**다. latent 조건만 사용하면 최고 유사 단면이 요청 index보다 1~2칸 이동했지만, Joint가 요청 image-space index를 다시 맞췄다. 최종 voxel에 앵커 label을 복사하지 않는다.
+- categorical anchor loss는 존재하는 phase별 NLL 평균을 사용한다. 같은 앵커의 VAE mean 복원 mismatch는 `9.52%`이며, phase 1 recall은 약 `54%`라 3D 최적화만으로 이 한계를 크게 넘기 어렵다.
+- 세 축 decoder가 같은 voxel의 phase 위치에 합의하지 못해 geometric consensus 뒤 작은 phase가 소실되는 것이 calibration 부담의 직접 원인이었다. phase별 공간분포 JS agreement를 Joint에 추가한 최신 실행은 pre-calibration fraction을 `[0.1693, 0.0308, 0.7999] → [0.2121, 0.0324, 0.7555]`, calibration 변경량을 약 `22.3% → 17.9%`로 개선했다.
+- 최신 full 500-step 결과의 앵커 mismatch는 `[11.01%, 10.94%]`로 VAE 한계에서 약 `1.5%p` 이내다. phase 1 recall은 `[58.94%, 52.26%]`, phase 0/2 recall은 `92.65~94.96%`였다. 최종 phase fraction은 목표 `[0.2985, 0.1248, 0.5766]`과 일치했고 calibration의 앵커 mismatch 변화는 `[0, 0]`이었다.
+- 최신 축 전이율은 `[0.1966, 0.1965, 0.2010]`, run-profile MAE는 `[0.0539, 0.0527, 0.0486]`, global boundary jump는 `[0.0903, 0.1082, 0.0588]`였다. 앵커는 VAE 한계에 근접했지만 XZ boundary와 run-profile은 아직 목표를 완전히 통과하지 못하므로 전체 목표는 진행 중이다.
+- calibration 비용에 3D 이웃 지지 weight `1.0`을 추가한 실험은 boundary jump를 `0.068~0.071`로 낮췄지만 run-profile MAE를 `0.053~0.061`로 악화했다. Reference의 작은 phase component 중앙값 `299`개에 비해 기존 `159~168`개, 공간 보정 `138~143`개로 더 멀어져 폐기했다.
+- global fraction MSE weight `50`은 calibration 변경량을 `22% → 9%`로 줄였지만 앵커 mismatch를 `12~13%`, run-profile MAE를 최대 `0.072`로 악화해 폐기했다.
+- 작은 phase에 강한 squared Hellinger fraction loss는 calibration 변경량을 약 `20%`로만 줄였고 axis boundary jump를 `0.100`까지 높여 폐기했다. 현재 phase bias는 scalar fraction loss보다 축별 decoder 결과가 voxel 위치에서 합의하지 못하는 문제가 더 크다.
+- 같은 조건으로 생성한 L-MPDD 3개는 초기 최대 앵커 mismatch가 `25.85~27.93%`로 차이가 있었지만 hard fraction은 모두 약 `[0.15, 0.029, 0.82]`였다. best-of-3는 앵커 초기값 보조에는 쓸 수 있지만 fraction/3축 morphology의 근본 해결은 아니다.
+- online critic의 per-channel 표준화는 거의 일정한 latent channel의 잡음을 증폭해 GP를 불안정하게 만들었다. channel mean만 제거하고 slice 전체 RMS로 나누면 1,000-step 학습의 GP와 입력 gradient가 정상 범위로 돌아왔다.
+- critic의 단순 affine probe는 네트워크 정규화 때문에 구조적으로 통과하므로 조성 무관성 증거가 아니었다. 해당 지표는 제거하고 held-out margin을 최소 검증에 추가했다.
+- 같은 초기 난수에서 critic을 동일하게 1,000 step 학습하고 Joint weight만 `0/0.02`로 바꾼 100-step 비교에서, critic 사용 시 앵커 mismatch가 `[12.50%, 11.79%] → [13.01%, 12.11%]`로 악화했고 run-profile MAE와 XZ boundary도 나아지지 않았다. fraction-matched 또는 fraction-conditioned critic을 구현하기 전까지 기본 `critic.steps/weight`는 `0`으로 두며, 기존 구현은 실험 옵션으로만 남긴다.
+- critic을 끈 현재 기본 설정으로 `03_predict.ipynb`를 500 step 끝까지 실행했다. VAE baseline `8.89%` 대비 최종 앵커 mismatch는 `[9.81%, 10.11%]`, phase fraction은 목표와 정확히 일치했고 calibration의 앵커 변화는 `[0, 0]`이었다. 실행 시간은 RTX 2060에서 `396.5초`였다.
+- 같은 실행에서 calibration은 voxel `16.38%`를 바꾸며 축 전이율을 약 `0.087`, XZ boundary를 `0.0356` 높였다. 최종 run-profile MAE `[0.0715, 0.0553, 0.0659]`, boundary `[0.0906, 0.1343, 0.0620]`로 전역 품질 gate는 통과하지 못했다. 시각적으로도 중심 앵커는 유사하지만 앵커 직후 변화율 급락과 멀어진 단면의 작은 phase 파편이 남는다.
+- 따라서 현재 run에서 앵커 복원은 VAE 한계에 근접했지만 3D 자연스러움 목표는 완료되지 않았다. exact fraction calibration을 더 복잡하게 만드는 대신 VAE hard categorical bias와 diffusion latent bias를 재학습에서 먼저 줄인다.
+- Joint residual은 checkpoint마다 달라지는 절대 latent 값이 아니라 채널별 공간 표준편차 단위로 제한한다. 후보마다 `latent delta RMS / base std`도 기록하고, 나머지 품질이 같으면 원래 L-MPDD latent에서 덜 벗어난 후보를 선택한다.
+- base/scale Refine 계약은 이번 base-size 앵커 목표와 분리해 후속 검토한다. large 경로의 앵커와 target reference는 역할을 분리해 서로 다른 허용 크기를 뒤늦게 병합하지 않는다.
+
+### 재학습이 필요한 근본 수정
+
+- 기존 VAE는 probability mass는 target fraction에 가깝지만 hard categorical 복원에서 작은 phase recall이 약 `54~58%`에 머물렀다. unweighted CE가 큰 phase voxel에 지배되는 것이 직접 원인이다.
+- batch phase 빈도의 역수에 지수 `phase_balance`를 적용하는 categorical CE를 추가했다. `0`은 기존 CE, `1`은 phase별 완전 균형이며 기본은 과보정을 피한 `0.35`다.
+- 동일 checkpoint를 덮어쓰지 않고 `lr=1e-5`로 1,000 step 진단 fine-tune한 결과, `phase_balance=0.35`는 전체 mismatch를 `8.20% → 7.49%`, 작은 phase recall을 `58.14% → 72.27%`로 개선했다. hard phase fraction은 `9.84% → 12.83%`로 target에 가까워졌고 100~1,000 step 사이 과생성 없이 안정적이었다.
+- scratch 50k 재학습을 완료했다. 동일 64-patch 최종평가에서 새 50k VAE는 mismatch `8.20%`, 작은 phase recall `70.44%`, 최대 hard fraction 오차 `0.60%p`, 2D transition 오차 `2.50%p`였다. 기존 VAE의 `8.50%/56.46%/2.71%p/4.63%p`보다 모든 선택 지표가 개선돼 50k를 채택했다. `weight/vae/last`와 `50000`의 모델 state가 완전히 같음을 확인했다.
+- Diffusion 학습은 online weight의 EMA(`ema_decay=0.9999`)를 매 step 갱신하고 EMA checkpoint를 저장한다. 학습 step과 `save_every`는 그대로 유지하며 얼리스탑은 사용하지 않는다.
+- 채택 VAE로 EMA diffusion run `20260714-050533-017623`을 시작했다. run에 복사된 VAE와 source 50k의 model state가 완전히 같고, diffusion은 50k step/5k 저장/EMA `0.9999` 설정이다.
+- Diffusion 5k checkpoint는 모든 tensor가 finite이고 `last`와 model state가 같으며, 초기 EMA 대비 parameter RMS 변화 `0.00440`으로 실제 업데이트됐음을 확인했다.
+- VAE latent 분포가 달라지므로 이 변경을 실제 예측에 사용하려면 VAE와 diffusion을 순서대로 다시 학습해야 한다. 현재 run의 checkpoint에는 phase balance나 EMA가 자동 적용되지 않는다.
+
+### 2026-07-14 재학습 후 base-size 최종 검증
+
+- 새 VAE와 EMA diffusion은 run `20260714-050533-017623`에서 각각 50k step을 완료했다. `50000`과 `last`의 diffusion model state가 같고 모든 tensor가 finite이며, run에 복사된 VAE도 채택 VAE 50k와 완전히 같다.
+- 세 축 decoder 각각의 hard fraction은 대략 `[0.24, 0.12, 0.64]`였지만 geometric consensus 뒤 `[0.21, 0.055, 0.735]`로 작은 phase가 붕괴했다. calibration 부담의 직접 원인은 단일 축 VAE가 아니라 축간 voxel 불일치와 product-of-experts 성격의 consensus다.
+- Joint global fraction의 MSE는 큰 조성 오차에서도 loss가 `0.007` 수준이라 anchor·axis 항에 묻혔다. 범주 분포에 맞는 KL divergence로 바꾸고 weight `5`, anchor weight `2`를 채택했다. 단순 확률 mass만 맞추는 Refine 실험은 hard fraction을 악화해 코드와 함께 폐기했다.
+- 최종 700-step 실행은 24개 후보 중 step `700`, Refine `1`을 선택했다. VAE anchor baseline `10.18%` 대비 최종 mismatch `[11.91%, 12.13%]`로 두 앵커 모두 약 `+2%p` 이내이며, calibration의 앵커 변화는 `[0, 0]`이다.
+- 목표/최종 phase fraction은 모두 `[0.3142, 0.1269, 0.5589]`로 일치했다. pre-calibration fraction은 `[0.3069, 0.0848, 0.6083]`, calibration 변경량은 `4.94%`로 기본 budget `5%`를 처음 통과했다.
+- 최종 축 전이율은 `[0.1754, 0.1748, 0.1822]`, 완전 반복 단면 비율은 `[0, 0, 0]`, global boundary jump는 `[0.0623, 0.0767, 0.0632]`로 continuity gate를 통과했다. run-profile MAE `[0.0800, 0.0817, 0.0704]`는 보수적인 `0.05` gate를 넘으므로 3D 물성 근거로 사용하지 않는다.
+- ±8 contact sheet에서 두 앵커 모두 모양이 누적해서 변하고 ±3 이후 cutoff나 동일 slab 복제가 보이지 않았다. 전역 XY/XZ/YZ montage도 blob/grain morphology를 유지했다. 앵커 plane은 입력과 동일하지 않으며 최종 volume에 target voxel을 덮어쓰지 않는다.
+- 통과 후보끼리는 anchor/fraction/calibration을 hard gate로 본 뒤 반복, boundary, run, transition 순으로 morphology를 비교하고 앵커의 작은 차이는 뒤쪽 tie-breaker로만 사용한다. 실패 후보에서는 기존 condition gate 우선순위를 유지한다.
 
 당시 채택한 다중 앵커·상분율 실행 결과(`03_predict.ipynb`):
 
