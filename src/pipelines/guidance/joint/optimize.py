@@ -42,8 +42,9 @@ def optimize_latent(
     critic: LatentCritic | None = None,
     critic_weight: float = 0.0,
     anchor_weight: float = 0.0,
-    vf_targets: Mapping[int, float] | torch.Tensor | None = None,
-    vf_weight: float = 0.0,
+    fraction_targets: Mapping[int, float] | torch.Tensor | None = None,
+    slice_fraction_weight: float = 0.0,
+    global_fraction_weight: float = 0.0,
     tpc_targets: Mapping[int, torch.Tensor] | torch.Tensor | None = None,
     tpc_weight: float = 0.0,
     sa_targets: Mapping[int, float] | torch.Tensor | None = None,
@@ -96,9 +97,9 @@ def optimize_latent(
     )
     target_fractions = (
         None
-        if vf_targets is None
+        if fraction_targets is None
         else build_phase_target(
-            vf_targets,
+            fraction_targets,
             num_phases=num_phases,
             device=latent.device,
             dtype=latent.dtype,
@@ -131,6 +132,7 @@ def optimize_latent(
         )
         total = refined.sum() * 0.0
         stats: dict[str, torch.Tensor] = {}
+        display: dict[str, torch.Tensor] = {}
 
         if sds_weight > 0.0:
             prior, _ = sds_loss(
@@ -147,6 +149,7 @@ def optimize_latent(
             critic_term = guidance_loss(critic(latent_slices))
             total = total + critic_weight * critic_term
             stats["critic"] = (critic_weight * critic_term).detach()
+            display["critic"] = critic_term.detach()
 
         probabilities = decode_volume_probs(
             vae,
@@ -171,8 +174,8 @@ def optimize_latent(
         descriptor_total, descriptor_stats = sample_descriptor_loss(
             slice_values[:, 0],
             num_phases=num_phases,
-            vf_targets=vf_targets,
-            vf_weight=vf_weight,
+            fraction_targets=fraction_targets,
+            fraction_weight=slice_fraction_weight,
             tpc_targets=tpc_targets,
             tpc_weight=tpc_weight,
             sa_targets=sa_targets,
@@ -188,11 +191,16 @@ def optimize_latent(
         total = total + descriptor_total
         stats.update(descriptor_stats)
 
-        if target_fractions is not None and vf_weight > 0.0:
-            global_vf = probabilities.mean(dim=(0, 2, 3, 4))
-            fraction = 5.0 * vf_weight * F.mse_loss(global_vf, target_fractions)
+        if target_fractions is not None and global_fraction_weight > 0.0:
+            global_fraction = probabilities.mean(dim=(0, 2, 3, 4))
+            fraction_loss = F.mse_loss(
+                global_fraction,
+                target_fractions,
+            )
+            fraction = global_fraction_weight * fraction_loss
             total = total + fraction
-            stats["global_vf"] = fraction.detach()
+            stats["global_fraction"] = fraction.detach()
+            display["global_fraction"] = fraction_loss.detach()
 
         if anchor_weight > 0.0 and bool((anchor_mask > 0).any().item()):
             anchor = anchor_loss(
@@ -202,6 +210,7 @@ def optimize_latent(
             )
             total = total + anchor_weight * anchor
             stats["anchor"] = (anchor_weight * anchor).detach()
+            display["anchor"] = anchor.detach()
 
         if continuity_weight > 0.0:
             continuity = continuity_loss(probabilities)
@@ -231,10 +240,10 @@ def optimize_latent(
             for name, label in (
                 ("anchor", "anchor"),
                 ("critic", "critic"),
-                ("global_vf", "vf"),
+                ("global_fraction", "fraction"),
             ):
-                if name in stats:
-                    postfix[label] = f"{float(stats[name].item()):.4g}"
+                if name in display:
+                    postfix[label] = f"{float(display[name].item()):.4g}"
             step_range.set_postfix(postfix)
         if completed % checkpoint_every == 0 or completed == steps:
             with torch.no_grad():

@@ -6,7 +6,7 @@ import torch
 from src.modeling.diffusion import DDPMProcess
 from src.app.api import AnchorSlice
 from src.pipelines.scaling.tiles import blend_window
-from src.pipelines.scaling.optimization import optimize_large_volume
+from src.pipelines.scaling.optimize import optimize_large_volume
 from src.pipelines.scaling.objective import (
     batch_objective,
     slice_objective,
@@ -101,7 +101,7 @@ class RecordingNoiseModel(torch.nn.Module):
         return torch.zeros_like(x)
 
 
-class PredictScaleSDSTest(unittest.TestCase):
+class ScaleOptimizeTest(unittest.TestCase):
     def optimize(self, volume: torch.Tensor | None = None, **overrides):
         kwargs = {
             "steps": 1,
@@ -208,7 +208,7 @@ class PredictScaleSDSTest(unittest.TestCase):
         self.assertEqual(float(updated[2, 0, 0]), 0.0)
         self.assertIn("history_anchor", stats)
 
-    def test_optimize_large_volume_applies_full_slice_vf_target_loss(self):
+    def test_optimize_large_volume_applies_slice_fraction_loss(self):
         updated, stats = optimize_large_volume(
             torch.zeros(4, 4, 4),
             IdentityVAE(),
@@ -222,15 +222,39 @@ class PredictScaleSDSTest(unittest.TestCase):
             num_phases=2,
             slice_schedule=[(0, 1)],
             sds_weight=0.0,
-            vf_targets=torch.tensor([1.0, 0.0]),
-            vf_weight=1.0,
+            fraction_targets=torch.tensor([1.0, 0.0]),
+            slice_fraction_weight=1.0,
             temperature=0.5,
             tile_overlap=0,
         )
 
         self.assertLessEqual(float(updated[1].mean()), 0.0)
-        self.assertIn("history_vf", stats)
+        self.assertIn("history_fraction", stats)
         self.assertIn("history_loss", stats)
+
+    def test_global_fraction_guidance_does_not_force_each_slice_fraction(self):
+        updated, stats = optimize_large_volume(
+            torch.zeros(4, 4, 4),
+            IdentityVAE(),
+            ZeroNoiseModel(),
+            DDPMProcess(timesteps=4),
+            steps=1,
+            slice_steps=2,
+            lr=0.5,
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            slice_schedule=[(0, 1)],
+            sds_weight=0.0,
+            fraction_targets=torch.tensor([0.75, 0.25]),
+            global_fraction_weight=1.0,
+            temperature=0.5,
+            tile_overlap=0,
+        )
+
+        self.assertEqual(updated.shape, torch.Size([4, 4, 4]))
+        self.assertIn("history_global_fraction", stats)
+        self.assertNotIn("history_fraction", stats)
 
     def test_optimize_large_volume_batches_same_axis_slices_for_sds_prior(self):
         model = RecordingNoiseModel()
@@ -347,12 +371,12 @@ class PredictScaleSDSTest(unittest.TestCase):
             anchor_weight=0.0,
             temperature=0.01,
             tile_overlap=0,
-            vf_targets=torch.tensor([0.5, 0.5]),
-            vf_weight=1.0,
+            fraction_targets=torch.tensor([0.5, 0.5]),
+            fraction_weight=1.0,
         )
 
         self.assertGreater(float(total.detach()), 0.1)
-        self.assertGreater(float(stats["vf"]), 0.1)
+        self.assertGreater(float(stats["fraction"]), 0.1)
 
     def test_large_slice_batch_anchor_loss_includes_unanchored_slices_in_mean(self):
         images = torch.zeros(2, 2, 2)

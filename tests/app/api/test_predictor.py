@@ -52,7 +52,12 @@ class PredictOptionsTest(unittest.TestCase):
     def test_loss_weights_accept_values_above_one(self):
         self.assertEqual(PriorConfig(weight=2.0).weight, 2.0)
         self.assertEqual(JointConfig(anchor_weight=2.0).anchor_weight, 2.0)
-        self.assertEqual(TargetConfig(vf_weight=2.0).vf_weight, 2.0)
+        target = TargetConfig(
+            slice_fraction_weight=2.0,
+            global_fraction_weight=3.0,
+        )
+        self.assertEqual(target.slice_fraction_weight, 2.0)
+        self.assertEqual(target.global_fraction_weight, 3.0)
 
     def test_joint_can_decode_all_planes_at_once(self):
         self.assertIsNone(JointConfig(decode_batch_size=None).decode_batch_size)
@@ -145,6 +150,7 @@ class PredictorTest(unittest.TestCase):
             phase_fractions=(0.25, 0.75),
             prior=PriorConfig(weight=0.6, t_min=0, t_max=3),
             joint=JointConfig(steps=1),
+            targets=TargetConfig(global_fraction_weight=1.0),
             refine=RefineConfig(candidates=(0,)),
         )
         latent = torch.zeros(1, 2, 2, 2)
@@ -166,12 +172,29 @@ class PredictorTest(unittest.TestCase):
             )
 
         kwargs = optimize.call_args.kwargs
-        self.assertTrue(torch.equal(kwargs["vf_targets"], torch.tensor([0.25, 0.75])))
-        self.assertEqual(kwargs["vf_weight"], 1.0)
+        self.assertTrue(
+            torch.equal(
+                kwargs["fraction_targets"],
+                torch.tensor([0.25, 0.75]),
+            )
+        )
+        self.assertEqual(kwargs["slice_fraction_weight"], 0.0)
+        self.assertEqual(kwargs["global_fraction_weight"], 1.0)
         self.assertEqual(kwargs["sds_weight"], 0.6)
         self.assertEqual(kwargs["t_min"], 0)
         self.assertEqual(kwargs["t_max"], 3)
         self.assertTrue(kwargs["progress"])
+
+    def test_reference_images_supply_global_fraction_when_not_explicit(self):
+        options = PredictOptions(
+            num_phases=2,
+            targets=TargetConfig(global_fraction_weight=1.0),
+        )
+        labels = torch.tensor([[[0, 0], [0, 1]]])
+
+        target = self.predictor._resolve_fraction(options, labels)
+
+        self.assertTrue(torch.equal(target, torch.tensor([0.75, 0.25])))
 
     def test_joint_receives_paper_descriptor_targets(self):
         options = PredictOptions(
@@ -238,7 +261,7 @@ class PredictorTest(unittest.TestCase):
                 return_value=((latent,), joint_stats),
             ) as run_joint,
             patch(
-                "src.app.api.predictor.select_volume",
+                "src.app.api.predictor.select_latent_volume",
                 return_value=(volume, {"candidate_count": torch.tensor(1)}),
             ),
         ):
@@ -269,7 +292,7 @@ class PredictorTest(unittest.TestCase):
             patch("src.app.api.predictor.sample_latent", return_value=latent),
             patch.object(
                 self.predictor,
-                "_train_critic",
+                "_fit_critic",
                 return_value=(None, {"critic_steps": torch.tensor(1)}),
             ) as train,
             patch.object(
@@ -281,7 +304,7 @@ class PredictorTest(unittest.TestCase):
                 }),
             ),
             patch(
-                "src.app.api.predictor.select_volume",
+                "src.app.api.predictor.select_latent_volume",
                 return_value=(volume, {}),
             ),
         ):
@@ -290,6 +313,57 @@ class PredictorTest(unittest.TestCase):
         train.assert_called_once()
         references = train.call_args.args[1]
         self.assertEqual(references.shape, torch.Size([1, 2, 2]))
+
+    def test_failed_critic_validation_disables_only_critic_guidance(self):
+        options = PredictOptions(
+            num_phases=2,
+            joint=JointConfig(steps=1),
+            critic=CriticConfig(steps=1, weight=0.1),
+            refine=RefineConfig(candidates=(0,)),
+        )
+        latent = torch.zeros(1, 2, 2, 2)
+        failed = {
+            "critic_validation_accuracy": torch.tensor(0.5),
+            "critic_damage_accuracy": torch.tensor(0.5),
+            "critic_shuffle_accuracy": torch.tensor(0.5),
+            "critic_stat_sensitivity": torch.tensor(0.0),
+            "critic_input_gradient_finite": torch.tensor(True),
+        }
+
+        with (
+            patch(
+                "src.app.api.predictor.encode_refs",
+                return_value=torch.zeros(1, 8, 1, 2, 2),
+            ),
+            patch("src.app.api.predictor.sample_latent", return_value=latent),
+            patch("src.app.api.predictor.train_critic", return_value=failed),
+        ):
+            critic, stats = self.predictor._fit_critic(
+                latent,
+                torch.zeros(1, 2, 2),
+                options=options,
+            )
+
+        self.assertIsNone(critic)
+        self.assertFalse(bool(stats["critic_enabled"]))
+
+        with patch(
+            "src.app.api.predictor.optimize_latent",
+            return_value=((latent,), {
+                "joint_steps": torch.tensor(1),
+                "joint_candidate_steps": torch.tensor([0]),
+            }),
+        ) as optimize:
+            self.predictor._run_joint(
+                latent,
+                options=options,
+                anchors=None,
+                target_labels=None,
+                critic=None,
+                t_max=3,
+            )
+
+        self.assertEqual(optimize.call_args.kwargs["critic_weight"], 0.0)
 
     def test_large_prediction_uses_scale_refinement_not_base_joint(self):
         options = PredictOptions(
@@ -317,6 +391,24 @@ class PredictorTest(unittest.TestCase):
         refine.assert_called_once()
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
         self.assertIn("final_phase_fraction", stats)
+
+    def test_large_prediction_warns_when_base_guidance_is_configured(self):
+        options = PredictOptions(
+            num_phases=2,
+            joint=JointConfig(steps=1),
+            refine=RefineConfig(candidates=(0,)),
+        )
+        generated = torch.zeros(4, 4, 4)
+
+        with (
+            patch.object(
+                self.predictor,
+                "_generate_large",
+                return_value=(generated, {"volume_size": 4}),
+            ),
+            self.assertWarnsRegex(RuntimeWarning, "base-size only"),
+        ):
+            self.predictor.predict(options, volume_size=4)
 
 
 if __name__ == "__main__":

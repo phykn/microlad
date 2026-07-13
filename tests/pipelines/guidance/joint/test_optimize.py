@@ -125,9 +125,9 @@ class JointOptimizationTest(unittest.TestCase):
                 t_max=3,
                 num_phases=2,
                 anchors=[anchor],
-                anchor_weight=1.0,
-                vf_targets=torch.tensor([0.5, 0.5]),
-                vf_weight=1.0,
+                anchor_weight=5.0,
+                fraction_targets=torch.tensor([0.5, 0.5]),
+                global_fraction_weight=1.0,
                 progress=True,
             )
 
@@ -135,7 +135,12 @@ class JointOptimizationTest(unittest.TestCase):
         self.assertEqual(progress.kwargs["desc"], "Joint guidance")
         self.assertEqual(
             set(progress.postfixes[-1]),
-            {"loss", "anchor", "vf"},
+            {"loss", "anchor", "fraction"},
+        )
+        self.assertAlmostEqual(
+            float(progress.postfixes[-1]["anchor"]),
+            float(torch.log(torch.tensor(2.0))),
+            places=3,
         )
 
     def test_joint_anchor_loss_changes_decoded_anchor_without_copying(self):

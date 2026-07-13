@@ -8,7 +8,7 @@ from src.modeling.phases.relaxation import (
 )
 
 
-class PredictSDSPhaseTest(unittest.TestCase):
+class PhaseRelaxationTest(unittest.TestCase):
     def test_sharpen_probabilities_aligns_soft_loss_with_argmax(self):
         probabilities = torch.tensor(
             [[[[0.6]], [[0.3]], [[0.1]]]],

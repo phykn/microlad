@@ -2,6 +2,11 @@
 
 마지막 갱신: 2026-07-13
 
+> 이 문서의 SliceGAN generator, noise conditioning, 6000-step 결과는
+> `144336e` 이전 레거시 경로의 실험 기록이다. 현재
+> `L-MPDD → online latent critic → residual Joint` 경로의 품질 증거가 아니며,
+> 현재 설계 계약은 `PIPELINE.md`를 기준으로 한다.
+
 ## 목표와 판정 순서
 
 1. 지정한 위치와 축의 하나 이상 단면이 조건 이미지와 **유사**해야 한다. 조건 이미지를 그대로 복사하지는 않는다.
@@ -19,7 +24,7 @@
 
 용어: 공극률은 별도 조건이 아니라 공극 phase의 `phase_fractions` 값이다. 모든 phase fraction을 합이 1이 되도록 함께 입력하며 기본 허용오차는 ±1%p다.
 
-## 현재 채택한 기반
+## 144336e 이전 채택 기반 (레거시)
 
 - categorical VAE의 확률 출력을 사용한다.
 - SliceGAN은 voxel 확률장을 직접 생성하지 않는다. 공유 3D generator가 **VAE latent volume**을 만들고, critic은 그 volume의 XY/XZ/YZ latent slice를 판별한다. categorical voxel volume은 후보 조건화가 끝난 뒤 VAE로 한 번만 복원한다.
@@ -38,7 +43,7 @@
 - 서로 다른 축 앵커의 교차 label 충돌은 최적화 전에 오류로 처리한다. calibration은 target label을 강제 복사하지 않고 calibration 직전 모델이 선택한 앵커 영역 label만 보호한다.
 - base/scale decoder는 모두 latent plane 사이를 trilinear interpolation한 뒤 동일한 tri-axis probability consensus를 사용한다. scale 경로의 반복 slab 복제는 제거했다.
 
-현재 채택한 다중 앵커·상분율 실행 결과(`03_predict.ipynb`):
+당시 채택한 다중 앵커·상분율 실행 결과(`03_predict.ipynb`):
 
 - 앵커: 중심 XY와 XZ, 교차선이 일치하는 categorical 이미지 두 장
 - 선택 상태: hybrid `6000` step, 조건 후보 3개 비교

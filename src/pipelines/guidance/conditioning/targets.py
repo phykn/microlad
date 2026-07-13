@@ -16,19 +16,19 @@ from src.pipelines.guidance.metrics.interface import compute_interface_density
 from src.validation import require_finite_number, require_int
 
 
-class SDSTargets(TypedDict, total=False):
-    vf_targets: torch.Tensor
+class DescriptorTargets(TypedDict, total=False):
+    fraction_targets: torch.Tensor
     tpc_targets: torch.Tensor
     sa_targets: torch.Tensor
     diffusivity_targets: torch.Tensor
     diffusivity_solver: ConductanceSolver
 
 
-def build_sds_targets(
+def build_descriptor_targets(
     labels: torch.Tensor | None,
     *,
     num_phases: int,
-    use_vf: bool = False,
+    use_fraction: bool = False,
     use_tpc: bool = False,
     use_sa: bool = False,
     use_diffusivity: bool = False,
@@ -37,7 +37,7 @@ def build_sds_targets(
     sa_sigma: float = 1.0,
     diffusivity_grid_size: int | tuple[int, int] | None = None,
     low_phase_conductivity: float = 0.0,
-) -> SDSTargets:
+) -> DescriptorTargets:
     _validate_options(
         num_phases=num_phases,
         temperature=temperature,
@@ -47,14 +47,14 @@ def build_sds_targets(
         diffusivity_grid_size=diffusivity_grid_size,
         low_phase_conductivity=low_phase_conductivity,
     )
-    if not (use_vf or use_tpc or use_sa or use_diffusivity):
+    if not (use_fraction or use_tpc or use_sa or use_diffusivity):
         return {}
 
     values = _validate_target_labels(labels, num_phases=num_phases).float()
-    targets: SDSTargets = {}
+    targets: DescriptorTargets = {}
 
-    if use_vf:
-        targets["vf_targets"] = compute_phase_fraction(
+    if use_fraction:
+        targets["fraction_targets"] = compute_phase_fraction(
             values,
             num_phases=num_phases,
             temperature=temperature,

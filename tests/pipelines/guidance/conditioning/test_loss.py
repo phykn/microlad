@@ -5,7 +5,7 @@ import torch
 from src.pipelines.guidance.conditioning.loss import anchor_loss
 
 
-class PredictSDSAnchorTest(unittest.TestCase):
+class AnchorLossTest(unittest.TestCase):
     def test_categorical_anchor_loss_uses_probabilities_not_expected_label(self):
         values = torch.ones(2, 2)
         target = torch.zeros(2, 2)

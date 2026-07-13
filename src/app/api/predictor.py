@@ -1,3 +1,4 @@
+import warnings
 from collections.abc import Sequence
 
 import numpy as np
@@ -19,17 +20,13 @@ from src.pipelines.guidance.critic.train import train_critic
 from src.pipelines.guidance.conditioning.images import prepare_volume_anchors
 from src.pipelines.guidance.conditioning.model import AnchorSlice, VolumeAnchor
 from src.pipelines.guidance.conditioning.targets import (
-    SDSTargets,
-    build_sds_targets,
+    DescriptorTargets,
+    build_descriptor_targets,
     prepare_target_images,
 )
-from src.pipelines.guidance.metrics.diagnostics import evaluate_phase_volume
-from src.pipelines.guidance.finalize.quality import (
-    check_quality,
-    reference_transition,
-)
-from src.pipelines.guidance.finalize.select import (
-    select_volume,
+from src.pipelines.finalize.select import (
+    select_label_volume,
+    select_latent_volume,
 )
 from src.pipelines.guidance.joint.optimize import optimize_latent
 from src.pipelines.scaling.schedule import (
@@ -43,8 +40,8 @@ from src.pipelines.scaling.conditioning import (
     encode_scale_anchors,
 )
 from src.pipelines.scaling.decoding import decode_large_volume
-from src.pipelines.scaling.optimization import optimize_large_volume
-from src.pipelines.scaling.refinement import refine_large_volume
+from src.pipelines.scaling.optimize import optimize_large_volume
+from src.pipelines.scaling.refine import refine_large_candidates
 from src.pipelines.scaling.sampling import sample_large_lmpdd
 
 
@@ -129,6 +126,14 @@ class Predictor:
                 t_max=t_max,
             )
 
+        if options.joint.steps > 0 or options.critic.steps > 0:
+            warnings.warn(
+                "joint and critic settings are base-size only; "
+                "scale settings will guide this large prediction.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
         volume, base_stats = self._generate_large(
             volume_size,
             options=options,
@@ -147,22 +152,18 @@ class Predictor:
                 t_max=t_max,
             )
             stats.update(joint_stats)
-        refine_steps = max(options.refine.candidates)
-        if refine_steps > 0:
-            volume = refine_large_volume(
-                volume,
-                self.vae,
-                steps=refine_steps,
-                tile_overlap=_tile_overlap(
-                    image_size,
-                    options.scale.overlap,
-                ),
-                tile_batch_size=options.scale.batch_size,
-            )
-            stats["selected_refine_steps"] = refine_steps
-
-        volume = quantize_phase(volume, options.num_phases)
-        reference_labels = self._reference_labels(volume_anchors, target_labels)
+        candidates = refine_large_candidates(
+            volume,
+            self.vae,
+            candidates=options.refine.candidates,
+            tile_overlap=_tile_overlap(image_size, options.scale.overlap),
+            tile_batch_size=options.scale.batch_size,
+        )
+        candidates = tuple(
+            quantize_phase(candidate, options.num_phases).float()
+            for candidate in candidates
+        )
+        reference_labels = self._merge_references(volume_anchors, target_labels)
         references = (
             None
             if reference_labels is None
@@ -173,44 +174,19 @@ class Predictor:
             .movedim(-1, 1)
             .float()
         )
-        target_fraction = (
-            torch.tensor(
-                options.phase_fractions,
-                device=volume.device,
-                dtype=torch.float32,
-            )
-            if options.phase_fractions is not None
-            else None
-        )
-        final_stats = evaluate_phase_volume(
-            volume,
+        target_fraction = self._resolve_fraction(options, target_labels)
+        volume, final_stats = select_label_volume(
+            candidates,
+            candidate_steps=options.refine.candidates,
             num_phases=options.num_phases,
-            references=references,
             target_fraction=target_fraction,
-            anchors=volume_anchors,
-        )
-        stats.update({f"final_{key}": value for key, value in final_stats.items()})
-        passed, errors = check_quality(
-            final_stats,
-            calibration_valid=True,
-            changed=volume.new_zeros((), dtype=torch.float32),
-            target_transition=reference_transition(references),
             phase_fraction_tolerance=options.phase_fraction_tolerance,
+            anchors=volume_anchors,
+            references=references,
             quality=options.quality,
         )
-        stats.update({f"quality_{key}": value for key, value in errors.items()})
-        stats["quality_passed"] = torch.tensor(passed, device=volume.device)
-        if options.quality.strict and not passed:
-            failed = [
-                name
-                for name, value in errors.items()
-                if float(value.item()) > 0.0
-            ]
-            raise RuntimeError(
-                "scale-up prediction failed the final quality gate: "
-                + ", ".join(failed)
-            )
-        return volume, stats
+        stats.update(final_stats)
+        return quantize_phase(volume, options.num_phases), stats
 
     def _predict_base(
         self,
@@ -226,13 +202,13 @@ class Predictor:
             self.vae,
             progress=options.progress,
         ).to(self.device)
-        references = self._reference_labels(volume_anchors, target_labels)
+        references = self._merge_references(volume_anchors, target_labels)
         critic = None
         stats: dict[str, torch.Tensor | int] = {}
         if options.critic.steps > 0:
             if references is None:
                 raise ValueError("critic training requires target images or anchors.")
-            critic, critic_stats = self._train_critic(
+            critic, critic_stats = self._fit_critic(
                 latent,
                 references,
                 options=options,
@@ -248,15 +224,7 @@ class Predictor:
             t_max=(int(self.ddpm.num_timesteps) if t_max is None else t_max),
         )
         stats.update(joint_stats)
-        target_fraction = (
-            None
-            if options.phase_fractions is None
-            else torch.tensor(
-                options.phase_fractions,
-                device=self.device,
-                dtype=torch.float32,
-            )
-        )
+        target_fraction = self._resolve_fraction(options, target_labels)
         reference_probabilities = (
             None
             if references is None
@@ -265,7 +233,7 @@ class Predictor:
                 num_classes=options.num_phases,
             ).movedim(-1, 1).float()
         )
-        volume, final_stats = select_volume(
+        volume, final_stats = select_latent_volume(
             self.vae,
             candidates,
             candidate_steps=joint_stats["joint_candidate_steps"].tolist(),
@@ -280,13 +248,13 @@ class Predictor:
         stats.update(final_stats)
         return quantize_phase(volume, options.num_phases), stats
 
-    def _train_critic(
+    def _fit_critic(
         self,
         latent: torch.Tensor,
         references: torch.Tensor,
         *,
         options: PredictOptions,
-    ) -> tuple[LatentCritic, dict[str, torch.Tensor]]:
+    ) -> tuple[LatentCritic | None, dict[str, torch.Tensor]]:
         real_bank = encode_refs(
             self.vae,
             references,
@@ -303,29 +271,43 @@ class Predictor:
             )
         fake_volumes = torch.stack(fake)
         critic = LatentCritic(int(self.vae.latent_ch)).to(self.device)
-        stats = train_critic(
-            critic,
-            real_bank,
-            fake_volumes,
-            config=options.critic,
-            progress=options.progress,
-        )
-        margin = float(stats["critic_validation_margin"].item())
-        damage_margin = float(stats["critic_damage_margin"].item())
-        finite_gradient = bool(stats["critic_input_gradient_finite"].item())
-        if (
-            not np.isfinite(margin)
-            or not np.isfinite(damage_margin)
-            or margin <= options.critic.min_margin
-            or damage_margin <= options.critic.min_damage_margin
-            or not finite_gradient
-        ):
-            raise RuntimeError(
-                "latent critic failed held-out margin or gradient validation."
+        try:
+            stats = train_critic(
+                critic,
+                real_bank,
+                fake_volumes,
+                config=options.critic,
+                progress=options.progress,
             )
+        except RuntimeError as error:
+            if "non-finite" not in str(error):
+                raise
+            return None, {
+                "critic_enabled": torch.tensor(False, device=self.device),
+                "critic_failure_code": torch.tensor(1, device=self.device),
+            }
+        accuracy = float(stats["critic_validation_accuracy"].item())
+        damage_accuracy = float(stats["critic_damage_accuracy"].item())
+        shuffle_accuracy = float(stats["critic_shuffle_accuracy"].item())
+        stat_sensitivity = float(stats["critic_stat_sensitivity"].item())
+        finite_gradient = bool(stats["critic_input_gradient_finite"].item())
+        enabled = (
+            np.isfinite(accuracy)
+            and np.isfinite(damage_accuracy)
+            and np.isfinite(shuffle_accuracy)
+            and np.isfinite(stat_sensitivity)
+            and accuracy >= options.critic.min_accuracy
+            and damage_accuracy >= options.critic.min_damage_accuracy
+            and shuffle_accuracy >= options.critic.min_damage_accuracy
+            and stat_sensitivity <= options.critic.max_stat_sensitivity
+            and finite_gradient
+        )
+        stats["critic_enabled"] = torch.tensor(enabled, device=self.device)
+        if not enabled:
+            return None, stats
         return critic, stats
 
-    def _reference_labels(
+    def _merge_references(
         self,
         anchors: Sequence[VolumeAnchor],
         target_labels: torch.Tensor | None,
@@ -337,6 +319,29 @@ class Predictor:
             None if anchor_labels is None else anchor_labels.to(self.device),
             None if target_labels is None else target_labels.to(self.device),
         )
+
+    def _resolve_fraction(
+        self,
+        options: PredictOptions,
+        target_labels: torch.Tensor | None,
+    ) -> torch.Tensor | None:
+        if options.phase_fractions is not None:
+            return torch.tensor(
+                options.phase_fractions,
+                device=self.device,
+                dtype=torch.float32,
+            )
+        uses_fraction = (
+            options.targets.slice_fraction_weight > 0.0
+            or options.targets.global_fraction_weight > 0.0
+        )
+        if not uses_fraction or target_labels is None:
+            return None
+        labels = target_labels.to(self.device).long()
+        return F.one_hot(
+            labels,
+            num_classes=options.num_phases,
+        ).float().mean(dim=(0, 1, 2))
 
     def _run_joint(
         self,
@@ -366,14 +371,11 @@ class Predictor:
             segment_anchors=options.segment_anchors,
             sds_weight=options.prior.weight,
             critic=critic,
-            critic_weight=options.critic.weight,
+            critic_weight=options.critic.weight if critic is not None else 0.0,
             anchor_weight=options.joint.anchor_weight if anchors else 0.0,
-            vf_targets=targets.get("vf_targets"),
-            vf_weight=(
-                options.targets.vf_weight
-                if options.targets.vf_weight > 0.0 or options.phase_fractions is None
-                else 1.0
-            ),
+            fraction_targets=targets.get("fraction_targets"),
+            slice_fraction_weight=options.targets.slice_fraction_weight,
+            global_fraction_weight=options.targets.global_fraction_weight,
             tpc_targets=targets.get("tpc_targets"),
             tpc_weight=options.targets.tpc_weight,
             sa_targets=targets.get("sa_targets"),
@@ -517,12 +519,9 @@ class Predictor:
             "segment_anchors": options.segment_anchors,
             "sds_weight": options.prior.weight,
             "anchor_weight": options.scale.anchor_weight if anchors else 0.0,
-            "vf_targets": targets.get("vf_targets"),
-            "vf_weight": (
-                options.targets.vf_weight
-                if options.targets.vf_weight > 0.0 or options.phase_fractions is None
-                else 1.0
-            ),
+            "fraction_targets": targets.get("fraction_targets"),
+            "slice_fraction_weight": options.targets.slice_fraction_weight,
+            "global_fraction_weight": options.targets.global_fraction_weight,
             "tpc_targets": targets.get("tpc_targets"),
             "tpc_weight": options.targets.tpc_weight,
             "sa_targets": targets.get("sa_targets"),
@@ -547,15 +546,18 @@ class Predictor:
         self,
         options: PredictOptions,
         target_labels: torch.Tensor | None,
-    ) -> SDSTargets:
-        targets: SDSTargets = {}
+    ) -> DescriptorTargets:
+        targets: DescriptorTargets = {}
         if uses_descriptor_targets(options):
             targets.update(
-                build_sds_targets(
+                build_descriptor_targets(
                     target_labels,
                     num_phases=options.num_phases,
-                    use_vf=(
-                        options.targets.vf_weight > 0.0
+                    use_fraction=(
+                        (
+                            options.targets.slice_fraction_weight > 0.0
+                            or options.targets.global_fraction_weight > 0.0
+                        )
                         and options.phase_fractions is None
                     ),
                     use_tpc=options.targets.tpc_weight > 0.0,
@@ -566,7 +568,7 @@ class Predictor:
                 )
             )
         if options.phase_fractions is not None:
-            targets["vf_targets"] = torch.tensor(
+            targets["fraction_targets"] = torch.tensor(
                 options.phase_fractions,
                 device=self.device,
                 dtype=torch.float32,

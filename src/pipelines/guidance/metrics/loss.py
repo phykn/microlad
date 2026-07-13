@@ -24,8 +24,8 @@ def descriptor_loss(
     decoded: torch.Tensor,
     *,
     num_phases: int,
-    vf_targets: Mapping[int, float] | torch.Tensor | None = None,
-    vf_weight: float = 0.0,
+    fraction_targets: Mapping[int, float] | torch.Tensor | None = None,
+    fraction_weight: float = 0.0,
     tpc_targets: Mapping[int, torch.Tensor] | torch.Tensor | None = None,
     tpc_weight: float = 0.0,
     sa_targets: Mapping[int, float] | torch.Tensor | None = None,
@@ -43,7 +43,7 @@ def descriptor_loss(
     total = decoded.sum() * 0.0
     stats: dict[str, torch.Tensor] = {}
 
-    _validate_descriptor("vf", vf_weight, vf_targets)
+    _validate_descriptor("fraction", fraction_weight, fraction_targets)
     _validate_descriptor("tpc", tpc_weight, tpc_targets)
     _validate_descriptor("sa", sa_weight, sa_targets)
     _validate_descriptor(
@@ -52,17 +52,17 @@ def descriptor_loss(
         diffusivity_targets,
     )
 
-    if vf_weight > 0.0 and vf_targets is not None:
+    if fraction_weight > 0.0 and fraction_targets is not None:
         loss, _ = phase_fraction_loss(
             decoded,
-            vf_targets,
+            fraction_targets,
             num_phases=num_phases,
             temperature=temperature,
-            weight=vf_weight,
+            weight=fraction_weight,
             phase_probabilities=phase_probabilities,
         )
         total = total + loss
-        stats["vf"] = loss.detach()
+        stats["fraction"] = loss.detach()
 
     if tpc_weight > 0.0 and tpc_targets is not None:
         loss, _ = correlation_loss(
@@ -113,8 +113,8 @@ def sample_descriptor_loss(
     decoded: torch.Tensor,
     *,
     num_phases: int,
-    vf_targets: Mapping[int, float] | torch.Tensor | None = None,
-    vf_weight: float = 0.0,
+    fraction_targets: Mapping[int, float] | torch.Tensor | None = None,
+    fraction_weight: float = 0.0,
     tpc_targets: Mapping[int, torch.Tensor] | torch.Tensor | None = None,
     tpc_weight: float = 0.0,
     sa_targets: Mapping[int, float] | torch.Tensor | None = None,
@@ -131,8 +131,8 @@ def sample_descriptor_loss(
         return descriptor_loss(
             decoded,
             num_phases=num_phases,
-            vf_targets=vf_targets,
-            vf_weight=vf_weight,
+            fraction_targets=fraction_targets,
+            fraction_weight=fraction_weight,
             tpc_targets=tpc_targets,
             tpc_weight=tpc_weight,
             sa_targets=sa_targets,
@@ -158,8 +158,8 @@ def sample_descriptor_loss(
         loss, stats = descriptor_loss(
             sample,
             num_phases=num_phases,
-            vf_targets=vf_targets,
-            vf_weight=vf_weight,
+            fraction_targets=fraction_targets,
+            fraction_weight=fraction_weight,
             tpc_targets=tpc_targets,
             tpc_weight=tpc_weight,
             sa_targets=sa_targets,

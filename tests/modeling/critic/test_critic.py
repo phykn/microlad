@@ -25,6 +25,15 @@ class LatentCriticTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least 16"):
             LatentCritic(2)(torch.zeros(1, 2, 15, 15))
 
+    def test_critic_is_invariant_to_channel_affine_statistics(self):
+        critic = LatentCritic(2, base_ch=4)
+        latent = torch.randn(3, 2, 16, 16)
+
+        original = critic(latent)
+        shifted = critic(latent * 1.5 + 0.25)
+
+        self.assertTrue(torch.allclose(original, shifted, atol=1e-5, rtol=1e-5))
+
     def test_balanced_sampler_uses_all_axes(self):
         volume = torch.zeros(1, 1, 16, 16, 16)
         volume[:, :, 1:] = 1.0

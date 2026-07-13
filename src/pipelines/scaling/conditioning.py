@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 import torch
@@ -10,6 +10,28 @@ from src.pipelines.guidance.conditioning.validation import validate_anchor_posit
 from src.pipelines.scaling.tiles import tile_grid
 from src.pipelines.guidance.conditioning.model import AnchorSlice
 from src.validation import require_finite, require_int
+
+
+def as_anchor_image(target: torch.Tensor) -> torch.Tensor:
+    if target.ndim == 4 and target.shape[:2] == (1, 1):
+        return target[0, 0]
+    if target.ndim == 2:
+        return target
+    raise ValueError("anchor target must have shape [H, W] or [1, 1, H, W].")
+
+
+def move_anchor_map(
+    values: Mapping[tuple[int, int], torch.Tensor] | None,
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> dict[tuple[int, int], torch.Tensor]:
+    if not values:
+        return {}
+    return {
+        (int(axis), int(index)): value.to(device=device, dtype=dtype)
+        for (axis, index), value in values.items()
+    }
 
 
 def center_start(*, volume_size: int, base_size: int) -> int:

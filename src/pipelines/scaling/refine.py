@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 import torch
 
 from src.modeling.phases.calibration import probabilities_to_calibrated_labels
@@ -6,18 +8,21 @@ from src.validation import require_finite, require_float, require_int
 
 
 @torch.no_grad()
-def refine_large_volume(
+def refine_large_candidates(
     volume: torch.Tensor,
     vae: torch.nn.Module,
     *,
-    steps: int,
+    candidates: Sequence[int],
     tile_overlap: int = 0,
     tile_batch_size: int = 16,
-) -> torch.Tensor:
-    require_int("steps", steps)
+) -> tuple[torch.Tensor, ...]:
+    if not candidates:
+        raise ValueError("candidates must not be empty.")
+    for steps in candidates:
+        require_int("candidate steps", steps)
+        if steps < 0:
+            raise ValueError("candidate steps must be non-negative.")
     require_int("tile_batch_size", tile_batch_size)
-    if steps < 0:
-        raise ValueError("steps must be non-negative.")
     if tile_batch_size <= 0:
         raise ValueError("tile_batch_size must be positive.")
     _validate_volume(volume)
@@ -30,11 +35,9 @@ def refine_large_volume(
         raise ValueError("large volume refinement requires vae.decode_probs.")
 
     refined = volume.float()
-    if steps == 0:
-        return refined
-
+    selected = {0: refined.clone()} if 0 in candidates else {}
     vae.eval()
-    for _ in range(steps):
+    for step in range(1, max(candidates) + 1):
         refined = _refine_once(
             refined,
             vae,
@@ -42,7 +45,9 @@ def refine_large_volume(
             tile_batch_size=tile_batch_size,
             num_phases=num_phases,
         )
-    return refined
+        if step in candidates:
+            selected[step] = refined.clone()
+    return tuple(selected[steps] for steps in candidates)
 
 
 def _refine_once(

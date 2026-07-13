@@ -42,14 +42,15 @@ selected L-MPDD latent Z0
        - latent SDS
        - frozen critic guidance
        - exact decoded anchor loss
-       - decoded phase-fraction loss
+       - decoded global phase-fraction loss
+       - optional per-slice fraction descriptor
        - paper descriptors (TPC, surface area, diffusivity)
        - decoded continuity and latent preservation
     -> shared tri-axis categorical probability decoder
     -> Refine candidates (0, 1, 2 sweeps)
     -> budget-limited categorical calibration
-    -> strict hard-volume quality gate
-    -> best feasible volume
+    -> hard-volume quality evaluation
+    -> best feasible or least-violation volume
 ```
 
 VAE와 diffusion weight는 prediction 중 갱신하지 않는다. 온라인으로 학습하는 것은
@@ -70,22 +71,24 @@ critic과 zero-initialized 3D residual refiner뿐이다.
 ### Critic guidance
 
 - reference latent bank와 L-MPDD fake bank를 준비한다.
-- latent critic을 warm-up하고 held-out real/fake margin을 검증한다.
+- source와 volume 단위 holdout으로 ranking과 morphology damage를 검증한다.
+- 지정한 step을 모두 학습한 뒤 validation 최적 checkpoint를 복원한다.
 - critic을 고정한 뒤 joint optimizer에 read-only guidance로 제공한다.
+- 검증에 실패한 critic은 비활성화하고 나머지 guidance는 계속 실행한다.
 - random-noise 3D generator는 소유하지 않는다.
 
 ### Joint guidance
 
 - `Z0`를 보존하는 zero-initialized residual refiner를 소유한다.
-- SDS, critic, anchor, fraction, 원 논문 descriptor, continuity, preservation
-  loss를 한 optimizer에서 합산한다.
+- SDS, critic, anchor, global fraction, 선택적인 slice descriptor, continuity,
+  preservation loss를 한 optimizer에서 합산한다.
 - 원본 `Z0`와 중간 checkpoint를 후보로 보존한다.
 
 ### Finalization
 
 - Refine sweep 수가 다른 probability 후보를 만든다.
 - calibration 전후 fraction, 변경 voxel 비율, 앵커 변화, morphology 변화를 기록한다.
-- hard gate를 통과한 후보만 선택한다. 합격 후보가 없고 strict mode라면 실패한다.
+- 통과 후보가 있으면 그중 최선을, 없으면 위반량이 가장 작은 결과를 반환한다.
 
 ## Critic 계약
 
@@ -93,13 +96,17 @@ Real은 reference 이미지를 변환한 뒤 VAE posterior mean으로 encode한 
 회전 equivariance를 가정하지 않으므로 latent를 먼저 회전하지 않는다. Clean 2D
 diffusion latent를 추가할 경우 real-like reference로만 사용한다.
 
-Fake는 여러 L-MPDD latent volume의 세 축 slice/crop이다. 한 `Z0`만 사용해 sample
-고유 특징을 외우지 않도록 학습용과 검증용 crop을 분리한다. Critic은 다음 조건을
-충족한 경우에만 residual guidance에 사용한다.
+Fake는 여러 L-MPDD latent volume의 세 축 slice/crop이다. 최종 개선 대상 `Z0`의
+모든 slice는 holdout으로 두고, 나머지 volume만 critic 학습에 사용한다. Real도
+augmentation 뒤 섞지 않고 reference source 단위로 분할한다. Source가 한 장뿐이면
+진정한 source holdout이 불가능하다는 상태를 통계에 남긴다. Critic 입력은 slice별
+channel 평균과 분산을 정규화한다. 다음 조건을 충족한 경우에만 residual guidance에
+사용한다.
 
-- held-out real score가 held-out fake score보다 높다.
+- held-out real/fake ranking accuracy가 기준 이상이다.
 - score와 입력 gradient가 finite다.
-- phase fraction만 바꾼 샘플보다 반복 slab나 checkerboard 손상에 더 민감하다.
+- alternating damage와 spatial shuffle을 clean reference보다 낮게 평가한다.
+- channel affine 통계 변화에는 지정된 민감도 이하로 반응한다.
 
 첫 구현은 critic warm-up 후 완전히 고정한다. Residual과 critic을 매 step 동시에
 갱신하지 않는다.
@@ -124,8 +131,9 @@ Calibration은 마지막에 후보당 한 번만 수행한다. 앵커 target이 
 - anchor mismatch delta
 - transition, run-profile, boundary-jump delta
 
-변경 voxel 비율이 budget을 넘으면 해당 후보는 실패다. 후보 선택 우선순위는 다음과
-같다.
+변경 voxel 비율이 budget을 넘으면 해당 후보를 위반 후보로 기록한다. 통과 후보가
+없어도 생성물을 버리지 않고 총 위반량이 가장 작은 후보를 반환한다. 후보 선택
+우선순위는 다음과 같다.
 
 1. 최대 anchor mismatch
 2. phase-fraction tolerance와 calibration budget
@@ -140,7 +148,9 @@ Calibration은 마지막에 후보당 한 번만 수행한다. 앵커 target이 
 Scale-up도 L-MPDD latent에서 시작하고 공통 categorical decoder와 최종 evaluator를
 사용한다. 다만 large tiled decoder는 현재 gradient를 보존하지 않으므로, 첫 통합
 버전의 exact latent Joint는 VAE 기본 크기에서 완성한다. 큰 volume은 기존 tiled
-SDS/anchor optimizer를 같은 상위 파이프라인의 scale 단계로 유지한다.
+SDS/anchor optimizer를 같은 상위 파이프라인의 scale 단계로 유지한다. Base 전용
+Joint/critic 설정이 함께 활성화되면 경고하고 scale 설정을 사용한다. Scale Refine도
+설정된 sweep 후보를 모두 평가해 최종 hard-volume evaluator로 선택한다.
 
 Large latent Joint는 다음 두 조건을 충족한 뒤 확장한다.
 
@@ -166,8 +176,9 @@ scale slice schedule은 scaling으로 옮기고 나머지 slice optimizer도 삭
 
 예측의 L-MPDD sampling, latent critic warm-up, Joint guidance, scale-up
 sampling/guidance는 `progress` 설정을 공유하고 노트북에서는 기본적으로 진행률을
-일반 텍스트 `tqdm`으로 표시한다. critic은 loss와 margin을, Joint는 전체 loss와
-활성화된 anchor·critic·fraction loss를 일정 간격으로 갱신한다.
+일반 텍스트 `tqdm`으로 표시한다. critic은 loss, margin, gradient penalty를,
+Joint는 전체 loss와 활성화된 anchor·critic·global fraction loss를 일정 간격으로
+갱신한다.
 
 구조 검증:
 
@@ -184,7 +195,8 @@ sampling/guidance는 `progress` 설정을 공유하고 노트북에서는 기본
 - residual output layer의 초기 출력은 정확히 0이다.
 - critic warm-up 중 VAE·diffusion·`Z0`에는 gradient가 없다.
 - frozen critic guidance는 residual parameter에 finite gradient를 전달한다.
-- calibration budget과 strict gate가 실패 후보 반환을 막는다.
+- phase fraction의 global 조건은 기본적으로 개별 slice fraction을 강제하지 않는다.
+- quality gate를 통과하지 못해도 least-violation 후보와 실패 통계를 반환한다.
 
 회귀 검증:
 

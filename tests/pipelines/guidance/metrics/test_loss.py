@@ -6,13 +6,16 @@ from src.pipelines.guidance.metrics.conductance import ConductanceSolver
 from src.pipelines.guidance.metrics.loss import descriptor_loss
 
 
-class PredictSDSObjectiveTest(unittest.TestCase):
+class DescriptorLossTest(unittest.TestCase):
     def test_descriptor_loss_rejects_negative_weights(self):
         decoded = torch.zeros(2, 2)
         solver = ConductanceSolver(height=2, width=2)
 
         for kwargs in (
-            {"vf_targets": torch.tensor([0.5, 0.5]), "vf_weight": -1.0},
+            {
+                "fraction_targets": torch.tensor([0.5, 0.5]),
+                "fraction_weight": -1.0,
+            },
             {"tpc_targets": torch.zeros(2, 2), "tpc_weight": -1.0},
             {"sa_targets": torch.zeros(2), "sa_weight": -1.0},
             {
@@ -29,7 +32,7 @@ class PredictSDSObjectiveTest(unittest.TestCase):
         decoded = torch.zeros(2, 2)
 
         for kwargs in (
-            {"vf_weight": 1.0},
+            {"fraction_weight": 1.0},
             {"tpc_weight": 1.0},
             {"sa_weight": 1.0},
             {"diffusivity_weight": 1.0, "diffusivity_solver": ConductanceSolver(2, 2)},

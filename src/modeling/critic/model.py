@@ -43,7 +43,9 @@ class LatentCritic(nn.Module):
                 f"latent slice size must be at least {MIN_SLICE_SIZE}."
             )
 
-        scores = latent_slices
+        mean = latent_slices.mean(dim=(-2, -1), keepdim=True)
+        variance = latent_slices.var(dim=(-2, -1), keepdim=True, unbiased=False)
+        scores = (latent_slices - mean) * torch.rsqrt(variance + 1e-6)
         for layer in self.layers[:-1]:
             scores = F.leaky_relu(layer(scores), negative_slope=0.2)
         return self.layers[-1](scores)

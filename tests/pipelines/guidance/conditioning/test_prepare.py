@@ -34,7 +34,7 @@ class BiasedCategoricalVAE(ShiftDecodeVAE):
         return probabilities
 
 
-class PredictSDSCommonTest(unittest.TestCase):
+class AnchorPrepareTest(unittest.TestCase):
     def test_build_anchor_targets_uses_vae_reconstruction(self):
         anchor = AnchorSlice(
             image=np.array([[0, 1], [1, 0]], dtype=np.uint8),

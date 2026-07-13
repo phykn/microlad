@@ -1,4 +1,7 @@
 progress: true
+phase_fractions: null
+phase_fraction_tolerance: 0.01
+segment_anchors: false
 
 prior:
   weight: 1.0
@@ -7,7 +10,8 @@ prior:
 
 targets:
   segment: false
-  vf_weight: 0.0
+  slice_fraction_weight: 0.0
+  global_fraction_weight: 1.0
   tpc_weight: 0.0
   surface_area_weight: 0.0
   diffusivity_weight: 0.0
@@ -16,14 +20,14 @@ targets:
 
 joint:
   steps: 500
-  batch_size: 8
+  batch_size: 1
   # Use null to decode each axis in one batch on a large-memory GPU.
   decode_batch_size: 2
-  learning_rate: 0.0001
+  learning_rate: 0.0003
   continuity_weight: 0.05
   anchor_weight: 1.0
-  residual_scale: 0.25
-  preservation_weight: 5.0
+  residual_scale: 1.0
+  preservation_weight: 1.0
   checkpoint_every: 100
 
 critic:
@@ -34,8 +38,10 @@ critic:
   gradient_weight: 10.0
   weight: 0.02
   candidate_count: 3
-  min_margin: 0.0
-  min_damage_margin: 0.0
+  validate_every: 25
+  min_accuracy: 0.6
+  min_damage_accuracy: 0.6
+  max_stat_sensitivity: 0.01
 
 scale:
   overlap: 0.25
@@ -53,7 +59,6 @@ refine:
   anchor_strength: 0.05
 
 quality:
-  strict: true
   anchor_tolerance: 0.08
   morphology_tolerance: 0.05
   continuity_tolerance: 0.08

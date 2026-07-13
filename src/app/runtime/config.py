@@ -78,15 +78,29 @@ def load_predict_config(config_path: str | Path) -> dict:
         "refine": RefineConfig,
         "quality": QualityConfig,
     }
-    unknown = sorted(set(values) - set(classes) - {"progress"})
+    root_settings = {
+        "phase_fractions",
+        "phase_fraction_tolerance",
+        "progress",
+        "segment_anchors",
+    }
+    unknown = sorted(set(values) - set(classes) - root_settings)
     if unknown:
         raise ValueError(f"prediction config contains unknown sections: {unknown}")
 
-    config = {}
-    if "progress" in values:
-        if not isinstance(values["progress"], bool):
-            raise ValueError("prediction config progress must be a boolean.")
-        config["progress"] = values["progress"]
+    config = {
+        name: values[name]
+        for name in root_settings
+        if name in values
+    }
+    for name in ("progress", "segment_anchors"):
+        if name in config and not isinstance(config[name], bool):
+            raise ValueError(f"prediction config {name} must be a boolean.")
+    if "phase_fractions" in config and config["phase_fractions"] is not None:
+        fractions = config["phase_fractions"]
+        if not isinstance(fractions, (list, tuple)):
+            raise ValueError("prediction config phase_fractions must be a sequence.")
+        config["phase_fractions"] = tuple(fractions)
     for name, cls in classes.items():
         section = values.get(name, {})
         if not isinstance(section, dict):

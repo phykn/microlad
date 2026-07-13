@@ -4,12 +4,12 @@ import numpy as np
 import torch
 
 from src.pipelines.guidance.conditioning.targets import (
-    build_sds_targets,
+    build_descriptor_targets,
     prepare_target_images,
 )
 
 
-class PredictTargetsTest(unittest.TestCase):
+class DescriptorTargetsTest(unittest.TestCase):
     def test_prepares_categorical_and_segmented_target_images(self):
         categorical = prepare_target_images(
             [np.array([[0, 1], [2, 2]], dtype=np.int64)],
@@ -34,12 +34,16 @@ class PredictTargetsTest(unittest.TestCase):
             num_phases=3,
         )
 
-        targets = build_sds_targets(labels, num_phases=3, use_vf=True)
+        targets = build_descriptor_targets(
+            labels,
+            num_phases=3,
+            use_fraction=True,
+        )
 
-        self.assertEqual(set(targets), {"vf_targets"})
+        self.assertEqual(set(targets), {"fraction_targets"})
         self.assertTrue(
             torch.allclose(
-                targets["vf_targets"],
+                targets["fraction_targets"],
                 torch.tensor([3.0 / 8.0, 2.0 / 8.0, 3.0 / 8.0]),
                 atol=1e-3,
             )
@@ -61,10 +65,10 @@ class PredictTargetsTest(unittest.TestCase):
             num_phases=2,
         )
 
-        targets = build_sds_targets(
+        targets = build_descriptor_targets(
             labels,
             num_phases=2,
-            use_vf=True,
+            use_fraction=True,
             use_tpc=True,
             use_sa=True,
             use_diffusivity=True,
@@ -74,20 +78,20 @@ class PredictTargetsTest(unittest.TestCase):
         self.assertEqual(
             set(targets),
             {
-                "vf_targets",
+                "fraction_targets",
                 "tpc_targets",
                 "sa_targets",
                 "diffusivity_targets",
                 "diffusivity_solver",
             },
         )
-        self.assertEqual(targets["vf_targets"].shape, torch.Size([2]))
+        self.assertEqual(targets["fraction_targets"].shape, torch.Size([2]))
         self.assertEqual(targets["tpc_targets"].shape[0], 2)
         self.assertEqual(targets["sa_targets"].shape, torch.Size([2]))
         self.assertEqual(targets["diffusivity_targets"].shape, torch.Size([2]))
 
     def test_no_selected_target_does_not_require_labels(self):
-        self.assertEqual(build_sds_targets(None, num_phases=2), {})
+        self.assertEqual(build_descriptor_targets(None, num_phases=2), {})
 
     def test_preparation_rejects_invalid_images_once(self):
         with self.assertRaisesRegex(ValueError, "images"):
@@ -120,28 +124,28 @@ class PredictTargetsTest(unittest.TestCase):
 
     def test_build_rejects_unprepared_labels_and_invalid_options(self):
         with self.assertRaisesRegex(ValueError, "target labels"):
-            build_sds_targets(None, num_phases=2, use_vf=True)
+            build_descriptor_targets(None, num_phases=2, use_fraction=True)
         with self.assertRaisesRegex(ValueError, "torch.long"):
-            build_sds_targets(
+            build_descriptor_targets(
                 torch.zeros(1, 2, 2),
                 num_phases=2,
-                use_vf=True,
+                use_fraction=True,
             )
         with self.assertRaisesRegex(ValueError, "diffusivity_grid_size"):
-            build_sds_targets(
+            build_descriptor_targets(
                 torch.zeros(1, 2, 2, dtype=torch.long),
                 num_phases=2,
                 use_diffusivity=True,
             )
         with self.assertRaisesRegex(ValueError, "temperature"):
-            build_sds_targets(
+            build_descriptor_targets(
                 torch.zeros(1, 2, 2, dtype=torch.long),
                 num_phases=2,
-                use_vf=True,
+                use_fraction=True,
                 temperature=float("nan"),
             )
         with self.assertRaisesRegex(ValueError, "sa_kernel_size.*integer"):
-            build_sds_targets(
+            build_descriptor_targets(
                 torch.zeros(1, 2, 2, dtype=torch.long),
                 num_phases=2,
                 use_sa=True,

@@ -137,7 +137,13 @@ def resolve_t_max(options: PredictOptions, num_timesteps: int) -> int:
 
 def uses_descriptor_targets(options: PredictOptions) -> bool:
     return (
-        (options.targets.vf_weight > 0.0 and options.phase_fractions is None)
+        (
+            (
+                options.targets.slice_fraction_weight > 0.0
+                or options.targets.global_fraction_weight > 0.0
+            )
+            and options.phase_fractions is None
+        )
         or options.targets.tpc_weight > 0.0
         or options.targets.surface_area_weight > 0.0
         or options.targets.diffusivity_weight > 0.0

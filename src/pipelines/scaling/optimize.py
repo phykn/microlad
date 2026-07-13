@@ -1,6 +1,7 @@
 from collections.abc import Mapping, Sequence
 
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 
 from src.modeling.diffusion import DDPMProcess
@@ -19,11 +20,11 @@ from src.pipelines.guidance.conditioning.model import AnchorSlice
 from src.pipelines.scaling.objective import (
     batch_objective,
     decode_slices,
+    global_fraction_loss,
     slice_objective,
 )
+from src.pipelines.scaling.conditioning import as_anchor_image, move_anchor_map
 from src.pipelines.scaling.validation import (
-    as_anchor_image,
-    move_tensor_map,
     validate_optimization,
 )
 
@@ -48,8 +49,9 @@ def optimize_large_volume(
     segment_anchors: bool = False,
     sds_weight: float = 1.0,
     anchor_weight: float = 0.0,
-    vf_targets: Mapping[int, float] | torch.Tensor | None = None,
-    vf_weight: float = 0.0,
+    fraction_targets: Mapping[int, float] | torch.Tensor | None = None,
+    slice_fraction_weight: float = 0.0,
+    global_fraction_weight: float = 0.0,
     tpc_targets: Mapping[int, torch.Tensor] | torch.Tensor | None = None,
     tpc_weight: float = 0.0,
     sa_targets: Mapping[int, float] | torch.Tensor | None = None,
@@ -74,8 +76,9 @@ def optimize_large_volume(
         anchor_masks=anchor_masks,
         anchor_weight=anchor_weight,
         sds_weight=sds_weight,
-        vf_targets=vf_targets,
-        vf_weight=vf_weight,
+        fraction_targets=fraction_targets,
+        slice_fraction_weight=slice_fraction_weight,
+        global_fraction_weight=global_fraction_weight,
         tpc_targets=tpc_targets,
         tpc_weight=tpc_weight,
         sa_targets=sa_targets,
@@ -97,13 +100,13 @@ def optimize_large_volume(
         tile_overlap=tile_overlap,
     )
     prepared_targets.update(
-        move_tensor_map(
+        move_anchor_map(
             anchor_targets,
             device=volume.device,
             dtype=volume.dtype,
         )
     )
-    prepared_masks = move_tensor_map(
+    prepared_masks = move_anchor_map(
         anchor_masks,
         device=volume.device,
         dtype=volume.dtype,
@@ -130,6 +133,12 @@ def optimize_large_volume(
             slice_schedule,
             batch_size,
         )
+        fixed_phase_counts = _fixed_phase_counts(
+            updated,
+            axis=axis,
+            indices=indices,
+            num_phases=num_phases,
+        )
 
         if len(indices) == 1:
             index = indices[0]
@@ -152,8 +161,11 @@ def optimize_large_volume(
                 anchor_target=target,
                 anchor_mask=mask,
                 anchor_weight=weight,
-                vf_targets=vf_targets,
-                vf_weight=vf_weight,
+                fraction_targets=fraction_targets,
+                slice_fraction_weight=slice_fraction_weight,
+                global_fraction_weight=global_fraction_weight,
+                fixed_phase_counts=fixed_phase_counts,
+                volume_voxels=updated.numel(),
                 tpc_targets=tpc_targets,
                 tpc_weight=tpc_weight,
                 sa_targets=sa_targets,
@@ -185,8 +197,11 @@ def optimize_large_volume(
                 anchor_targets=targets,
                 anchor_masks=masks,
                 anchor_weight=anchor_weight,
-                vf_targets=vf_targets,
-                vf_weight=vf_weight,
+                fraction_targets=fraction_targets,
+                slice_fraction_weight=slice_fraction_weight,
+                global_fraction_weight=global_fraction_weight,
+                fixed_phase_counts=fixed_phase_counts,
+                volume_voxels=updated.numel(),
                 tpc_targets=tpc_targets,
                 tpc_weight=tpc_weight,
                 sa_targets=sa_targets,
@@ -228,8 +243,11 @@ def _optimize_large_slice(
     anchor_target: torch.Tensor | None,
     anchor_mask: torch.Tensor | None,
     anchor_weight: float,
-    vf_targets: Mapping[int, float] | torch.Tensor | None,
-    vf_weight: float,
+    fraction_targets: Mapping[int, float] | torch.Tensor | None,
+    slice_fraction_weight: float,
+    global_fraction_weight: float,
+    fixed_phase_counts: torch.Tensor,
+    volume_voxels: int,
     tpc_targets: Mapping[int, torch.Tensor] | torch.Tensor | None,
     tpc_weight: float,
     sa_targets: Mapping[int, float] | torch.Tensor | None,
@@ -275,8 +293,12 @@ def _optimize_large_slice(
             anchor_weight=anchor_weight,
             temperature=temperature,
             tile_overlap=tile_overlap,
-            vf_targets=vf_targets if use_tile_descriptor else None,
-            vf_weight=vf_weight if use_tile_descriptor else 0.0,
+            fraction_targets=(
+                fraction_targets if use_tile_descriptor else None
+            ),
+            fraction_weight=(
+                slice_fraction_weight if use_tile_descriptor else 0.0
+            ),
             tpc_targets=tpc_targets if use_tile_descriptor else None,
             tpc_weight=tpc_weight if use_tile_descriptor else 0.0,
             sa_targets=sa_targets if use_tile_descriptor else None,
@@ -289,8 +311,8 @@ def _optimize_large_slice(
             target_total, target_stats = descriptor_loss(
                 decoded,
                 num_phases=num_phases,
-                vf_targets=vf_targets,
-                vf_weight=vf_weight,
+                fraction_targets=fraction_targets,
+                fraction_weight=slice_fraction_weight,
                 tpc_targets=tpc_targets,
                 tpc_weight=tpc_weight,
                 sa_targets=sa_targets,
@@ -303,6 +325,16 @@ def _optimize_large_slice(
             )
             total = total + target_total
             stats.update(target_stats)
+        global_total = global_fraction_loss(
+            phase_probabilities,
+            fixed_phase_counts=fixed_phase_counts,
+            volume_voxels=volume_voxels,
+            targets=fraction_targets,
+            weight=global_fraction_weight,
+        )
+        total = total + global_total
+        if global_fraction_weight > 0.0:
+            stats["global_fraction"] = global_total.detach()
         stats["loss"] = total.detach()
         total.backward()
         optimizer.step()
@@ -339,8 +371,11 @@ def _optimize_batch(
     anchor_targets: Sequence[torch.Tensor | None],
     anchor_masks: Sequence[torch.Tensor | None],
     anchor_weight: float,
-    vf_targets: Mapping[int, float] | torch.Tensor | None,
-    vf_weight: float,
+    fraction_targets: Mapping[int, float] | torch.Tensor | None,
+    slice_fraction_weight: float,
+    global_fraction_weight: float,
+    fixed_phase_counts: torch.Tensor,
+    volume_voxels: int,
     tpc_targets: Mapping[int, torch.Tensor] | torch.Tensor | None,
     tpc_weight: float,
     sa_targets: Mapping[int, float] | torch.Tensor | None,
@@ -387,8 +422,12 @@ def _optimize_batch(
             anchor_weight=anchor_weight,
             temperature=temperature,
             tile_overlap=tile_overlap,
-            vf_targets=vf_targets if use_tile_descriptor else None,
-            vf_weight=vf_weight if use_tile_descriptor else 0.0,
+            fraction_targets=(
+                fraction_targets if use_tile_descriptor else None
+            ),
+            fraction_weight=(
+                slice_fraction_weight if use_tile_descriptor else 0.0
+            ),
             tpc_targets=tpc_targets if use_tile_descriptor else None,
             tpc_weight=tpc_weight if use_tile_descriptor else 0.0,
             sa_targets=sa_targets if use_tile_descriptor else None,
@@ -402,8 +441,8 @@ def _optimize_batch(
             target_total, target_stats = sample_descriptor_loss(
                 decoded,
                 num_phases=num_phases,
-                vf_targets=vf_targets,
-                vf_weight=vf_weight,
+                fraction_targets=fraction_targets,
+                fraction_weight=slice_fraction_weight,
                 tpc_targets=tpc_targets,
                 tpc_weight=tpc_weight,
                 sa_targets=sa_targets,
@@ -416,6 +455,17 @@ def _optimize_batch(
             )
             total = total + target_total
             stats.update(target_stats)
+
+        global_total = global_fraction_loss(
+            phase_probabilities,
+            fixed_phase_counts=fixed_phase_counts,
+            volume_voxels=volume_voxels,
+            targets=fraction_targets,
+            weight=global_fraction_weight,
+        )
+        total = total + global_total
+        if global_fraction_weight > 0.0:
+            stats["global_fraction"] = global_total.detach()
 
         stats["loss"] = total.detach()
         total.backward()
@@ -439,3 +489,20 @@ def _optimize_batch(
         for key, values in history.items()
         if values
     }
+
+
+def _fixed_phase_counts(
+    volume: torch.Tensor,
+    *,
+    axis: int,
+    indices: Sequence[int],
+    num_phases: int,
+) -> torch.Tensor:
+    labels = volume.round().long()
+    counts = F.one_hot(labels, num_classes=num_phases).sum(dim=(0, 1, 2)).float()
+    selected = extract_slice_batch(labels, axis, indices)
+    selected_counts = F.one_hot(
+        selected,
+        num_classes=num_phases,
+    ).sum(dim=(0, 1, 2)).float()
+    return counts - selected_counts

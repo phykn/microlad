@@ -4,7 +4,7 @@ import torch
 
 from src.app.api import QualityConfig, RefineConfig
 from src.pipelines.guidance.conditioning.model import VolumeAnchor
-from src.pipelines.guidance.finalize.select import select_volume
+from src.pipelines.finalize.select import select_label_volume, select_latent_volume
 
 
 class ConstantVAE(torch.nn.Module):
@@ -23,27 +23,50 @@ class ConstantVAE(torch.nn.Module):
 
 
 class FinalSelectionTest(unittest.TestCase):
-    def test_strict_gate_rejects_calibration_over_budget(self):
-        with self.assertRaisesRegex(RuntimeError, "calibration_budget"):
-            select_volume(
-                ConstantVAE(),
-                [torch.zeros(1, 2, 2, 2)],
-                candidate_steps=[0],
-                num_phases=2,
-                target_fraction=torch.tensor([0.0, 1.0]),
-                phase_fraction_tolerance=0.0,
-                anchors=[],
-                references=None,
-                refine=RefineConfig(candidates=(0,)),
-                quality=QualityConfig(
-                    strict=True,
-                    anchor_tolerance=1.0,
-                    morphology_tolerance=1.0,
-                    continuity_tolerance=1.0,
-                    repeat_tolerance=1.0,
-                    calibration_budget=0.0,
-                ),
-            )
+    def test_label_selection_evaluates_each_scale_refine_candidate(self):
+        volume, stats = select_label_volume(
+            [torch.zeros(2, 2, 2), torch.ones(2, 2, 2)],
+            candidate_steps=[0, 1],
+            num_phases=2,
+            target_fraction=torch.tensor([0.0, 1.0]),
+            phase_fraction_tolerance=0.0,
+            anchors=[],
+            references=None,
+            quality=QualityConfig(
+                anchor_tolerance=1.0,
+                morphology_tolerance=1.0,
+                continuity_tolerance=1.0,
+                repeat_tolerance=1.0,
+                calibration_budget=1.0,
+            ),
+        )
+
+        self.assertTrue(torch.all(volume == 1))
+        self.assertEqual(int(stats["selected_refine_steps"]), 1)
+
+    def test_gate_returns_best_candidate_when_calibration_exceeds_budget(self):
+        volume, stats = select_latent_volume(
+            ConstantVAE(),
+            [torch.zeros(1, 2, 2, 2)],
+            candidate_steps=[0],
+            num_phases=2,
+            target_fraction=torch.tensor([0.0, 1.0]),
+            phase_fraction_tolerance=0.0,
+            anchors=[],
+            references=None,
+            refine=RefineConfig(candidates=(0,)),
+            quality=QualityConfig(
+                anchor_tolerance=1.0,
+                morphology_tolerance=1.0,
+                continuity_tolerance=1.0,
+                repeat_tolerance=1.0,
+                calibration_budget=0.0,
+            ),
+        )
+
+        self.assertTrue(torch.all(volume == 1))
+        self.assertFalse(bool(stats["quality_passed"]))
+        self.assertGreater(float(stats["quality_calibration_budget"]), 0.0)
 
     def test_calibration_protects_model_labels_inside_anchor_footprint(self):
         anchor = VolumeAnchor(
@@ -52,7 +75,7 @@ class FinalSelectionTest(unittest.TestCase):
             index=1,
         )
 
-        volume, stats = select_volume(
+        volume, stats = select_latent_volume(
             ConstantVAE(),
             [torch.zeros(1, 2, 2, 2)],
             candidate_steps=[0],

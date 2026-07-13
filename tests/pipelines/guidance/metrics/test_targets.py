@@ -5,7 +5,7 @@ import torch
 from src.pipelines.guidance.metrics.targets import build_phase_target
 
 
-class PredictSDSTargetsTest(unittest.TestCase):
+class PhaseTargetTest(unittest.TestCase):
     def test_build_phase_target_rejects_non_integer_phase_keys(self):
         with self.assertRaisesRegex(ValueError, "phase indices"):
             build_phase_target(

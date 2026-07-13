@@ -5,14 +5,14 @@ import torch
 
 from src.modeling.phases import probabilities_to_calibrated_labels
 from src.pipelines.guidance.conditioning.model import VolumeAnchor
-from src.pipelines.guidance.finalize.quality import (
+from src.pipelines.finalize.quality import (
     check_quality,
     quality_score,
     reference_transition,
     transition_error,
 )
 from src.pipelines.guidance.metrics.diagnostics import evaluate_phase_volume
-from src.pipelines.reconstruction.refinement import refine_probabilities
+from src.pipelines.reconstruction.refine import refine_probabilities
 from src.pipelines.reconstruction.volume import decode_volume_probs
 
 if TYPE_CHECKING:
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 
 @torch.no_grad()
-def select_volume(
+def select_latent_volume(
     vae: torch.nn.Module,
     latents: Sequence[torch.Tensor],
     *,
@@ -47,13 +47,12 @@ def select_volume(
     records = []
     for latent_step, latent in zip(candidate_steps, latents, strict=True):
         decoded = decode_volume_probs(vae, latent, num_phases=num_phases)
-        base = decoded.argmax(dim=1)[0].float()
         for refine_steps in refine.candidates:
             probabilities = (
                 decoded
                 if refine_steps == 0
                 else refine_probabilities(
-                    base,
+                    decoded,
                     vae,
                     steps=refine_steps,
                     batch_size=refine.batch_size,
@@ -114,23 +113,6 @@ def select_volume(
             )
 
     feasible = [record for record in records if record["passed"]]
-    if quality.strict and not feasible:
-        best = min(
-            records,
-            key=lambda record: (
-                float(record["violation"].item()),
-                float(record["score"].item()),
-            ),
-        )
-        failed = [
-            name
-            for name, value in best["errors"].items()
-            if float(value.item()) > 0.0
-        ]
-        raise RuntimeError(
-            "no prediction candidate passed the final quality gate: "
-            + ", ".join(failed)
-        )
     pool = feasible or records
     selected = min(
         pool,
@@ -196,6 +178,82 @@ def select_volume(
             - selected["pre"]["axis_run_profile_mae"]
         )
     return selected["volume"].float(), stats
+
+
+@torch.no_grad()
+def select_label_volume(
+    volumes: Sequence[torch.Tensor],
+    *,
+    candidate_steps: Sequence[int],
+    num_phases: int,
+    target_fraction: torch.Tensor | None,
+    phase_fraction_tolerance: float,
+    anchors: Sequence[VolumeAnchor],
+    references: torch.Tensor | None,
+    quality: "QualityConfig",
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    if len(volumes) != len(candidate_steps) or not volumes:
+        raise ValueError("volumes and candidate_steps must have the same non-zero length.")
+    target_transition = reference_transition(references)
+    records = []
+    for step, volume in zip(candidate_steps, volumes, strict=True):
+        labels = volume.round().float()
+        stats = evaluate_phase_volume(
+            labels,
+            num_phases=num_phases,
+            references=references,
+            target_fraction=target_fraction,
+            anchors=anchors,
+        )
+        changed = labels.new_zeros(())
+        passed, errors = check_quality(
+            stats,
+            calibration_valid=True,
+            changed=changed,
+            target_transition=target_transition,
+            phase_fraction_tolerance=phase_fraction_tolerance,
+            quality=quality,
+        )
+        records.append(
+            {
+                "volume": labels,
+                "step": int(step),
+                "passed": passed,
+                "score": quality_score(
+                    stats,
+                    changed=changed,
+                    target_transition=target_transition,
+                ),
+                "violation": torch.stack(tuple(errors.values())).sum(),
+                "stats": stats,
+                "errors": errors,
+            }
+        )
+    feasible = [record for record in records if record["passed"]]
+    selected = min(
+        feasible or records,
+        key=lambda record: (
+            0.0 if record["passed"] else float(record["violation"].item()),
+            *_selection_rank(record["stats"], volumes[0].new_zeros(()), target_transition),
+        ),
+    )
+    device = volumes[0].device
+    result = {
+        "candidate_count": torch.tensor(len(records), device=device),
+        "candidate_passes": torch.tensor(
+            [bool(record["passed"]) for record in records],
+            device=device,
+        ),
+        "candidate_scores": torch.stack([record["score"] for record in records]),
+        "candidate_violations": torch.stack(
+            [record["violation"] for record in records]
+        ),
+        "selected_refine_steps": torch.tensor(selected["step"], device=device),
+        "quality_passed": torch.tensor(bool(selected["passed"]), device=device),
+    }
+    result.update({f"final_{name}": value for name, value in selected["stats"].items()})
+    result.update({f"quality_{name}": value for name, value in selected["errors"].items()})
+    return selected["volume"], result
 
 
 def _calibrate(

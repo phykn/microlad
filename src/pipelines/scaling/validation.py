@@ -5,6 +5,7 @@ import torch
 
 from src.pipelines.guidance.conditioning.model import AnchorSlice
 from src.pipelines.guidance.metrics.conductance import ConductanceSolver
+from src.pipelines.scaling.conditioning import as_anchor_image
 from src.validation import require_finite, require_float
 
 
@@ -21,8 +22,9 @@ def validate_optimization(
     anchor_masks: Mapping[tuple[int, int], torch.Tensor] | None,
     anchor_weight: float,
     sds_weight: float,
-    vf_targets: Mapping[int, float] | torch.Tensor | None,
-    vf_weight: float,
+    fraction_targets: Mapping[int, float] | torch.Tensor | None,
+    slice_fraction_weight: float,
+    global_fraction_weight: float,
     tpc_targets: Mapping[int, torch.Tensor] | torch.Tensor | None,
     tpc_weight: float,
     sa_targets: Mapping[int, float] | torch.Tensor | None,
@@ -70,7 +72,8 @@ def validate_optimization(
     for name, weight in (
         ("sds_weight", sds_weight),
         ("anchor_weight", anchor_weight),
-        ("vf_weight", vf_weight),
+        ("slice_fraction_weight", slice_fraction_weight),
+        ("global_fraction_weight", global_fraction_weight),
         ("tpc_weight", tpc_weight),
         ("sa_weight", sa_weight),
         ("diffusivity_weight", diffusivity_weight),
@@ -92,8 +95,10 @@ def validate_optimization(
     if anchor_weight > 0.0 and not anchors and not anchor_targets:
         raise ValueError("anchors are required when anchor_weight is positive.")
 
-    if vf_weight > 0.0 and vf_targets is None:
-        raise ValueError("vf_targets is required when vf_weight is positive.")
+    if (
+        slice_fraction_weight > 0.0 or global_fraction_weight > 0.0
+    ) and fraction_targets is None:
+        raise ValueError("fraction_targets are required for fraction guidance.")
 
     if tpc_weight > 0.0 and tpc_targets is None:
         raise ValueError("tpc_targets is required when tpc_weight is positive.")
@@ -108,16 +113,6 @@ def validate_optimization(
 
     if diffusivity_weight > 0.0 and diffusivity_solver is None:
         raise ValueError("diffusivity_solver is required for diffusivity loss.")
-
-
-def as_anchor_image(target: torch.Tensor) -> torch.Tensor:
-    if target.ndim == 4 and target.shape[:2] == (1, 1):
-        return target[0, 0]
-
-    if target.ndim == 2:
-        return target
-
-    raise ValueError("anchor target must have shape [H, W] or [1, 1, H, W].")
 
 
 def _require_nonnegative_int(name: str, value: int) -> None:
@@ -201,18 +196,3 @@ def _slice_shape(volume_shape: torch.Size, axis: int) -> torch.Size:
         return torch.Size([volume_shape[0], volume_shape[2]])
 
     return torch.Size([volume_shape[0], volume_shape[1]])
-
-
-def move_tensor_map(
-    values: Mapping[tuple[int, int], torch.Tensor] | None,
-    *,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> dict[tuple[int, int], torch.Tensor]:
-    if not values:
-        return {}
-
-    return {
-        (int(axis), int(index)): value.to(device=device, dtype=dtype)
-        for (axis, index), value in values.items()
-    }

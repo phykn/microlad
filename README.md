@@ -129,12 +129,15 @@ predictor = load_predictor("run/20260628-xxxxxx", device="cuda")
 
 options = PredictOptions(
     num_phases=3,
-    phase_fractions=(0.28, 0.12, 0.60),
     **load_predict_config("config/predict.yaml"),
 )
 
 anchor = AnchorSlice(image=anchor_image, axis=0, index=32)
-volume, stats = predictor.predict(options, anchors=[anchor])
+volume, stats = predictor.predict(
+    options,
+    anchors=[anchor],
+    target_images=[anchor_image],
+)
 ```
 
 `config/predict.yaml` groups the L-MPDD prior, base-size latent refinement,
@@ -148,8 +151,9 @@ each axis in one batch on a large-memory GPU.
 
 Prediction progress is shown by default for L-MPDD sampling, critic warm-up,
 Joint guidance, and scale-up guidance. Set `progress: false` in the prediction
-config to hide every progress bar. The plain-text critic bar reports loss and
-margin; Joint reports total loss and active anchor, critic, and fraction losses.
+config to hide every progress bar. The plain-text critic bar reports loss,
+margin, and gradient penalty; Joint reports total loss and active anchor,
+critic, and global fraction losses.
 
 Anchors are full 2D slices assigned to a volume axis and index. They are soft
 decoded constraints, so target labels are not forcibly copied into the result.
@@ -157,7 +161,11 @@ Multiple-axis anchor intersections must request compatible categorical labels.
 
 For scale-up, pass a larger `volume_size`; the `scale` section controls its tiled
 L-MPDD guidance. Reference descriptor targets live under `TargetConfig`, for
-example `targets=TargetConfig(vf_weight=1.0, tpc_weight=1.0)`.
+example `targets=TargetConfig(slice_fraction_weight=1.0, tpc_weight=1.0)`.
+Explicit `phase_fractions` use `global_fraction_weight` and do not constrain
+every slice unless `slice_fraction_weight` is also enabled.
+Set `phase_fractions: null` to derive the target from `target_images`, or provide
+an explicit list to condition on a requested global composition.
 
 The full pipeline design and scale-up boundary are documented in
 [`PIPELINE.md`](PIPELINE.md).

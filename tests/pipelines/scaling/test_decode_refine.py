@@ -3,14 +3,15 @@ import unittest
 import torch
 import torch.nn.functional as F
 
-from src.pipelines.reconstruction.refinement import refine_volume
+from src.modeling.phases.calibration import probabilities_to_calibrated_labels
+from src.pipelines.reconstruction.refine import refine_probabilities
 from src.pipelines.reconstruction.volume import decode_volume, decode_volume_probs
 from src.pipelines.scaling.decoding import (
     _decode_tiled_plane_probabilities,
     decode_large_volume,
     decode_large_volume_probabilities,
 )
-from src.pipelines.scaling.refinement import refine_large_volume
+from src.pipelines.scaling.refine import refine_large_candidates
 from src.pipelines.scaling.tiles import blend_window, tile_grid
 
 
@@ -129,16 +130,55 @@ class ScaleDecodeRefineTest(unittest.TestCase):
             ]
         )
 
-        base = refine_volume(volume, CategoricalVAE(), steps=1, batch_size=1)
-        large = refine_large_volume(
-            volume,
+        probabilities = F.one_hot(
+            volume.long(),
+            num_classes=2,
+        ).movedim(-1, 0).unsqueeze(0).float()
+        base_probabilities = refine_probabilities(
+            probabilities,
             CategoricalVAE(),
             steps=1,
+            batch_size=1,
+        )
+        base = probabilities_to_calibrated_labels(
+            base_probabilities,
+            num_phases=2,
+        )[0, 0].float()
+        large = refine_large_candidates(
+            volume,
+            CategoricalVAE(),
+            candidates=(1,),
+            tile_overlap=0,
+            tile_batch_size=1,
+        )[0]
+
+        self.assertTrue(torch.equal(large, base))
+
+    def test_large_refinement_returns_each_requested_candidate(self):
+        volume = torch.tensor(
+            [
+                [[0.0, 0.0], [1.0, 1.0]],
+                [[0.0, 1.0], [0.0, 1.0]],
+            ]
+        )
+
+        zero, one = refine_large_candidates(
+            volume,
+            CategoricalVAE(),
+            candidates=(0, 1),
             tile_overlap=0,
             tile_batch_size=1,
         )
 
-        self.assertTrue(torch.equal(large, base))
+        self.assertTrue(torch.equal(zero, volume))
+        self.assertTrue(torch.equal(
+            one,
+            refine_large_candidates(
+                volume,
+                CategoricalVAE(),
+                candidates=(1,),
+            )[0],
+        ))
 
     def test_large_decode_limits_plane_batch_size(self):
         vae = CategoricalVAE()
@@ -179,21 +219,21 @@ class ScaleDecodeRefineTest(unittest.TestCase):
 
     def test_large_refinement_batches_tiles_without_changing_result(self):
         volume = torch.linspace(-0.5, 0.5, steps=64).view(4, 4, 4)
-        single = refine_large_volume(
+        single = refine_large_candidates(
             volume,
             CategoricalVAE(),
-            steps=1,
+            candidates=(1,),
             tile_overlap=1,
             tile_batch_size=1,
-        )
+        )[0]
         batched_vae = CategoricalVAE()
-        batched = refine_large_volume(
+        batched = refine_large_candidates(
             volume,
             batched_vae,
-            steps=1,
+            candidates=(1,),
             tile_overlap=1,
             tile_batch_size=3,
-        )
+        )[0]
 
         self.assertTrue(torch.equal(single, batched))
         self.assertLessEqual(max(batched_vae.encode_batch_sizes), 3)
@@ -239,19 +279,19 @@ class ScaleDecodeRefineTest(unittest.TestCase):
         for volume, vae, message in cases:
             with self.subTest(message=message):
                 with self.assertRaisesRegex(ValueError, message):
-                    refine_large_volume(
+                    refine_large_candidates(
                         volume,
                         vae,
-                        steps=1,
+                        candidates=(1,),
                         tile_overlap=0,
                         tile_batch_size=1,
                     )
 
         with self.assertRaisesRegex(ValueError, "tile_batch_size"):
-            refine_large_volume(
+            refine_large_candidates(
                 torch.zeros(2, 2, 2),
                 CategoricalVAE(),
-                steps=1,
+                candidates=(1,),
                 tile_batch_size=0,
             )
 

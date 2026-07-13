@@ -1,37 +1,12 @@
 import torch
-import torch.nn.functional as F
 
-from src.modeling.phases.calibration import probabilities_to_calibrated_labels
 from src.modeling.phases.representation import geometric_probability_consensus
 from src.validation import require_finite, require_float, require_int
 
 
 @torch.no_grad()
-def refine_volume(
-    volume: torch.Tensor,
-    vae: torch.nn.Module,
-    *,
-    steps: int,
-    batch_size: int = 16,
-) -> torch.Tensor:
-    require_int("steps", steps)
-    if steps == 0:
-        return volume.float()
-    probabilities = refine_probabilities(
-        volume,
-        vae,
-        steps=steps,
-        batch_size=batch_size,
-    )
-    return probabilities_to_calibrated_labels(
-        probabilities,
-        int(vae.num_phases),
-    )[0, 0].float()
-
-
-@torch.no_grad()
 def refine_probabilities(
-    volume: torch.Tensor,
+    probabilities: torch.Tensor,
     vae: torch.nn.Module,
     *,
     steps: int,
@@ -47,7 +22,6 @@ def refine_probabilities(
     if batch_size <= 0:
         raise ValueError("batch_size must be positive.")
 
-    _validate_volume(volume, vae)
     num_phases = getattr(vae, "num_phases", None)
     if not isinstance(num_phases, int) or isinstance(num_phases, bool):
         raise ValueError("vae.num_phases must be an integer.")
@@ -63,22 +37,30 @@ def refine_probabilities(
     if not 0.0 <= anchor_strength <= 1.0:
         raise ValueError("anchor_strength must be between 0 and 1.")
 
-    refined = volume.float()
-    probabilities = F.one_hot(
-        refined.round().long(),
-        num_classes=num_phases,
-    ).movedim(-1, 0).unsqueeze(0).float()
+    image_size = int(vae.image_size)
+    expected = (1, num_phases, image_size, image_size, image_size)
+    if probabilities.shape != expected:
+        raise ValueError(f"probabilities must have shape {expected}.")
+    require_float("probabilities dtype", probabilities.dtype)
+    require_finite("probabilities", probabilities)
+    if torch.any(probabilities < 0.0):
+        raise ValueError("probabilities must be non-negative.")
+    normalizer = probabilities.sum(dim=1, keepdim=True)
+    if torch.any(normalizer <= 0.0):
+        raise ValueError("probabilities must have positive phase mass.")
+    probabilities = probabilities.float() / normalizer
     if steps == 0:
         return probabilities
 
     if anchor_mask is not None:
-        expected = (1, 1, *volume.shape)
+        expected = (1, 1, *probabilities.shape[2:])
         if anchor_mask.shape != expected or anchor_mask.dtype != torch.bool:
             raise ValueError(f"anchor_mask must be boolean with shape {expected}.")
-        anchor_mask = anchor_mask.to(device=volume.device)
+        anchor_mask = anchor_mask.to(device=probabilities.device)
 
     vae.eval()
     for _ in range(steps):
+        refined = probabilities.argmax(dim=1)[0].float()
         projected = _refine_once(
             refined,
             vae,
@@ -92,9 +74,12 @@ def refine_probabilities(
                 blend.new_full((), anchor_strength),
                 blend,
             )
-        probabilities = probabilities * (1.0 - blend) + projected * blend
-        probabilities = probabilities / probabilities.sum(dim=1, keepdim=True)
-        refined = probabilities.argmax(dim=1)[0].float()
+        tiny = torch.finfo(probabilities.dtype).tiny
+        logits = (
+            probabilities.clamp_min(tiny).log() * (1.0 - blend)
+            + projected.clamp_min(tiny).log() * blend
+        )
+        probabilities = logits.softmax(dim=1)
 
     return probabilities
 
@@ -161,19 +146,3 @@ def _encode_decode_probs(
         batches.append(probabilities.float())
 
     return torch.cat(batches)
-
-
-def _validate_volume(volume: torch.Tensor, vae: torch.nn.Module) -> None:
-    if volume.ndim != 3:
-        raise ValueError("volume must have shape [D, H, W].")
-
-    require_float("volume dtype", volume.dtype)
-    require_finite("volume", volume)
-
-    depth, height, width = volume.shape
-    if min(depth, height, width) <= 0:
-        raise ValueError("volume dimensions must be positive.")
-    if depth != height or depth != width:
-        raise ValueError("three-axis refinement requires a cubic volume.")
-    if depth != int(vae.image_size):
-        raise ValueError("volume size must match vae.image_size.")

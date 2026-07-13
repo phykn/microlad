@@ -60,8 +60,8 @@ class TargetConfig:
 
     Attributes:
         segment: Whether to segment reference images before analysis.
-        vf_weight: Weight of the volume-fraction loss. When phase fractions are
-            provided, zero selects the default weight of 1.0.
+        slice_fraction_weight: Weight matching each sampled 2D slice fraction.
+        global_fraction_weight: Weight matching the full 3D volume fraction.
         tpc_weight: Weight of the two-point-correlation loss.
         surface_area_weight: Weight of the surface-area loss.
         diffusivity_weight: Weight of the effective-diffusivity loss.
@@ -71,7 +71,8 @@ class TargetConfig:
 
     segment: bool = False
 
-    vf_weight: float = 0.0
+    slice_fraction_weight: float = 0.0
+    global_fraction_weight: float = 0.0
     tpc_weight: float = 0.0
     surface_area_weight: float = 0.0
     diffusivity_weight: float = 0.0
@@ -83,7 +84,8 @@ class TargetConfig:
         if not isinstance(self.segment, bool):
             raise ValueError("segment must be a boolean.")
         for name in (
-            "vf_weight",
+            "slice_fraction_weight",
+            "global_fraction_weight",
             "tpc_weight",
             "surface_area_weight",
             "diffusivity_weight",
@@ -182,9 +184,11 @@ class CriticConfig:
         betas: Adam momentum coefficients.
         gradient_weight: Weight of the WGAN gradient penalty.
         weight: Critic guidance weight during latent refinement.
-        candidate_count: Number of L-MPDD candidates used as fake examples.
-        min_margin: Required held-out real/fake score margin.
-        min_damage_margin: Required clean/damaged reference score margin.
+        candidate_count: Number of L-MPDD candidates including one holdout.
+        validate_every: Critic updates between validation checks.
+        min_accuracy: Required held-out real/fake ranking accuracy.
+        min_damage_accuracy: Required clean/damaged ranking accuracy.
+        max_stat_sensitivity: Maximum sensitivity to channel affine statistics.
     """
 
     steps: int = 0
@@ -194,8 +198,10 @@ class CriticConfig:
     gradient_weight: float = 10.0
     weight: float = 0.0
     candidate_count: int = 2
-    min_margin: float = 0.0
-    min_damage_margin: float = 0.0
+    validate_every: int = 25
+    min_accuracy: float = 0.6
+    min_damage_accuracy: float = 0.6
+    max_stat_sensitivity: float = 0.01
 
     def __post_init__(self) -> None:
         _require_non_negative_int("steps", self.steps)
@@ -213,10 +219,17 @@ class CriticConfig:
         _require_non_negative("gradient_weight", self.gradient_weight)
         _require_non_negative("weight", self.weight)
         _require_non_negative_int("candidate_count", self.candidate_count)
-        if self.candidate_count == 0:
-            raise ValueError("candidate_count must be positive.")
-        require_finite_number("min_margin", self.min_margin)
-        require_finite_number("min_damage_margin", self.min_damage_margin)
+        if self.candidate_count < 2:
+            raise ValueError("candidate_count must be at least two.")
+        _require_non_negative_int("validate_every", self.validate_every)
+        if self.validate_every == 0:
+            raise ValueError("validate_every must be positive.")
+        for name in (
+            "min_accuracy",
+            "min_damage_accuracy",
+            "max_stat_sensitivity",
+        ):
+            _require_unit_interval(name, getattr(self, name))
 
 
 @dataclass(frozen=True)
@@ -292,7 +305,6 @@ class QualityConfig:
     """Configures final candidate feasibility checks.
 
     Attributes:
-        strict: Whether prediction fails when every candidate violates a gate.
         anchor_tolerance: Maximum mismatch allowed for any anchor.
         morphology_tolerance: Maximum transition or run-profile error.
         continuity_tolerance: Maximum global boundary-profile jump.
@@ -300,7 +312,6 @@ class QualityConfig:
         calibration_budget: Maximum voxel fraction changed by calibration.
     """
 
-    strict: bool = False
     anchor_tolerance: float = 0.08
     morphology_tolerance: float = 0.05
     continuity_tolerance: float = 0.08
@@ -308,8 +319,6 @@ class QualityConfig:
     calibration_budget: float = 0.05
 
     def __post_init__(self) -> None:
-        if not isinstance(self.strict, bool):
-            raise ValueError("strict must be a boolean.")
         for name in (
             "anchor_tolerance",
             "morphology_tolerance",
@@ -326,9 +335,7 @@ class PredictOptions:
 
     Attributes:
         num_phases: Number of categorical material phases.
-        phase_fractions: Desired fraction of each phase, ordered by label. SDS
-            and Joint use a default volume-fraction weight of 1.0 when
-            targets.vf_weight is zero.
+        phase_fractions: Desired global fraction of each phase, ordered by label.
         phase_fraction_tolerance: Allowed fraction error after final calibration.
         segment_anchors: Whether to segment anchor images before conditioning.
         progress: Whether to show prediction progress bars.

@@ -126,6 +126,9 @@ class BuildTest(unittest.TestCase):
                 "\n".join(
                     [
                         "progress: false",
+                        "phase_fractions: [0.25, 0.15, 0.60]",
+                        "phase_fraction_tolerance: 0.02",
+                        "segment_anchors: true",
                         "joint:",
                         "  steps: 12",
                         "  batch_size: 3",
@@ -136,7 +139,7 @@ class BuildTest(unittest.TestCase):
                         "refine:",
                         "  candidates: [0, 1, 2]",
                         "quality:",
-                        "  strict: true",
+                        "  anchor_tolerance: 0.12",
                     ]
                 ),
                 encoding="utf-8",
@@ -148,10 +151,13 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(config["joint"].batch_size, 3)
         self.assertIsNone(config["joint"].decode_batch_size)
         self.assertFalse(config["progress"])
+        self.assertEqual(config["phase_fractions"], (0.25, 0.15, 0.60))
+        self.assertEqual(config["phase_fraction_tolerance"], 0.02)
+        self.assertTrue(config["segment_anchors"])
         self.assertEqual(config["critic"].steps, 7)
         self.assertEqual(config["critic"].weight, 0.05)
         self.assertEqual(config["refine"].candidates, (0, 1, 2))
-        self.assertTrue(config["quality"].strict)
+        self.assertEqual(config["quality"].anchor_tolerance, 0.12)
 
     def test_build_dataset_expands_image_files_from_data_dir(self):
         with tempfile.TemporaryDirectory() as tmp:

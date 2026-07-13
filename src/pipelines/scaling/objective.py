@@ -6,15 +6,16 @@ import torch.nn.functional as F
 from src.modeling.diffusion import DDPMProcess
 from src.modeling.phases.calibration import probabilities_to_calibrated_labels
 from src.pipelines.guidance.conditioning.loss import anchor_loss
-from src.pipelines.guidance.metrics.loss import descriptor_loss, sample_descriptor_loss
 from src.pipelines.guidance.metrics.conductance import ConductanceSolver
+from src.pipelines.guidance.metrics.loss import descriptor_loss, sample_descriptor_loss
+from src.pipelines.guidance.metrics.targets import build_phase_target
 from src.pipelines.guidance.prior import sds_loss
 from src.pipelines.reconstruction.volume import (
     decode_latent,
     decode_latents,
 )
 from src.pipelines.scaling.tiles import blend_window, normalize_tile_weights, tile_grid
-from src.pipelines.scaling.validation import as_anchor_image
+from src.pipelines.scaling.conditioning import as_anchor_image
 from src.validation import require_finite, require_int
 
 def slice_objective(
@@ -32,8 +33,8 @@ def slice_objective(
     temperature: float,
     tile_overlap: int,
     anchor_mask: torch.Tensor | None = None,
-    vf_targets: Mapping[int, float] | torch.Tensor | None = None,
-    vf_weight: float = 0.0,
+    fraction_targets: Mapping[int, float] | torch.Tensor | None = None,
+    fraction_weight: float = 0.0,
     tpc_targets: Mapping[int, torch.Tensor] | torch.Tensor | None = None,
     tpc_weight: float = 0.0,
     sa_targets: Mapping[int, float] | torch.Tensor | None = None,
@@ -125,8 +126,8 @@ def slice_objective(
         target_total, target_stats = descriptor_loss(
             decoded,
             num_phases=num_phases,
-            vf_targets=vf_targets,
-            vf_weight=vf_weight,
+            fraction_targets=fraction_targets,
+            fraction_weight=fraction_weight,
             tpc_targets=tpc_targets,
             tpc_weight=tpc_weight,
             sa_targets=sa_targets,
@@ -198,8 +199,8 @@ def batch_objective(
     temperature: float,
     tile_overlap: int,
     anchor_masks: Sequence[torch.Tensor | None],
-    vf_targets: Mapping[int, float] | torch.Tensor | None = None,
-    vf_weight: float = 0.0,
+    fraction_targets: Mapping[int, float] | torch.Tensor | None = None,
+    fraction_weight: float = 0.0,
     tpc_targets: Mapping[int, torch.Tensor] | torch.Tensor | None = None,
     tpc_weight: float = 0.0,
     sa_targets: Mapping[int, float] | torch.Tensor | None = None,
@@ -303,8 +304,8 @@ def batch_objective(
         target_total, target_stats = sample_descriptor_loss(
             decoded,
             num_phases=num_phases,
-            vf_targets=vf_targets,
-            vf_weight=vf_weight,
+            fraction_targets=fraction_targets,
+            fraction_weight=fraction_weight,
             tpc_targets=tpc_targets,
             tpc_weight=tpc_weight,
             sa_targets=sa_targets,
@@ -448,5 +449,34 @@ def decode_slices(
 
 def _weighted_average(out: torch.Tensor, weight_sum: torch.Tensor) -> torch.Tensor:
     return out / weight_sum.clamp_min(torch.finfo(weight_sum.dtype).tiny)
+
+
+def global_fraction_loss(
+    probabilities: torch.Tensor,
+    *,
+    fixed_phase_counts: torch.Tensor,
+    volume_voxels: int,
+    targets: Mapping[int, float] | torch.Tensor | None,
+    weight: float,
+) -> torch.Tensor:
+    if weight == 0.0:
+        return probabilities.sum() * 0.0
+    target = build_phase_target(
+        targets,
+        num_phases=int(probabilities.shape[-3]),
+        device=probabilities.device,
+        dtype=probabilities.dtype,
+        label="fraction",
+        require_sum_one=True,
+    )
+    phase_dim = probabilities.ndim - 3
+    reduce_dims = tuple(
+        dimension
+        for dimension in range(probabilities.ndim)
+        if dimension != phase_dim
+    )
+    selected_counts = probabilities.sum(dim=reduce_dims)
+    actual = (fixed_phase_counts + selected_counts) / float(volume_voxels)
+    return weight * F.mse_loss(actual, target)
 
 
