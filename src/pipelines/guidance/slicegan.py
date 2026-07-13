@@ -1,32 +1,45 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+import time
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from src.modeling.phases import probabilities_to_calibrated_labels
+from src.modeling.slicegan import (
+    SLICEGAN_BASE_NOISE_SIZE,
+    SLICEGAN_LATENT_CHANNELS,
+    SliceGANCritic,
+    SliceGANGenerator,
+)
+from src.pipelines.guidance.conditioning.model import VolumeAnchor
+from src.pipelines.guidance.conditioning.validation import validate_anchor_intersections
+from src.pipelines.guidance.config import (
+    SliceGANConditionConfig,
+    SliceGANConfig,
+    SliceGANRenderConfig,
+    SliceGANTrainConfig,
+)
 from src.pipelines.guidance.descriptors.run_profile import compute_run_profile
+from src.pipelines.guidance.diagnostics import phase_volume_diagnostics
+from src.pipelines.guidance.slices import (
+    critic_slices,
+    transition_profile,
+    volume_slices,
+)
 from src.pipelines.reconstruction.volume import decode_latents_with_probabilities
+from src.pipelines.scaling.generation import render_generator_tiled
 
 
-_LATENT_CHANNELS = 32
-_LATENT_SIZE = 4
-_CRITIC_ITERS = 5
-_BATCH_SIZE = 8
-_LEARNING_RATE = 1e-4
-_BETAS = (0.9, 0.99)
-_GRADIENT_PENALTY_WEIGHT = 10.0
-_DIFFUSION_REFERENCE_COUNT = 8
-_DIFFUSION_MIX_PROBABILITY = 0.1
-_NOISE_CANDIDATES = 8
-_NOISE_LR = 5e-2
-_NOISE_CRITIC_WEIGHT = 1e-2
-_FINETUNE_GENERATOR_LR = 1e-5
-_FINETUNE_NOISE_LR = 2e-3
-_FINETUNE_CRITIC_WEIGHT = 2e-2
-_FINETUNE_PHASE_WEIGHT = 50.0
-_TARGET_MISMATCH = 0.08
+@dataclass(frozen=True)
+class _PreparedAnchor:
+    labels: torch.Tensor
+    probabilities: torch.Tensor
+    axis: int
+    index: int
+    start: int
 
 
 @dataclass
@@ -37,136 +50,91 @@ class _TrainingCandidate:
     critic: dict[str, torch.Tensor]
 
 
-class SliceGANGenerator(torch.nn.Module):
-    def __init__(self, num_phases: int) -> None:
-        super().__init__()
-        channels = (_LATENT_CHANNELS, 1024, 512, 128, 32)
-        self.blocks = torch.nn.ModuleList(
-            [
-                torch.nn.Sequential(
-                    torch.nn.ConvTranspose3d(
-                        source,
-                        target,
-                        kernel_size=4,
-                        stride=2,
-                        padding=2,
-                        bias=False,
-                    ),
-                    torch.nn.BatchNorm3d(target),
-                    torch.nn.ReLU(inplace=True),
-                )
-                for source, target in zip(channels, channels[1:])
-            ]
-        )
-        self.to_logits = torch.nn.Conv3d(
-            channels[-1],
-            num_phases,
-            kernel_size=3,
-            padding=0,
-            bias=False,
-        )
-
-    def forward(self, noise: torch.Tensor) -> torch.Tensor:
-        x = noise
-        for block in self.blocks:
-            x = block(x)
-        x = F.interpolate(
-            x,
-            size=(66, 66, 66),
-            mode="trilinear",
-            align_corners=False,
-        )
-        return torch.softmax(self.to_logits(x), dim=1)
-
-
-class SliceGANCritic(torch.nn.Module):
-    def __init__(self, num_phases: int) -> None:
-        super().__init__()
-        channels = (num_phases, 64, 128, 256, 512, 1)
-        self.layers = torch.nn.ModuleList(
-            [
-                torch.nn.Conv2d(
-                    source,
-                    target,
-                    kernel_size=4,
-                    stride=2,
-                    padding=1 if index < 4 else 0,
-                    bias=False,
-                )
-                for index, (source, target) in enumerate(
-                    zip(channels, channels[1:])
-                )
-            ]
-        )
-
-    def forward(self, images: torch.Tensor) -> torch.Tensor:
-        x = images
-        for layer in self.layers[:-1]:
-            x = F.relu(layer(x))
-        return self.layers[-1](x)
-
-
 def generate_conditional_slicegan(
     sampler,
     vae: torch.nn.Module,
     *,
-    anchor_image: torch.Tensor,
-    anchor_index: int,
+    anchors: Sequence[VolumeAnchor],
+    target_fraction: torch.Tensor | None,
+    phase_fraction_tolerance: float,
+    volume_size: int,
     num_phases: int,
-    steps: int,
-    hybrid_steps: int,
-    condition_steps: int,
-    finetune_steps: int,
-    seed: int,
+    config: SliceGANConfig,
     device: torch.device,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    training = config.training
+    conditioning = config.conditioning
+    rendering = config.rendering
+    seed = config.seed
     _validate_inputs(
         vae,
-        anchor_image=anchor_image,
-        anchor_index=anchor_index,
+        anchors=anchors,
+        target_fraction=target_fraction,
+        phase_fraction_tolerance=phase_fraction_tolerance,
+        intersection_tolerance=config.intersection_tolerance,
+        volume_size=volume_size,
         num_phases=num_phases,
-        steps=steps,
-        hybrid_steps=hybrid_steps,
-        condition_steps=condition_steps,
-        finetune_steps=finetune_steps,
+        steps=training.steps,
+        hybrid_steps=training.hybrid_steps,
+        condition_steps=conditioning.steps,
+        finetune_steps=conditioning.finetune_steps,
         seed=seed,
     )
-    anchor = anchor_image.to(device=device, dtype=torch.long)
-    target_one_hot = F.one_hot(
-        anchor,
-        num_classes=num_phases,
-    ).movedim(-1, 0).float()
-    target_fraction = target_one_hot.mean(dim=(1, 2))
-    anchor_references = build_anchor_references(
-        anchor,
+    prepared_anchors = _prepare_anchors(
+        anchors,
         num_phases=num_phases,
+        device=device,
+    )
+    target_fraction = _resolve_target_fraction(
+        prepared_anchors,
+        target_fraction=target_fraction,
+        num_phases=num_phases,
+        device=device,
+    )
+    anchor_references = torch.cat(
+        [
+            build_anchor_references(anchor.labels, num_phases=num_phases)
+            for anchor in prepared_anchors
+        ],
+        dim=0,
     )
 
     cuda_devices = []
     if device.type == "cuda":
-        cuda_devices = [device.index if device.index is not None else torch.cuda.current_device()]
+        cuda_devices = [
+            device.index if device.index is not None else torch.cuda.current_device()
+        ]
+    _synchronize_device(device)
+    total_started = time.perf_counter()
     with torch.random.fork_rng(devices=cuda_devices):
+        reference_started = time.perf_counter()
         _seed_all(seed + 101)
         diffusion_references = build_diffusion_references(
             sampler,
             vae,
             target_fraction=target_fraction,
             num_phases=num_phases,
-            count=_DIFFUSION_REFERENCE_COUNT,
+            count=training.diffusion_reference_count,
         )
+        _synchronize_device(device)
+        reference_seconds = time.perf_counter() - reference_started
 
+        training_started = time.perf_counter()
         _seed_all(seed)
-        generator = SliceGANGenerator(num_phases).to(device)
+        generator = SliceGANGenerator(
+            num_phases,
+            fully_convolutional=volume_size > 64,
+        ).to(device)
         critic = SliceGANCritic(num_phases).to(device)
         optimizer_g = torch.optim.Adam(
             generator.parameters(),
-            lr=_LEARNING_RATE,
-            betas=_BETAS,
+            lr=training.learning_rate,
+            betas=training.betas,
         )
         optimizer_d = torch.optim.Adam(
             critic.parameters(),
-            lr=_LEARNING_RATE,
-            betas=_BETAS,
+            lr=training.learning_rate,
+            betas=training.betas,
         )
         fixed_noise = _consume_fixed_noise(device)
         hybrid_references = torch.cat(
@@ -180,14 +148,14 @@ def generate_conditional_slicegan(
         train_stats: dict[str, torch.Tensor] = {}
         candidates: list[_TrainingCandidate] = []
         current_step = 0
-        candidate_steps = _candidate_steps(steps)
+        candidate_steps = _candidate_steps(training.steps)
         events = sorted(
             set(
                 candidate_steps
                 + tuple(
                     boundary
                     for boundary in (100, 500, 2000)
-                    if boundary < steps
+                    if boundary < training.steps
                 )
             )
         )
@@ -207,6 +175,8 @@ def generate_conditional_slicegan(
                 steps=event - current_step,
                 num_phases=num_phases,
                 real_sampler=_sample_anchor_batch,
+                stats_prefix="slicegan",
+                config=training,
             )
             current_step = event
             if event in candidate_steps:
@@ -234,19 +204,19 @@ def generate_conditional_slicegan(
 
         hybrid_optimizer_g = torch.optim.Adam(
             generator.parameters(),
-            lr=_LEARNING_RATE,
-            betas=_BETAS,
+            lr=training.learning_rate,
+            betas=training.betas,
         )
         hybrid_optimizer_d = torch.optim.Adam(
             critic.parameters(),
-            lr=_LEARNING_RATE,
-            betas=_BETAS,
+            lr=training.learning_rate,
+            betas=training.betas,
         )
         hybrid_stats: dict[str, torch.Tensor] = {}
         _replay_training_rng(seed, device=device, num_phases=num_phases)
         hybrid_completed = 0
-        while hybrid_completed < hybrid_steps:
-            segment_steps = min(500, hybrid_steps - hybrid_completed)
+        while hybrid_completed < training.hybrid_steps:
+            segment_steps = min(500, training.hybrid_steps - hybrid_completed)
             hybrid_stats = _train_texture_generator(
                 generator,
                 critic,
@@ -255,7 +225,14 @@ def generate_conditional_slicegan(
                 hybrid_references,
                 steps=segment_steps,
                 num_phases=num_phases,
-                real_sampler=_sample_hybrid_batch,
+                real_sampler=lambda images, *, batch_size: _sample_hybrid_batch(
+                    images,
+                    batch_size=batch_size,
+                    diffusion_count=int(diffusion_references.shape[0]),
+                    diffusion_mix_probability=training.diffusion_mix_probability,
+                ),
+                stats_prefix="slicegan_hybrid",
+                config=training,
             )
             hybrid_completed += segment_steps
             score = _morphology_score(
@@ -267,12 +244,15 @@ def generate_conditional_slicegan(
             )
             candidates.append(
                 _capture_candidate(
-                    steps + hybrid_completed,
+                    training.steps + hybrid_completed,
                     score,
                     generator,
                     critic,
                 )
             )
+
+        _synchronize_device(device)
+        training_seconds = time.perf_counter() - training_started
 
         ordered_candidates = sorted(candidates, key=lambda candidate: candidate.score)
         selected_candidate: _TrainingCandidate | None = None
@@ -283,6 +263,7 @@ def generate_conditional_slicegan(
         selected_finetune_stats: dict[str, torch.Tensor] = {}
         selected_quality_stats: dict[str, torch.Tensor] = {}
         attempted = 0
+        generation_started = time.perf_counter()
         for candidate in ordered_candidates:
             if attempted >= 3 and _quality_passes(selected_quality_stats):
                 break
@@ -293,30 +274,43 @@ def generate_conditional_slicegan(
             noise, noise_stats = _condition_noise(
                 generator,
                 critic,
-                target_one_hot,
-                anchor_index=anchor_index,
-                steps=condition_steps,
+                prepared_anchors,
+                target_transition=morphology_target["transition"],
+                volume_size=volume_size,
+                steps=conditioning.steps,
                 num_phases=num_phases,
                 device=device,
+                config=conditioning,
+                rendering=rendering,
             )
             with torch.no_grad():
-                conditioned = generator(noise).argmax(dim=1)[0]
+                conditioned = probabilities_to_calibrated_labels(
+                    _render_inference_probabilities(
+                        generator,
+                        noise,
+                        rendering=rendering,
+                    ),
+                    num_phases,
+                    target_fractions=target_fraction,
+                )[0, 0]
             candidate_volume, finetune_stats = _finetune_condition(
                 generator,
                 critic,
                 noise,
-                target_one_hot,
+                prepared_anchors,
                 target_fraction,
-                anchor_index=anchor_index,
-                steps=finetune_steps,
+                target_transition=morphology_target["transition"],
+                steps=conditioning.finetune_steps,
                 num_phases=num_phases,
+                config=conditioning,
+                rendering=rendering,
+                optimizer_betas=training.betas,
             )
             quality, quality_stats = _conditional_quality_score(
                 candidate_volume,
                 morphology_target,
                 target_fraction=target_fraction,
-                target_labels=anchor,
-                anchor_index=anchor_index,
+                anchors=prepared_anchors,
                 num_phases=num_phases,
             )
             if bool((quality < selected_quality).item()):
@@ -333,7 +327,9 @@ def generate_conditional_slicegan(
             or selected_volume is None
             or selected_conditioned is None
         ):
-            raise RuntimeError("SliceGAN conditioning did not produce a candidate volume.")
+            raise RuntimeError(
+                "SliceGAN conditioning did not produce a candidate volume."
+            )
         volume = selected_volume
         conditioned = selected_conditioned
         noise_stats = selected_noise_stats
@@ -344,29 +340,84 @@ def generate_conditional_slicegan(
             device=device,
             dtype=torch.float32,
         )
+        _synchronize_device(device)
+        generation_seconds = time.perf_counter() - generation_started
+
+    total_seconds = time.perf_counter() - total_started
 
     stats = {
-        "slicegan_steps": torch.tensor(steps, device=device),
-        "slicegan_hybrid_steps": torch.tensor(hybrid_steps, device=device),
+        "slicegan_steps": torch.tensor(training.steps, device=device),
+        "slicegan_hybrid_steps": torch.tensor(training.hybrid_steps, device=device),
         "slicegan_selected_step": torch.tensor(best_step, device=device),
         "slicegan_morphology_score": best_score,
         "slicegan_condition_quality": selected_quality,
         "slicegan_condition_candidates": torch.tensor(attempted, device=device),
+        "slicegan_volume_size": torch.tensor(volume_size, device=device),
+        "slicegan_fully_convolutional": torch.tensor(
+            volume_size > 64,
+            device=device,
+        ),
+        "slicegan_reference_seconds": torch.tensor(
+            reference_seconds,
+            device=device,
+        ),
+        "slicegan_training_seconds": torch.tensor(training_seconds, device=device),
+        "slicegan_generation_seconds": torch.tensor(
+            generation_seconds,
+            device=device,
+        ),
+        "slicegan_total_seconds": torch.tensor(total_seconds, device=device),
         **train_stats,
         **hybrid_stats,
         **noise_stats,
         **finetune_stats,
         **selected_quality_stats,
     }
-    stats["slicegan_changed_voxel_fraction"] = (
-        volume != conditioned
-    ).float().mean()
+    stats["slicegan_changed_voxel_fraction"] = (volume != conditioned).float().mean()
     stats["slicegan_phase_fraction"] = torch.stack(
         [(volume == phase).float().mean() for phase in range(num_phases)]
     )
+    stats["slicegan_target_phase_fraction"] = target_fraction.detach().clone()
+    phase_fraction_error = torch.abs(
+        stats["slicegan_phase_fraction"] - stats["slicegan_target_phase_fraction"]
+    )
+    stats["slicegan_phase_fraction_error"] = phase_fraction_error
+    stats["slicegan_phase_fraction_tolerance"] = torch.tensor(
+        phase_fraction_tolerance,
+        device=device,
+    )
+    stats["slicegan_phase_fraction_within_tolerance"] = (
+        phase_fraction_error.max() <= phase_fraction_tolerance
+    )
+    if not bool(stats["slicegan_phase_fraction_within_tolerance"].item()):
+        raise RuntimeError("generated phase fractions exceed phase_fraction_tolerance.")
+    diagnostics = phase_volume_diagnostics(
+        volume,
+        hybrid_references,
+        target_fraction=target_fraction,
+        num_phases=num_phases,
+    )
+    stats.update(
+        {f"slicegan_diagnostic_{name}": value for name, value in diagnostics.items()}
+    )
     stats["slicegan_anchor_boundary_profile"] = _anchor_boundary_profile(
         volume,
-        anchor_index=anchor_index,
+        axis=prepared_anchors[0].axis,
+        anchor_index=prepared_anchors[0].index,
+    )
+    anchor_boundary_stats = [
+        _local_boundary_stats(
+            volume,
+            axis=anchor.axis,
+            anchor_index=anchor.index,
+        )
+        for anchor in prepared_anchors
+    ]
+    stats["slicegan_anchor_boundary_stds"] = torch.stack(
+        [value[0] for value in anchor_boundary_stats]
+    )
+    stats["slicegan_anchor_boundary_jumps"] = torch.stack(
+        [value[1] for value in anchor_boundary_stats]
     )
     return volume.float(), stats
 
@@ -401,10 +452,14 @@ def build_diffusion_references(
         num_phases,
         target_fractions=target_fraction,
     )[:, 0]
-    return F.one_hot(
-        labels.long(),
-        num_classes=num_phases,
-    ).movedim(-1, 1).float()
+    return (
+        F.one_hot(
+            labels.long(),
+            num_classes=num_phases,
+        )
+        .movedim(-1, 1)
+        .float()
+    )
 
 
 def build_anchor_references(
@@ -417,21 +472,6 @@ def build_anchor_references(
         images.extend(torch.rot90(flipped, turns, dims=(-2, -1)) for turns in range(4))
     labels = torch.stack(images)
     return F.one_hot(labels, num_classes=num_phases).movedim(-1, 1).float()
-
-
-def volume_slices(
-    volume: torch.Tensor,
-    axis: int,
-    *,
-    num_phases: int,
-) -> torch.Tensor:
-    if axis == 0:
-        return volume.permute(0, 2, 1, 3, 4).reshape(-1, num_phases, 64, 64)
-    if axis == 1:
-        return volume.permute(0, 3, 1, 2, 4).reshape(-1, num_phases, 64, 64)
-    if axis == 2:
-        return volume.permute(0, 4, 1, 2, 3).reshape(-1, num_phases, 64, 64)
-    raise ValueError("axis must be 0, 1, or 2.")
 
 
 def multiscale_shape_loss(
@@ -467,6 +507,8 @@ def _train_texture_generator(
     steps: int,
     num_phases: int,
     real_sampler: Callable[..., torch.Tensor],
+    stats_prefix: str,
+    config: SliceGANTrainConfig,
 ) -> dict[str, torch.Tensor]:
     device = real_images.device
     last_margin = torch.zeros((), device=device)
@@ -477,10 +519,10 @@ def _train_texture_generator(
         critic.train()
         noise = torch.randn(
             1,
-            _LATENT_CHANNELS,
-            _LATENT_SIZE,
-            _LATENT_SIZE,
-            _LATENT_SIZE,
+            SLICEGAN_LATENT_CHANNELS,
+            SLICEGAN_BASE_NOISE_SIZE,
+            SLICEGAN_BASE_NOISE_SIZE,
+            SLICEGAN_BASE_NOISE_SIZE,
             device=device,
         )
         with torch.no_grad():
@@ -490,7 +532,7 @@ def _train_texture_generator(
         penalties = []
         for axis in range(3):
             optimizer_d.zero_grad(set_to_none=True)
-            real = real_sampler(real_images, batch_size=_BATCH_SIZE)
+            real = real_sampler(real_images, batch_size=config.batch_size)
             fake = volume_slices(
                 fake_volume,
                 axis,
@@ -503,31 +545,27 @@ def _train_texture_generator(
                 real,
                 fake[: real.shape[0]],
             )
-            loss = (
-                fake_score
-                - real_score
-                + _GRADIENT_PENALTY_WEIGHT * penalty
-            )
+            loss = fake_score - real_score + config.gradient_penalty_weight * penalty
             loss.backward()
             optimizer_d.step()
             margins.append((real_score - fake_score).detach())
             penalties.append(penalty.detach())
 
-        if (step + 1) % _CRITIC_ITERS == 0:
+        if (step + 1) % config.critic_iterations == 0:
             _set_requires_grad(critic, False)
             optimizer_g.zero_grad(set_to_none=True)
             noise = torch.randn(
                 1,
-                _LATENT_CHANNELS,
-                _LATENT_SIZE,
-                _LATENT_SIZE,
-                _LATENT_SIZE,
+                SLICEGAN_LATENT_CHANNELS,
+                SLICEGAN_BASE_NOISE_SIZE,
+                SLICEGAN_BASE_NOISE_SIZE,
+                SLICEGAN_BASE_NOISE_SIZE,
                 device=device,
             )
             fake_volume = generator(noise)
             generator_loss = sum(
                 -critic(
-                    volume_slices(
+                    critic_slices(
                         fake_volume,
                         axis,
                         num_phases=num_phases,
@@ -543,11 +581,10 @@ def _train_texture_generator(
         last_margin = torch.stack(margins).mean()
         last_penalty = torch.stack(penalties).mean()
 
-    prefix = "slicegan_hybrid" if real_sampler is _sample_hybrid_batch else "slicegan"
     return {
-        f"{prefix}_margin": last_margin,
-        f"{prefix}_gradient_penalty": last_penalty,
-        f"{prefix}_generator_loss": last_generator,
+        f"{stats_prefix}_margin": last_margin,
+        f"{stats_prefix}_gradient_penalty": last_penalty,
+        f"{stats_prefix}_generator_loss": last_generator,
     }
 
 
@@ -563,10 +600,30 @@ def _sample_anchor_batch(images: torch.Tensor, *, batch_size: int) -> torch.Tens
     )
 
 
-def _sample_hybrid_batch(images: torch.Tensor, *, batch_size: int) -> torch.Tensor:
-    use_diffusion = torch.rand(batch_size, device=images.device) < _DIFFUSION_MIX_PROBABILITY
-    diffusion_indices = torch.randint(0, 8, (batch_size,), device=images.device)
-    anchor_indices = torch.randint(8, 16, (batch_size,), device=images.device)
+def _sample_hybrid_batch(
+    images: torch.Tensor,
+    *,
+    batch_size: int,
+    diffusion_count: int,
+    diffusion_mix_probability: float,
+) -> torch.Tensor:
+    if diffusion_count <= 0 or diffusion_count >= images.shape[0]:
+        raise ValueError("diffusion_count must split diffusion and anchor references.")
+    use_diffusion = (
+        torch.rand(batch_size, device=images.device) < diffusion_mix_probability
+    )
+    diffusion_indices = torch.randint(
+        0,
+        diffusion_count,
+        (batch_size,),
+        device=images.device,
+    )
+    anchor_indices = torch.randint(
+        diffusion_count,
+        images.shape[0],
+        (batch_size,),
+        device=images.device,
+    )
     indices = torch.where(use_diffusion, diffusion_indices, anchor_indices)
     selected = images[indices]
     augmented = []
@@ -607,12 +664,15 @@ def _gradient_penalty(
 def _condition_noise(
     generator: SliceGANGenerator,
     critic: SliceGANCritic,
-    target: torch.Tensor,
+    anchors: Sequence[_PreparedAnchor],
     *,
-    anchor_index: int,
+    target_transition: torch.Tensor,
+    volume_size: int,
     steps: int,
     num_phases: int,
     device: torch.device,
+    config: SliceGANConditionConfig,
+    rendering: SliceGANRenderConfig,
 ) -> tuple[torch.nn.Parameter, dict[str, torch.Tensor]]:
     generator.eval()
     critic.eval()
@@ -620,37 +680,45 @@ def _condition_noise(
     _set_requires_grad(critic, False)
     noise = _select_initial_noise(
         generator,
-        target,
-        anchor_index=anchor_index,
+        anchors,
+        noise_size=volume_size // 16,
         device=device,
+        candidates=config.noise_candidates,
+        rendering=rendering,
     )
-    optimizer = torch.optim.Adam([noise], lr=_NOISE_LR)
-    target_labels = target.argmax(dim=0)
+    optimizer = torch.optim.Adam([noise], lr=config.noise_lr)
     completed = 0
     for step in range(steps):
         optimizer.zero_grad(set_to_none=True)
-        probabilities = generator(noise)
-        center = probabilities[0, :, anchor_index]
-        pixel = F.nll_loss(
-            center.clamp_min(1e-8).log().unsqueeze(0),
-            target_labels.unsqueeze(0),
+        probabilities = _training_probabilities(generator, noise)
+        pixel, shape = _anchor_objective(
+            probabilities,
+            anchors,
         )
-        shape = multiscale_shape_loss(center, target)
-        critic_prior = sum(
-            -critic(
-                volume_slices(
-                    probabilities,
-                    axis,
-                    num_phases=num_phases,
-                )
-            ).mean()
-            for axis in range(3)
-        ) / 3.0
+        anchor_transition = _anchor_transition_loss(
+            probabilities,
+            anchors,
+            target_transition=target_transition,
+        )
+        critic_prior = (
+            sum(
+                -critic(
+                    critic_slices(
+                        probabilities,
+                        axis,
+                        num_phases=num_phases,
+                    )
+                ).mean()
+                for axis in range(3)
+            )
+            / 3.0
+        )
         noise_prior = noise_distribution_loss(noise)
         loss = (
             pixel
             + 2.0 * shape
-            + _NOISE_CRITIC_WEIGHT * critic_prior
+            + config.anchor_transition_weight * anchor_transition
+            + config.noise_critic_weight * critic_prior
             + 5e-2 * noise_prior
         )
         loss.backward()
@@ -661,42 +729,48 @@ def _condition_noise(
         completed = step + 1
 
     with torch.no_grad():
-        probabilities = generator(noise)
-        mismatch = _categorical_mismatch(
-            probabilities[0, :, anchor_index],
-            target_labels,
+        probabilities = _render_inference_probabilities(
+            generator,
+            noise,
+            rendering=rendering,
         )
+        mismatches = _probability_anchor_mismatches(probabilities, anchors)
     return noise, {
         "slicegan_condition_steps": torch.tensor(completed, device=device),
-        "slicegan_noise_anchor_mismatch": mismatch,
+        "slicegan_noise_anchor_mismatch": mismatches.mean(),
+        "slicegan_noise_anchor_mismatches": mismatches,
+        "slicegan_noise_anchor_max_mismatch": mismatches.max(),
     }
 
 
 def _select_initial_noise(
     generator: SliceGANGenerator,
-    target: torch.Tensor,
+    anchors: Sequence[_PreparedAnchor],
     *,
-    anchor_index: int,
+    noise_size: int,
     device: torch.device,
+    candidates: int,
+    rendering: SliceGANRenderConfig,
 ) -> torch.nn.Parameter:
     best_noise = None
     best_score = float("inf")
     with torch.no_grad():
-        for _ in range(_NOISE_CANDIDATES):
+        for _ in range(candidates):
             candidate = torch.randn(
                 1,
-                _LATENT_CHANNELS,
-                _LATENT_SIZE,
-                _LATENT_SIZE,
-                _LATENT_SIZE,
+                SLICEGAN_LATENT_CHANNELS,
+                noise_size,
+                noise_size,
+                noise_size,
                 device=device,
             )
-            score = float(
-                multiscale_shape_loss(
-                    generator(candidate)[0, :, anchor_index],
-                    target,
-                ).item()
+            probabilities = _render_inference_probabilities(
+                generator,
+                candidate,
+                rendering=rendering,
             )
+            _, shape = _anchor_objective(probabilities, anchors)
+            score = float(shape.item())
             if score < best_score:
                 best_score = score
                 best_noise = candidate.detach().clone()
@@ -709,54 +783,80 @@ def _finetune_condition(
     generator: SliceGANGenerator,
     critic: SliceGANCritic,
     noise: torch.nn.Parameter,
-    target: torch.Tensor,
+    anchors: Sequence[_PreparedAnchor],
     target_fraction: torch.Tensor,
     *,
-    anchor_index: int,
+    target_transition: torch.Tensor,
     steps: int,
     num_phases: int,
+    config: SliceGANConditionConfig,
+    rendering: SliceGANRenderConfig,
+    optimizer_betas: tuple[float, float],
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     generator.eval()
     critic.eval()
     _set_requires_grad(generator, True)
     _set_requires_grad(critic, False)
+    with torch.no_grad():
+        reference_probabilities = _render_inference_probabilities(
+            generator,
+            noise,
+            rendering=rendering,
+        ).detach()
+    preservation_weights = anchor_preservation_weights(
+        reference_probabilities.shape[-3:],
+        anchors,
+        device=reference_probabilities.device,
+        dtype=reference_probabilities.dtype,
+        sigma=config.anchor_influence_sigma,
+    )
     optimizer = torch.optim.Adam(
         [
-            {"params": generator.parameters(), "lr": _FINETUNE_GENERATOR_LR},
-            {"params": [noise], "lr": _FINETUNE_NOISE_LR},
+            {"params": generator.parameters(), "lr": config.finetune_generator_lr},
+            {"params": [noise], "lr": config.finetune_noise_lr},
         ],
-        betas=_BETAS,
+        betas=optimizer_betas,
     )
-    target_labels = target.argmax(dim=0)
     completed = 0
     for step in range(steps):
         optimizer.zero_grad(set_to_none=True)
-        probabilities = generator(noise)
-        center = probabilities[0, :, anchor_index]
-        pixel = F.nll_loss(
-            center.clamp_min(1e-8).log().unsqueeze(0),
-            target_labels.unsqueeze(0),
+        probabilities = _training_probabilities(generator, noise)
+        pixel, shape = _anchor_objective(
+            probabilities,
+            anchors,
         )
-        shape = multiscale_shape_loss(center, target)
-        critic_prior = sum(
-            -critic(
-                volume_slices(
-                    probabilities,
-                    axis,
-                    num_phases=num_phases,
-                )
-            ).mean()
-            for axis in range(3)
-        ) / 3.0
+        anchor_transition = _anchor_transition_loss(
+            probabilities,
+            anchors,
+            target_transition=target_transition,
+        )
+        critic_prior = (
+            sum(
+                -critic(
+                    critic_slices(
+                        probabilities,
+                        axis,
+                        num_phases=num_phases,
+                    )
+                ).mean()
+                for axis in range(3)
+            )
+            / 3.0
+        )
         phase = F.mse_loss(
             probabilities.mean(dim=(0, 2, 3, 4)),
             target_fraction,
         )
+        preservation = (
+            (probabilities - reference_probabilities).square() * preservation_weights
+        ).mean()
         loss = (
             pixel
             + 2.0 * shape
-            + _FINETUNE_CRITIC_WEIGHT * critic_prior
-            + _FINETUNE_PHASE_WEIGHT * phase
+            + config.anchor_transition_weight * anchor_transition
+            + config.finetune_critic_weight * critic_prior
+            + config.finetune_phase_weight * phase
+            + config.finetune_preservation_weight * preservation
             + 5e-2 * noise_distribution_loss(noise)
         )
         loss.backward()
@@ -767,21 +867,57 @@ def _finetune_condition(
             noise.clamp_(-3.5, 3.5)
         completed = step + 1
         if completed % 10 == 0:
-            mismatch = _categorical_mismatch(center, target_labels)
-            if float(mismatch.item()) <= _TARGET_MISMATCH:
+            mismatches = _probability_anchor_mismatches(
+                probabilities,
+                anchors,
+            )
+            if float(mismatches.max().item()) <= config.target_mismatch:
                 break
 
     with torch.no_grad():
-        probabilities = generator(noise)
-        volume = probabilities.argmax(dim=1)[0]
-        mismatch = _categorical_mismatch(
-            probabilities[0, :, anchor_index],
-            target_labels,
+        probabilities = _render_inference_probabilities(
+            generator,
+            noise,
+            rendering=rendering,
         )
+        volume = probabilities_to_calibrated_labels(
+            probabilities,
+            num_phases,
+            target_fractions=target_fraction,
+        )[0, 0]
+        mismatches = _label_anchor_mismatches(volume, anchors)
     return volume, {
         "slicegan_finetune_steps": torch.tensor(completed, device=volume.device),
-        "slicegan_anchor_mismatch": mismatch,
+        "slicegan_anchor_mismatch": mismatches.mean(),
+        "slicegan_anchor_mismatches": mismatches,
+        "slicegan_anchor_max_mismatch": mismatches.max(),
     }
+
+
+def _render_inference_probabilities(
+    generator: SliceGANGenerator,
+    noise: torch.Tensor,
+    *,
+    rendering: SliceGANRenderConfig,
+) -> torch.Tensor:
+    if max(map(int, noise.shape[-3:])) <= 8:
+        return generator(noise)
+    return render_generator_tiled(
+        generator,
+        noise,
+        core_noise_size=rendering.core_noise_size,
+        halo_noise_size=rendering.halo_noise_size,
+        output_device=noise.device,
+    )
+
+
+def _training_probabilities(
+    generator: torch.nn.Module,
+    noise: torch.Tensor,
+) -> torch.Tensor:
+    if max(map(int, noise.shape[-3:])) <= 8:
+        return generator(noise)
+    return checkpoint(generator, noise, use_reentrant=False)
 
 
 def _categorical_mismatch(
@@ -791,15 +927,218 @@ def _categorical_mismatch(
     return (probabilities.argmax(dim=0) != target).float().mean()
 
 
+def volume_slice(
+    volume: torch.Tensor,
+    axis: int,
+    index: int,
+) -> torch.Tensor:
+    if volume.ndim not in (3, 4):
+        raise ValueError("volume must have shape [D, H, W] or [C, D, H, W].")
+    spatial_axis = axis if volume.ndim == 3 else axis + 1
+    if axis not in (0, 1, 2):
+        raise ValueError("axis must be 0, 1, or 2.")
+    if index < 0 or index >= volume.shape[spatial_axis]:
+        raise ValueError("index is outside the selected axis.")
+    return volume.select(spatial_axis, index)
+
+
+def _anchor_objective(
+    probabilities: torch.Tensor,
+    anchors: Sequence[_PreparedAnchor],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    pixel_losses = []
+    shape_losses = []
+    for anchor in anchors:
+        actual = anchor_volume_patch(probabilities[0], anchor)
+        pixel_losses.append(
+            F.nll_loss(
+                actual.clamp_min(1e-8).log().unsqueeze(0),
+                anchor.labels.unsqueeze(0),
+            )
+        )
+        shape_losses.append(multiscale_shape_loss(actual, anchor.probabilities))
+    return torch.stack(pixel_losses).mean(), torch.stack(shape_losses).mean()
+
+
+def _anchor_transition_loss(
+    probabilities: torch.Tensor,
+    anchors: Sequence[_PreparedAnchor],
+    *,
+    target_transition: torch.Tensor,
+) -> torch.Tensor:
+    volume = probabilities[0]
+    losses = []
+    for anchor in anchors:
+        transition_rates = transition_profile(volume, anchor.axis)
+        start = max(0, anchor.index - 5)
+        stop = min(int(transition_rates.shape[0]), anchor.index + 5)
+        local = transition_rates[start:stop]
+        losses.append(F.mse_loss(local, target_transition.expand_as(local)))
+    return torch.stack(losses).mean()
+
+
+def anchor_preservation_weights(
+    spatial_shape: Sequence[int],
+    anchors: Sequence[_PreparedAnchor | VolumeAnchor],
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+    sigma: float,
+) -> torch.Tensor:
+    shape = tuple(int(size) for size in spatial_shape)
+    if len(shape) != 3 or any(size <= 0 for size in shape):
+        raise ValueError("spatial_shape must contain three positive values.")
+    if not np.isfinite(sigma) or sigma <= 0.0:
+        raise ValueError("sigma must be positive and finite.")
+    influence = torch.zeros(shape, device=device, dtype=dtype)
+    coordinates = torch.meshgrid(
+        *[torch.arange(size, device=device, dtype=dtype) for size in shape],
+        indexing="ij",
+    )
+    for anchor in anchors:
+        image = anchor.image if isinstance(anchor, VolumeAnchor) else anchor.labels
+        patch_size = int(image.shape[-1])
+        distance_squared = (coordinates[anchor.axis] - float(anchor.index)).square()
+        for dimension in range(3):
+            if dimension == anchor.axis:
+                continue
+            lower = F.relu(float(anchor.start) - coordinates[dimension])
+            upper = F.relu(
+                coordinates[dimension] - float(anchor.start + patch_size - 1)
+            )
+            distance_squared = distance_squared + (lower + upper).square()
+        local_influence = torch.exp(-0.5 * distance_squared / float(sigma**2))
+        influence = torch.maximum(influence, local_influence)
+    return (1.0 - influence).reshape(1, 1, *shape)
+
+
+def _probability_anchor_mismatches(
+    probabilities: torch.Tensor,
+    anchors: Sequence[_PreparedAnchor],
+) -> torch.Tensor:
+    return torch.stack(
+        [
+            _categorical_mismatch(
+                anchor_volume_patch(probabilities[0], anchor),
+                anchor.labels,
+            )
+            for anchor in anchors
+        ]
+    )
+
+
+def _label_anchor_mismatches(
+    volume: torch.Tensor,
+    anchors: Sequence[_PreparedAnchor],
+) -> torch.Tensor:
+    return torch.stack(
+        [
+            (anchor_volume_patch(volume, anchor) != anchor.labels).float().mean()
+            for anchor in anchors
+        ]
+    )
+
+
+def anchor_volume_patch(
+    volume: torch.Tensor,
+    anchor: _PreparedAnchor | VolumeAnchor,
+) -> torch.Tensor:
+    plane = volume_slice(volume, anchor.axis, anchor.index)
+    image = anchor.image if isinstance(anchor, VolumeAnchor) else anchor.labels
+    height, width = map(int, image.shape)
+    stop_row = anchor.start + height
+    stop_col = anchor.start + width
+    if anchor.start < 0 or stop_row > plane.shape[-2] or stop_col > plane.shape[-1]:
+        raise ValueError("anchor patch is outside the selected volume slice.")
+    return plane[..., anchor.start : stop_row, anchor.start : stop_col]
+
+
 def _anchor_boundary_profile(
     volume: torch.Tensor,
     *,
+    axis: int,
     anchor_index: int,
+    radius: int = 10,
 ) -> torch.Tensor:
-    rates = (volume[1:] != volume[:-1]).float().mean(dim=(1, 2))
-    start = max(0, anchor_index - 10)
-    stop = min(int(rates.shape[0]), anchor_index + 10)
+    length = int(volume.shape[axis])
+    rates = (
+        (volume.narrow(axis, 1, length - 1) != volume.narrow(axis, 0, length - 1))
+        .float()
+        .mean(dim=tuple(dimension for dimension in range(3) if dimension != axis))
+    )
+    start = max(0, anchor_index - radius)
+    stop = min(int(rates.shape[0]), anchor_index + radius)
     return rates[start:stop]
+
+
+def _local_boundary_stats(
+    volume: torch.Tensor,
+    *,
+    axis: int,
+    anchor_index: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    profile = _anchor_boundary_profile(
+        volume,
+        axis=axis,
+        anchor_index=anchor_index,
+        radius=5,
+    )
+    boundary_std = profile.std(unbiased=False)
+    boundary_jump = (
+        torch.abs(profile[1:] - profile[:-1]).max()
+        if profile.numel() > 1
+        else profile.new_zeros(())
+    )
+    return boundary_std, boundary_jump
+
+
+def _prepare_anchors(
+    anchors: Sequence[VolumeAnchor],
+    *,
+    num_phases: int,
+    device: torch.device,
+) -> list[_PreparedAnchor]:
+    prepared = []
+    for anchor in anchors:
+        labels = anchor.image.to(device=device, dtype=torch.long)
+        probabilities = (
+            F.one_hot(
+                labels,
+                num_classes=num_phases,
+            )
+            .movedim(-1, 0)
+            .float()
+        )
+        prepared.append(
+            _PreparedAnchor(
+                labels=labels,
+                probabilities=probabilities,
+                axis=int(anchor.axis),
+                index=int(anchor.index),
+                start=int(anchor.start),
+            )
+        )
+    return prepared
+
+
+def _resolve_target_fraction(
+    anchors: Sequence[_PreparedAnchor],
+    *,
+    target_fraction: torch.Tensor | None,
+    num_phases: int,
+    device: torch.device,
+) -> torch.Tensor:
+    if target_fraction is not None:
+        return torch.as_tensor(
+            target_fraction,
+            device=device,
+            dtype=torch.float32,
+        )
+    return (
+        torch.stack([anchor.probabilities.mean(dim=(1, 2)) for anchor in anchors])
+        .mean(dim=0)
+        .reshape(num_phases)
+    )
 
 
 def _set_requires_grad(module: torch.nn.Module, enabled: bool) -> None:
@@ -813,19 +1152,22 @@ def _seed_all(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def _synchronize_device(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+
 def _candidate_steps(steps: int) -> tuple[int, ...]:
-    candidates = [step for step in (3000, 4000) if step < steps]
-    candidates.append(steps)
-    return tuple(candidates)
+    return (steps,)
 
 
 def _consume_fixed_noise(device: torch.device) -> torch.Tensor:
     return torch.randn(
         1,
-        _LATENT_CHANNELS,
-        _LATENT_SIZE,
-        _LATENT_SIZE,
-        _LATENT_SIZE,
+        SLICEGAN_LATENT_CHANNELS,
+        SLICEGAN_BASE_NOISE_SIZE,
+        SLICEGAN_BASE_NOISE_SIZE,
+        SLICEGAN_BASE_NOISE_SIZE,
         device=device,
     )
 
@@ -896,30 +1238,33 @@ def _volume_morphology_errors(
     target_fraction: torch.Tensor,
     num_phases: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    probabilities = F.one_hot(
-        labels.unsqueeze(0),
-        num_classes=num_phases,
-    ).movedim(-1, 1).float()
+    probabilities = (
+        F.one_hot(
+            labels.unsqueeze(0),
+            num_classes=num_phases,
+        )
+        .movedim(-1, 1)
+        .float()
+    )
     phase = probabilities.mean(dim=(0, 2, 3, 4))
     phase_error = torch.mean(torch.abs(phase - target_fraction))
     transitions = torch.stack(
         [
-            (labels.narrow(dimension, 1, 63) != labels.narrow(dimension, 0, 63))
+            (
+                labels.narrow(dimension, 1, labels.shape[dimension] - 1)
+                != labels.narrow(dimension, 0, labels.shape[dimension] - 1)
+            )
             .float()
             .mean()
             for dimension in (0, 1, 2)
         ]
     )
-    transition_error = torch.mean(
-        torch.abs(transitions - target["transition"])
-    )
+    transition_error = torch.mean(torch.abs(transitions - target["transition"]))
     run_profile = compute_run_profile(
         probabilities,
         lengths=(2, 4, 8, 16),
     )
-    run_error = torch.mean(
-        torch.abs(run_profile - target["run_profile"].unsqueeze(0))
-    )
+    run_error = torch.mean(torch.abs(run_profile - target["run_profile"].unsqueeze(0)))
     return (
         phase_error + transition_error + run_error,
         phase_error,
@@ -934,8 +1279,7 @@ def _conditional_quality_score(
     target: dict[str, torch.Tensor],
     *,
     target_fraction: torch.Tensor,
-    target_labels: torch.Tensor,
-    anchor_index: int,
+    anchors: Sequence[_PreparedAnchor],
     num_phases: int,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     morphology, phase_error, transition_error, run_error = _volume_morphology_errors(
@@ -944,27 +1288,27 @@ def _conditional_quality_score(
         target_fraction=target_fraction,
         num_phases=num_phases,
     )
-    mismatch = (volume[anchor_index] != target_labels).float().mean()
-    rates = (volume[1:] != volume[:-1]).float().mean(dim=(1, 2))
-    start = max(0, anchor_index - 5)
-    stop = min(int(rates.shape[0]), anchor_index + 5)
-    local = rates[start:stop]
-    boundary_std = local.std(unbiased=False)
-    boundary_jump = (
-        torch.abs(local[1:] - local[:-1]).max()
-        if local.numel() > 1
-        else local.new_zeros(())
-    )
-    mismatch_penalty = 10.0 * F.relu(mismatch - 0.085)
+    mismatches = _label_anchor_mismatches(volume, anchors)
+    mismatch = mismatches.mean()
+    max_mismatch = mismatches.max()
+    boundary_values = [
+        _local_boundary_stats(
+            volume,
+            axis=anchor.axis,
+            anchor_index=anchor.index,
+        )
+        for anchor in anchors
+    ]
+    boundary_std = torch.stack([value[0] for value in boundary_values]).max()
+    boundary_jump = torch.stack([value[1] for value in boundary_values]).max()
+    mismatch_penalty = 10.0 * F.relu(max_mismatch - 0.10)
     quality = (
-        morphology
-        + 0.2 * mismatch
-        + boundary_std
-        + boundary_jump
-        + mismatch_penalty
+        morphology + 0.2 * mismatch + boundary_std + boundary_jump + mismatch_penalty
     )
     return quality, {
         "slicegan_quality_anchor_mismatch": mismatch,
+        "slicegan_quality_anchor_mismatches": mismatches,
+        "slicegan_quality_anchor_max_mismatch": max_mismatch,
         "slicegan_quality_phase_mae": phase_error,
         "slicegan_quality_transition_mae": transition_error,
         "slicegan_quality_run_mae": run_error,
@@ -977,8 +1321,8 @@ def _quality_passes(stats: dict[str, torch.Tensor]) -> bool:
     if not stats:
         return False
     return (
-        float(stats["slicegan_quality_anchor_mismatch"].item()) <= 0.085
-        and float(stats["slicegan_quality_phase_mae"].item()) <= 0.015
+        float(stats["slicegan_quality_anchor_max_mismatch"].item()) <= 0.10
+        and float(stats["slicegan_quality_phase_mae"].item()) <= 0.01
         and float(stats["slicegan_quality_boundary_std"].item()) <= 0.03
         and float(stats["slicegan_quality_boundary_jump"].item()) <= 0.08
     )
@@ -1008,17 +1352,17 @@ def _clone_module_state(module: torch.nn.Module) -> dict[str, torch.Tensor]:
 def _clone_tensor_stats(
     stats: dict[str, torch.Tensor],
 ) -> dict[str, torch.Tensor]:
-    return {
-        name: value.detach().clone()
-        for name, value in stats.items()
-    }
+    return {name: value.detach().clone() for name, value in stats.items()}
 
 
 def _validate_inputs(
     vae: torch.nn.Module,
     *,
-    anchor_image: torch.Tensor,
-    anchor_index: int,
+    anchors: Sequence[VolumeAnchor],
+    target_fraction: torch.Tensor | None,
+    phase_fraction_tolerance: float,
+    intersection_tolerance: float,
+    volume_size: int,
     num_phases: int,
     steps: int,
     hybrid_steps: int,
@@ -1028,12 +1372,54 @@ def _validate_inputs(
 ) -> None:
     if int(vae.image_size) != 64:
         raise ValueError("conditional SliceGAN currently requires vae.image_size=64.")
-    if anchor_image.shape != torch.Size((64, 64)):
-        raise ValueError("SliceGAN anchor image must have shape [64, 64].")
-    if anchor_index < 0 or anchor_index >= 64:
-        raise ValueError("SliceGAN anchor index must be between 0 and 63.")
     if num_phases < 2:
         raise ValueError("num_phases must be at least 2.")
+    if (
+        not np.isfinite(phase_fraction_tolerance)
+        or phase_fraction_tolerance < 0.0
+        or phase_fraction_tolerance > 1.0
+    ):
+        raise ValueError("phase_fraction_tolerance must be between 0 and 1.")
+    if (
+        not isinstance(volume_size, int)
+        or isinstance(volume_size, bool)
+        or volume_size < 64
+        or volume_size % 64 != 0
+    ):
+        raise ValueError("volume_size must be a positive multiple of 64.")
+    if not anchors:
+        raise ValueError("conditional SliceGAN requires at least one anchor.")
+    for anchor in anchors:
+        if not isinstance(anchor, VolumeAnchor):
+            raise TypeError("anchors must contain VolumeAnchor values.")
+        if anchor.image.shape != torch.Size((64, 64)):
+            raise ValueError("SliceGAN anchor image must have shape [64, 64].")
+        if anchor.axis not in (0, 1, 2):
+            raise ValueError("SliceGAN anchor axis must be 0, 1, or 2.")
+        if anchor.index < 0 or anchor.index >= volume_size:
+            raise ValueError("SliceGAN anchor index is outside volume_size.")
+        if anchor.start < 0 or anchor.start + 64 > volume_size:
+            raise ValueError("SliceGAN anchor patch is outside volume_size.")
+        if not torch.isfinite(anchor.image).all():
+            raise ValueError("SliceGAN anchor image must be finite.")
+        if not torch.equal(anchor.image, anchor.image.round()):
+            raise ValueError("SliceGAN anchor image must contain categorical labels.")
+        if anchor.image.min().item() < 0 or anchor.image.max().item() >= num_phases:
+            raise ValueError("SliceGAN anchor labels must be inside the phase range.")
+    validate_anchor_intersections(
+        anchors,
+        tolerance=intersection_tolerance,
+    )
+    if target_fraction is not None:
+        fractions = torch.as_tensor(target_fraction)
+        if fractions.shape != (num_phases,):
+            raise ValueError("target_fraction must have shape [num_phases].")
+        if not torch.isfinite(fractions).all() or torch.any(fractions < 0.0):
+            raise ValueError("target_fraction must be finite and non-negative.")
+        if not torch.allclose(
+            fractions.sum(), torch.ones_like(fractions.sum()), atol=1e-4
+        ):
+            raise ValueError("target_fraction must sum to one.")
     for name, value in (
         ("steps", steps),
         ("hybrid_steps", hybrid_steps),

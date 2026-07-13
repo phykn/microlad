@@ -4,6 +4,26 @@ from pathlib import Path
 
 import yaml
 
+from src.pipelines.guidance.config import (
+    SliceGANConditionConfig,
+    SliceGANConfig,
+    SliceGANRenderConfig,
+    SliceGANTrainConfig,
+)
+
+
+def _load_mapping(config_path: str | Path, *, label: str) -> dict:
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{label} is malformed: {config_path}") from exc
+
+    if not isinstance(config, dict):
+        raise ValueError(f"{label} must contain a mapping.")
+    return config
+
+
 def _flatten_config(config: dict) -> dict:
     defaults = {}
 
@@ -46,9 +66,7 @@ def _require_values(config: dict, label: str, *names: str) -> None:
     missing = [name for name in names if name not in config]
 
     if missing:
-        raise ValueError(
-            f"{label} is missing required value: {', '.join(missing)}"
-        )
+        raise ValueError(f"{label} is missing required value: {', '.join(missing)}")
 
 
 def _to_yaml(value):
@@ -75,16 +93,32 @@ def load_defaults(
     if not config_path:
         return {}
 
+    return _flatten_config(_load_mapping(config_path, label=label))
+
+
+def load_slicegan_config(config_path: str | Path) -> SliceGANConfig:
+    """Load the grouped conditional 3D generation settings from YAML."""
+
+    values = _load_mapping(config_path, label="SliceGAN config")
+    training = values.pop("training", {})
+    conditioning = values.pop("conditioning", {})
+    rendering = values.pop("rendering", {})
+    for name, section in (
+        ("training", training),
+        ("conditioning", conditioning),
+        ("rendering", rendering),
+    ):
+        if not isinstance(section, dict):
+            raise ValueError(f"SliceGAN config {name} must contain a mapping.")
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f) or {}
-    except yaml.YAMLError as exc:
-        raise ValueError(f"{label} is malformed: {config_path}") from exc
-
-    if not isinstance(config, dict):
-        raise ValueError(f"{label} must contain a mapping.")
-
-    return _flatten_config(config)
+        return SliceGANConfig(
+            training=SliceGANTrainConfig(**training),
+            conditioning=SliceGANConditionConfig(**conditioning),
+            rendering=SliceGANRenderConfig(**rendering),
+            **values,
+        )
+    except TypeError as exc:
+        raise ValueError(f"SliceGAN config contains an unknown setting: {exc}") from exc
 
 
 def save_run_config(run_dir: str | Path, args: argparse.Namespace, name: str) -> None:

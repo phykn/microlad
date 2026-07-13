@@ -9,7 +9,7 @@ from src.pipelines.scaling.conditioning import (
     build_scale_targets,
     shift_anchor_slices,
 )
-from src.app.api.options import AnchorSlice
+from src.pipelines.guidance.conditioning.model import AnchorSlice
 
 
 class IdentityVAE(torch.nn.Module):

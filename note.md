@@ -4,7 +4,7 @@
 
 ## 목표와 판정 순서
 
-1. 지정한 위치의 XY 단면이 조건 이미지와 **유사**해야 한다. 조건 이미지를 그대로 복사하지는 않는다.
+1. 지정한 위치와 축의 하나 이상 단면이 조건 이미지와 **유사**해야 한다. 조건 이미지를 그대로 복사하지는 않는다.
 2. XY뿐 아니라 XZ/YZ 단면도 조건 이미지와 비슷한 2D 형태를 가져야 한다.
 3. 인접 단면은 연속적으로 변해야 하며, 앵커에서 3칸을 벗어난 지점에서 갑자기 바뀌면 실패다.
 4. 같은 XY가 z 방향으로 반복되어 XZ/YZ에 긴 기둥이나 띠가 생기면 실패다.
@@ -17,15 +17,28 @@
 
 고정 seed를 완료 조건으로 사용하지 않으므로 위 값은 과거 sweep 비교용일 뿐이다. 실제 실행에서는 그 실행이 선택한 조건 이미지의 상분율과 형태를 다시 계산해 판정한다.
 
+용어: 공극률은 별도 조건이 아니라 공극 phase의 `phase_fractions` 값이다. 모든 phase fraction을 합이 1이 되도록 함께 입력하며 기본 허용오차는 ±1%p다.
+
 ## 현재 채택한 기반
 
 - categorical VAE의 확률 출력을 사용한다.
 - 2D 한 장을 세 축에 독립적으로 복원하지 않고, 하나의 공유 3D generator가 만든 volume의 XY/XZ/YZ **모든 64개 단면**을 같은 2D critic으로 학습한다.
 - 기본 texture 학습에는 조건 이미지의 회전·반사·주기 이동본을 사용한다. categorical VAE와 2D diffusion이 만든 8개 단면은 조건 이미지와 같은 상분율로 보정한 뒤 `10%`만 섞는다.
-- texture 학습 중 `3000/4000/5000` step과 hybrid `+500/+1000` step을 morphology 점수로 후보화한다. 한 번의 GAN 종점이 불안정해도 좋은 중간 상태를 버리지 않기 위해서다.
+- texture 학습은 충분히 성숙한 primary `5000` step과 hybrid `+500/+1000` step만 조건화 후보로 사용한다. `3000/4000` 후보는 수치가 좋아도 길고 거친 domain을 선택하는 경우가 있어 제외했다.
 - 각 후보에서 먼저 `4³` spatial noise를 조건 이미지에 맞추고, 그 다음 critic을 고정한 채 generator와 noise를 짧게 미세조정한다.
 - 앵커를 voxel에 직접 복사하거나 ±몇 칸의 slab로 고정하지 않는다. 조건은 generator의 공간장 전체를 통해 전달되므로 ±3 밖에 별도의 경계가 없다.
 - 실행마다 정확히 같은 volume을 다시 만드는 것은 목표가 아니다. 매 실행 결과 자체가 앵커 유사도·세 축 morphology·국소 연속성 기준을 통과하는지를 판정한다.
+
+현재 채택한 다중 앵커·상분율 실행 결과(`03_predict.ipynb`):
+
+- 앵커: 중심 XY와 XZ, 교차선이 일치하는 categorical 이미지 두 장
+- 선택 상태: hybrid `6000` step, 조건 후보 3개 비교
+- 앵커 mismatch: `[8.08%, 7.98%]` — 두 앵커 모두 유사하지만 복사하지 않음
+- 목표/실제 상분율: `[0.28, 0.12, 0.60]` / `[0.28, 0.12, 0.60]`
+- 축 전이율: `[0.2207, 0.2226, 0.2094]`, 축간 spread `0.0132`
+- 앵커 주변 최대 boundary jump: XY축 `0.0352`, XZ축 `0.0425`
+- 실행 시간: RTX 2060에서 `758.2초`
+- 시각 판정: 두 앵커가 복사되지 않았고 ±6 단면이 점진적으로 변한다. 전역 XY/XZ/YZ 모두 둥근 blob 형태를 유지하며 hard cutoff가 없다.
 
 현재 가장 좋은 진단 결과(저장된 hybrid 6000-step 상태):
 
@@ -43,6 +56,12 @@
 | 실험 | 주요 설정/결과 | 판정 | 이유 |
 |---|---|---|---|
 | 원형에 가까운 SliceGAN, anchor refs | 4³ noise, 모든 64개 단면/축, WGAN-GP, 5000 step | 채택 | 3000~5000 step에서 세 축의 blob morphology와 연속성이 처음으로 함께 안정됨 |
+| 다중 축 앵커 + 명시적 상분율 | 중심 XY/XZ 두 장, fraction `[0.28, 0.12, 0.60]`, 교차선 사전 검증 | 채택 | mismatch `[8.08%, 7.98%]`, 상분율 정확, 축 전이율 spread `0.0132`; 두 조건과 세 축 자연스러움을 동시에 통과 |
+| 기존 dynamic-interpolation generator를 큰 noise grid에 적용 | 256³ full/tiled 직접 비교 | scale-up에서 폐기 | 마지막 보간 배율이 입력 크기에 따라 달라져 voxel morphology scale이 유지되지 않음. tiled probability 차이는 작지만 near-tie categorical label이 `30.04%` 달라짐 |
+| fully-convolutional scale generator | 4회 `k=4,s=2,p=1` upsampling과 local `3³` 출력, 64³ 초과에만 적용 | 코드 채택 | `4→64`, `8→128`, `16→256`이 같은 voxel scale을 유지하고 halo tiled 렌더가 full 렌더와 일치함. 64³ 채택 경로는 변경하지 않음 |
+| 앵커 주변 목표 전이율 loss | 앵커 법선 방향의 전이를 0으로 만들지 않고 학습 texture의 전이율에 맞춤 | 채택 | 앵커 평면 밖에서 갑자기 형태가 바뀌는 cutoff를 완화함 |
+| Gaussian 원본장 보존 | 앵커 패치에서 멀수록 조건화 전 generator 확률장을 보존 | 채택 | hard slab 없이 앵커 영향의 공간 범위를 부드럽게 제한함 |
+| 조기 4000-step 조건 후보 | 목표 mismatch 9%, 수치 gate 통과 | 폐기 | 전역 단면이 길고 거친 domain으로 변해 시각 우선 기준을 통과하지 못함 |
 | diffusion reference 50% 직접 학습 | categorical VAE+2D diffusion 단면 8개 | 폐기 | critic margin 약 `99`, 상 소실과 파편·띠 구조가 발생함 |
 | anchor 90% + diffusion reference 10% hybrid | 좋은 anchor checkpoint에서 1000 step 추가 | 채택 | step 6000 상분율 `[0.3580, 0.1057, 0.5363]`, margin 약 `29`; anchor-only 형태를 보존하면서 diffusion prior를 약하게 반영함 |
 | frozen generator에서 noise만 800 step 조건화 | baseline mismatch 약 `29%`, hybrid 약 `25%` | 중간 단계만 채택 | 3D 연속성은 보존하지만 지정 단면 유사도가 부족함 |
@@ -78,14 +97,15 @@
 | image-space harmonization, anchor=0.15 | 4 sweep, t=`100`, blend=`0.25`, coarse latent anchor 미사용 | 폐기 | 전체 변화량 `9.18%`, mismatch `1.76%`로 앵커를 사실상 복사했고 run MAE가 약 `0.041~0.047`로 악화됨; 회색 Euler `38~39` 개선만으로는 채택 불가 |
 | image-space harmonization, anchor=0.02 | 나머지는 anchor=`0.15`와 동일 | 폐기 | mismatch `9.35%`로 복사 문제는 해결했지만 전체 변화량 `8.99%`, run MAE 약 `0.042~0.047`; XZ/YZ morphology가 거의 개선되지 않아 반복 저노이즈 projection도 해법이 아님 |
 
-현재 `03_predict.ipynb`의 선택값:
+현재 `03_predict.ipynb`와 `04_scale_up.ipynb`는 `config/slicegan.yaml`을 읽는다. 사용자 코드는 `PredictOptions(..., slicegan=slicegan_config)`만 지정하며, 세부값은 다음 세 묶음으로 관리한다.
 
 ```text
-slicegan_steps = 5000
-slicegan_hybrid_steps = 1000
-slicegan_condition_steps = 800
-slicegan_finetune_steps = 500
+training: GAN 학습과 diffusion reference 혼합
+conditioning: 앵커 조건화와 generator/noise 미세조정
+rendering: scale-up 타일 크기와 halo
 ```
+
+구형 flat 인자 호환 계층은 사용처가 없어 제거했다. 네트워크는 `src/modeling/slicegan.py`, 앵커 모델·교차 검증은 기존 `guidance/conditioning`, scale-up 타일 렌더는 기존 `pipelines/scaling`, 실행 조율만 `guidance/slicegan.py`가 담당한다.
 
 ## SliceGAN 원 구현에서 확인한 차이
 
@@ -110,19 +130,49 @@ slicegan_finetune_steps = 500
 - 정확한 seed 재현은 요구하지 않는다. 비교가 필요한 단일 sweep 안에서는 같은 입력을 유지하되, 최종 판정은 각 실행 결과의 품질 기준으로 한다.
 - 각 실행 뒤 이 표에 파라미터, 핵심 수치, 시각 판정, 채택 여부를 기록한다.
 - 폐기한 방법은 새로운 근거가 없으면 다시 켜지 않는다.
-- `04_scale_up.ipynb` 작업은 사용자가 다시 요청할 때까지 중단한다.
+- `04_scale_up.ipynb` 정식 128³ 실행과 전 축 시각 검증까지 완료했다. 이후에는 저장 artifact 재검토 또는 새로운 조건 실험에 사용한다.
+
+## 요구사항 완료 감사
+
+| 요구사항 | 현재 증거 | 상태 |
+|---|---|---|
+| 64³ 복수·다축 앵커, 비복사, 교차 충돌 | `03_predict.ipynb` 전체 실행과 전 축 몽타주, mismatch `[8.08%, 7.98%]`, 충돌/중복 테스트 | 완료 |
+| 사용자 phase fraction | 64³ 전체 실행 및 128³ smoke에서 목표 fraction 정확, validation/regression 테스트 | 완료 |
+| 전역 세 축 자연스러움 | 64³ 전 축 몽타주와 국소 ±6 시각 판정 통과, 공통 run/Euler/repetition/cutoff QA 추가 | 64³ 완료 |
+| 절대 좌표의 같은 축·다른 축 복수 앵커 | 128³ 실제 Predictor smoke와 offset 교차선/patch 테스트 | 코드 경로 완료 |
+| 최소 128³ 품질 | `04_scale_up.ipynb` 정식 6000-step 실행, 수치 gate 6개와 세 축 128개 전 단면 시각 검증 통과 | 완료 |
+| 임의 배수 및 bounded/tiled memory | 64 배수 fully-convolutional noise-grid API, 256³ full/tiled 최대 오차 `5.96e-8`, GPU peak `5.15→2.34 GiB`; 큰 training forward는 activation checkpoint 적용 | 최종 렌더 완료, 대형 조건 최적화는 checkpointed full-grid이며 완전 tile 방식은 미완료 |
+| 시간 분리 기록 | reference/training/generation/total 통계 구현 및 smoke 실측 | 완료 |
 
 ## 검증 상태
 
-- `03_predict.ipynb`: SliceGAN 경로로 단순화하고 처음부터 끝까지 실행 완료 (`759.0초`, CUDA)
-- 최종 노트북 실행: step `5500` 선택, 조건 후보 `3개` 비교, 앵커 mismatch `7.96%`
-- 최종 노트북 실행 상분율: 조건 `[0.2578, 0.1270, 0.6152]`, 전체 `[0.2604, 0.1254, 0.6142]`
-- 최종 노트북 실행 축 전이율: `[0.2000, 0.2104, 0.2019]`
-- 최종 노트북 실행 z=26..38: boundary profile `[0.1836, 0.1829, 0.1943, 0.1929, 0.2185, 0.2249, 0.2485, 0.1787, 0.1814, 0.2195, 0.1826, 0.1604]`, 최대 인접 jump `0.0698`
-- 최종 시각 판정: 중심 조건을 복사하지 않고 큰 domain 배치를 유지함. z±6은 누적해서 변하며 ±3 밖에 hard cutoff가 없음. XY/XZ/YZ 전역 몽타주는 모두 blob morphology를 유지하고 이전의 긴 기둥·강한 축 차이가 보이지 않음
+- `03_predict.ipynb`: 다중 축 앵커와 명시적 상분율 경로로 처음부터 끝까지 실행 완료 (`758.2초`, CUDA)
+- 최종 노트북 실행: step `6000` 선택, 조건 후보 `3개` 비교, 앵커 mismatch `[8.08%, 7.98%]`
+- 최종 노트북 실행 상분율: 조건과 전체 모두 `[0.28, 0.12, 0.60]`
+- 최종 노트북 실행 축 전이율: `[0.2207, 0.2226, 0.2094]`
+- 최종 노트북 실행 앵커 주변 최대 인접 jump: `[0.0352, 0.0425]`
+- 최종 시각 판정: 중심 조건 두 장을 복사하지 않고 큰 domain 배치를 유지함. 각 앵커 ±6은 누적해서 변하며 ±3 밖에 hard cutoff가 없음. XY/XZ/YZ 전역 몽타주는 모두 blob morphology를 유지함
 - 노트북 JSON, cell id, 모든 코드 셀 문법 검증 완료
-- 실제 Predictor 1-step smoke: `64³`, categorical `uint8`, OOM 없이 통과
+- 실제 Predictor 1-step multi-anchor/fraction smoke: `64³`, categorical `uint8`, 목표 상분율 정확, OOM 없이 통과
+- 실제 Predictor 128³ fully-convolutional 1-step 통합 smoke: 같은 축 절대 index `20/100`과 다른 축 index `64`를 동시에 전달해 `(128,128,128)` categorical `uint8` 출력, fraction `[0.28,0.12,0.60]` 정확, tolerance 및 전역 QA 통과, peak GPU memory `1.805 GiB`
+- phase fraction 허용오차 smoke: 공극률을 포함하는 `phase_fractions=(0.28,0.12,0.60)`의 128³ 실측 절대 오차 `[2.1e-7,1.1e-7,1.2e-7]`, 기본 tolerance `0.01` 통과. 공극률은 별도 입력이 아니라 지정한 공극 phase의 fraction이다.
+- 공통 전역 QA: 세 축 transition/lag-3, 완전 반복 단면 비율, 전체 최대 boundary jump, 축별 run-profile MAE, 축별 Euler topology MAE, fraction error를 모든 SliceGAN 결과 통계에 기록한다. 실제 128³ 통합 smoke에서 모든 항목의 shape와 finite 값을 확인함
+- tiled inference: 64³ 초과에서는 local fully-convolutional generator를 사용하고 latent core 4칸에 halo 4칸을 붙여 core만 조립한다. 256³ full/tiled 직접 비교에서 probability MAE `3.91e-11`, 최대 `5.96e-8`, label 차이 `2.38e-7`; full `2.86초/5.150 GiB`, tiled CPU-output `19.53초/2.338 GiB`. 이는 최종 inference activation을 제한하며 대형 조건 최적화 전체를 tile화한 것은 아니다.
+- 안전장치: global interpolation을 사용하는 기존 64³ generator는 tiled renderer에 전달하면 명시적으로 거부한다. `04_scale_up.ipynb`는 fully-convolutional 상태와 fraction tolerance를 출력·검증한다.
+- 대형 조건 최적화: noise grid가 8보다 크면 generator forward에 non-reentrant activation checkpoint를 사용한다. 출력과 noise/parameter gradient가 direct forward와 일치하는 회귀 테스트를 추가했고, 192³ noise-gradient smoke는 `2.72초`, peak `4.975 GiB`, finite gradient로 통과했다. 출력 tensor 자체가 커지므로 이것만으로 256³ finetune을 보장하지는 않는다.
+- 128³ 앵커 좌표: `AnchorSlice.index`를 출력 volume의 절대 좌표로 보존하고 64×64 이미지만 해당 평면 중앙에 배치한다. 같은 축의 복수 절대 index와 서로 다른 축의 offset 교차선 검증을 테스트로 고정함
+- 실행 시간 통계: 다음 실행부터 reference 준비, texture 학습, 앵커 조건 생성, 전체 시간을 각각 `slicegan_*_seconds`로 기록함
+- `04_scale_up.ipynb` 정식 실행: CUDA `1601.1초` (`26분 41초`), reference `15.4초`, texture/hybrid 학습 `663.1초`, 128³ 조건 생성 `922.4초`, 선택 step `6000`
+- 정식 128³ 앵커 mismatch `[7.50%, 7.45%]`; 두 앵커 모두 유사하지만 hard copy하지 않음. 목표/실측 fraction 모두 `[0.28,0.12,0.60]`
+- 정식 128³ 축 전이율 `[0.2554,0.2490,0.2547]`, run-profile MAE `[0.0096,0.0085,0.0114]`, Euler MAE `[2.4764,4.3670,2.3823]`, lag-3 `[0.4012,0.4087,0.4004]`
+- 정식 128³ 완전 반복 단면 비율 `[0,0,0]`, 전체 최대 boundary jump `[0.0287,0.0396,0.0251]`; 앵커/fraction/축 spread/반복/cutoff/run gate 6개 전부 통과
+- 정식 128³ 시각 판정: 동일 64×64 center crop에서 조건과 같은 큰 blob 크기와 회색 미세상을 유지한다. 앵커 ±8 단면은 두 축 모두 점진적으로 변하고 ±3 밖 cutoff나 slab가 없다. XY/XZ/YZ 각각 128개 전 단면 contact sheet에서 긴 기둥, checkerboard, tile 반복, 축별 collapse, phase-mixing 파편이 보이지 않아 채택
+- 정식 실행 종료 시 widget kernel shutdown의 `KeyboardInterrupt caught in kernel` 로그가 있었으나 nbconvert exit `0`, 실행 코드 셀 `5/5`, cell error `0`, NPZ 저장·재로딩 검증 통과
+- `04_scale_up.ipynb` 임시 1-step end-to-end smoke: 5개 코드 셀 모두 실행, 오류 0, CUDA `21.5초`; `(128,128,128)` categorical 출력, 절대 앵커 `[(0,64),(1,64)]`, fully-convolutional=True, fraction 정확, 전역 QA·몽타주·슬라이더까지 통과. mismatch `[50.73%,44.63%]` 등은 1-step 미학습 결과라 품질 증거로 사용하지 않음
+- 04 전역 보조 gate: 완전 반복 인접 단면 `0`, 전체 최대 boundary jump `≤0.08`, 세 축 run-profile MAE `≤0.05`를 자동 판정하고 세 축 전체 boundary profile을 그린다. Euler topology는 단일 스칼라만으로 합격을 결정하지 않고 비교 지표로 유지한다.
+- `04_scale_up.ipynb` 장시간 실행 결과는 `run/20260712-163751-714469/predictions/conditional_slicegan_128.npz`에 categorical volume, 모든 tensor 통계, 앵커 이미지/축/절대 index, phase fractions, 주요 step 설정을 함께 자동 저장하고 즉시 재로딩 검증하도록 준비함
+- 이후 `USE_SAVED_RESULT=True`로 설정하면 generator를 다시 학습하지 않고 artifact를 불러와 QA·몽타주·슬라이더만 재실행한다. 현재 앵커 이미지/축/index, fraction과 fraction/intersection tolerance, step 설정, volume shape가 저장 조건과 다르면 명시적으로 거부함
 - 저장 checkpoint 기반 전체 조건화/시각 검증: 통과
 - multi-checkpoint 통합 Predictor 전체 실행: 내부 mismatch `8.03%`, phase MAE `0.00164`, 경계 표준편차 `0.02882`, 최대 국소 경계 jump `0.05029`; 내부 기준 통과
-- focused tests: `39 passed, 23 subtests passed`
-- 전체 테스트: `442 passed, 96 subtests passed`
+- focused tests: `66 passed, 33 subtests passed`
+- 전체 테스트: 변경 후 `469 passed, 106 subtests passed`

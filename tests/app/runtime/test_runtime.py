@@ -27,6 +27,7 @@ from src.app.runtime import (
     load_run_vae,
     load_frozen_vae,
     load_defaults,
+    load_slicegan_config,
     save_run_config,
     setup_device,
     wrap_distributed,
@@ -123,6 +124,35 @@ class BuildTest(unittest.TestCase):
                 "steps": 10,
             },
         )
+
+    def test_load_slicegan_config_preserves_grouped_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "slicegan.yaml"
+            path.write_text(
+                "\n".join(
+                    [
+                        "training:",
+                        "  steps: 12",
+                        "  batch_size: 3",
+                        "conditioning:",
+                        "  steps: 7",
+                        "rendering:",
+                        "  core_noise_size: 2",
+                        "seed: 9",
+                        "intersection_tolerance: 0.05",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_slicegan_config(path)
+
+        self.assertEqual(config.training.steps, 12)
+        self.assertEqual(config.training.batch_size, 3)
+        self.assertEqual(config.conditioning.steps, 7)
+        self.assertEqual(config.rendering.core_noise_size, 2)
+        self.assertEqual(config.seed, 9)
+        self.assertEqual(config.intersection_tolerance, 0.05)
 
     def test_build_dataset_expands_image_files_from_data_dir(self):
         with tempfile.TemporaryDirectory() as tmp:

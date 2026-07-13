@@ -123,27 +123,25 @@ Load a trained run folder and call `predict`:
 
 ```python
 from src.app.api import AnchorSlice, PredictOptions
-from src.app.runtime import load_predictor
+from src.app.runtime import load_predictor, load_slicegan_config
 
 predictor = load_predictor("run/20260628-xxxxxx", device="cuda")
 
 options = PredictOptions(
     num_phases=3,
-    sds_steps=0,
-    refine_steps=0,
+    phase_fractions=(0.28, 0.12, 0.60),
+    slicegan=load_slicegan_config("config/slicegan.yaml"),
 )
 
-volume, stats = predictor.predict(options)
-```
-
-Anchors are full 2D slices assigned to a volume axis and index. They contribute a soft loss during refinement; generated values are not forcibly overwritten:
-
-```python
 anchor = AnchorSlice(image=anchor_image, axis=0, index=32)
 volume, stats = predictor.predict(options, anchors=[anchor])
 ```
 
-For scale-up, pass a larger `volume_size` or provide larger anchor slices. Target-image bundles can be passed with SDS target weights such as `vf_weight`, `tpc_weight`, `sa_weight`, or `diffusivity_weight`.
+`config/slicegan.yaml` groups training, anchor conditioning, and large-volume rendering settings. Normal prediction code only selects that config instead of listing every optimization parameter.
+
+Anchors are full 2D slices assigned to a volume axis and index. Conditional SliceGAN uses them as constraints; generated values are not forcibly overwritten.
+
+For scale-up, pass a larger `volume_size` or provide larger anchor slices. SDS descriptor targets live under `TargetConfig`, for example `targets=TargetConfig(vf_weight=1.0, tpc_weight=1.0)`.
 
 ## Reference
 

@@ -1,0 +1,32 @@
+training:
+  steps: 5000
+  hybrid_steps: 1000
+  critic_iterations: 5
+  batch_size: 8
+  learning_rate: 1.0e-4
+  betas: [0.9, 0.99]
+  gradient_penalty_weight: 10.0
+  diffusion_reference_count: 8
+  diffusion_mix_probability: 0.1
+
+conditioning:
+  steps: 800
+  finetune_steps: 500
+  noise_candidates: 8
+  noise_lr: 5.0e-2
+  noise_critic_weight: 1.0e-2
+  finetune_generator_lr: 1.0e-5
+  finetune_noise_lr: 2.0e-3
+  finetune_critic_weight: 2.0e-2
+  finetune_phase_weight: 50.0
+  finetune_preservation_weight: 5.0
+  anchor_transition_weight: 5.0
+  anchor_influence_sigma: 8.0
+  target_mismatch: 0.08
+
+rendering:
+  core_noise_size: 4
+  halo_noise_size: 4
+
+seed: 0
+intersection_tolerance: 0.0

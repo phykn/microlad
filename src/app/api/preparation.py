@@ -3,15 +3,16 @@ from collections.abc import Sequence
 import numpy as np
 import torch
 
-from src.app.api.options import AnchorSlice, PredictOptions
+from src.app.api.options import PredictOptions
+from src.pipelines.guidance.conditioning.model import AnchorSlice
 from src.common.validation import require_int
 from src.modeling.vae import get_downsample_factor
 from src.pipelines.guidance.conditioning.validation import validate_anchors
 from src.pipelines.scaling.conditioning import (
-    center_start,
     encode_scale_anchors,
     shift_anchor_slices,
 )
+
 
 class PredictionPrep:
     _BALANCED_AXIS_ORDERS = (
@@ -39,8 +40,13 @@ class PredictionPrep:
         if volume_size <= 0:
             raise ValueError("volume_size must be positive.")
 
-        if anchor_size is not None and anchor_size not in (self._get_image_size(), volume_size):
-            raise ValueError("anchor image size must match vae.image_size or volume_size.")
+        if anchor_size is not None and anchor_size not in (
+            self._get_image_size(),
+            volume_size,
+        ):
+            raise ValueError(
+                "anchor image size must match vae.image_size or volume_size."
+            )
 
         return volume_size
 
@@ -107,7 +113,7 @@ class PredictionPrep:
             anchors,
             volume_size=volume_size,
             num_phases=options.num_phases,
-            segment=options.anchor_segment,
+            segment=options.anchor.segment,
             device=self.device,
             tile_overlap=tile_overlap,
         )
@@ -262,14 +268,18 @@ class PredictionPrep:
         if target_size == volume_size:
             return None
 
-        raise ValueError("scale-up target images must match vae.image_size or volume_size.")
+        raise ValueError(
+            "scale-up target images must match vae.image_size or volume_size."
+        )
 
     def _get_target_size(
         self,
         target_images: Sequence[np.ndarray] | None,
     ) -> int:
         if not target_images:
-            raise ValueError("target_images are required when target losses are enabled.")
+            raise ValueError(
+                "target_images are required when target losses are enabled."
+            )
 
         size = None
 
@@ -325,7 +335,9 @@ class PredictionPrep:
         tile_overlap = int(tile_overlap)
 
         if tile_overlap < 0 or tile_overlap >= tile_size:
-            raise ValueError("tile_overlap must be non-negative and smaller than tile_size.")
+            raise ValueError(
+                "tile_overlap must be non-negative and smaller than tile_size."
+            )
 
         return tile_overlap
 
@@ -336,24 +348,26 @@ class PredictionPrep:
     def _resolve_t_max(self, options: PredictOptions) -> int:
         t_max = (
             int(self.ddpm.num_timesteps)
-            if options.sds_t_max is None
-            else int(options.sds_t_max)
+            if options.sds.t_max is None
+            else int(options.sds.t_max)
         )
 
-        if t_max <= options.sds_t_min:
+        if t_max <= options.sds.t_min:
             raise ValueError("sds_t_max must be greater than sds_t_min.")
 
         if t_max > int(self.ddpm.num_timesteps):
-            raise ValueError("sds_t_max must be at most the DDPMProcess schedule length.")
+            raise ValueError(
+                "sds_t_max must be at most the DDPMProcess schedule length."
+            )
 
         return t_max
 
     def _uses_targets(self, options: PredictOptions) -> bool:
         return (
-            options.vf_weight > 0.0
-            or options.tpc_weight > 0.0
-            or options.sa_weight > 0.0
-            or options.diffusivity_weight > 0.0
-            or options.joint_3d_transition_weight > 0.0
-            or options.joint_3d_run_weight > 0.0
+            options.targets.vf_weight > 0.0
+            or options.targets.tpc_weight > 0.0
+            or options.targets.surface_weight > 0.0
+            or options.targets.diffusivity_weight > 0.0
+            or options.joint.transition_weight > 0.0
+            or options.joint.run_weight > 0.0
         )
