@@ -5,6 +5,7 @@ __pycache__/
 .obsidian/
 
 AGENTS.md
+bat/
 docs/
 run/
 fake/
