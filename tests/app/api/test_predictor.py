@@ -19,7 +19,12 @@ from src.modeling.diffusion import DDPMProcess
 
 
 class ZeroDenoiser(torch.nn.Module):
-    def forward(self, latent: torch.Tensor, timestep: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        latent: torch.Tensor,
+        timestep: torch.Tensor,
+        phase_fractions: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         return torch.zeros_like(latent)
 
 
@@ -52,6 +57,7 @@ class PredictOptionsTest(unittest.TestCase):
     def test_loss_weights_accept_values_above_one(self):
         self.assertEqual(PriorConfig(weight=2.0).weight, 2.0)
         self.assertEqual(JointConfig(anchor_weight=2.0).anchor_weight, 2.0)
+        self.assertEqual(JointConfig(axis_mass_weight=0.5).axis_mass_weight, 0.5)
         target = TargetConfig(
             slice_fraction_weight=2.0,
             global_fraction_weight=3.0,
@@ -72,6 +78,7 @@ class PredictOptionsTest(unittest.TestCase):
             ("batch_size", lambda: JointConfig(batch_size=0)),
             ("decode_batch_size", lambda: JointConfig(decode_batch_size=0)),
             ("steps", lambda: JointConfig(steps=1.5)),
+            ("axis_mass_weight", lambda: JointConfig(axis_mass_weight=-0.1)),
             ("progress", lambda: PredictOptions(num_phases=2, progress=1)),
             ("weight", lambda: CriticConfig(weight=-0.1)),
             ("enabled", lambda: RefineConfig(enabled=1)),
@@ -303,6 +310,7 @@ class PredictorTest(unittest.TestCase):
     def test_base_prediction_always_starts_from_lmpdd_latent(self):
         options = PredictOptions(
             num_phases=2,
+            phase_fractions=(0.25, 0.75),
             joint=JointConfig(steps=1),
             refine=RefineConfig(enabled=False),
         )
@@ -324,7 +332,19 @@ class PredictorTest(unittest.TestCase):
 
         sample.assert_called_once()
         self.assertTrue(sample.call_args.kwargs["progress"])
+        self.assertTrue(
+            torch.equal(
+                sample.call_args.kwargs["phase_fractions"],
+                torch.tensor([0.25, 0.75]),
+            )
+        )
         run_joint.assert_called_once()
+        self.assertTrue(
+            torch.equal(
+                run_joint.call_args.kwargs["phase_fractions"],
+                torch.tensor([0.25, 0.75]),
+            )
+        )
         self.assertEqual(result.dtype, torch.uint8)
         self.assertIs(stats["joint_history"], joint_history)
 

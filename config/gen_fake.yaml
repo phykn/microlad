@@ -1,0 +1,8 @@
+models:
+  vae_run_dir: run/20260714-032419-015034
+  diffusion_run_dir: run/20260714-050533-017623
+
+generation:
+  # Full 3D latent volumes saved as fake/00000.pt, fake/00001.pt, ...
+  num_volumes: 500
+  progress: true

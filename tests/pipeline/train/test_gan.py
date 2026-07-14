@@ -32,6 +32,7 @@ class GANTrainerTest(unittest.TestCase):
         critic_optimizer = torch.optim.Adam(critic.parameters(), lr=1e-4)
         images = torch.zeros(2, 1, 16, 16)
         images[:, :, 8:] = 1.0
+        fake_volumes = torch.randn(2, 2, 16, 16, 16)
 
         with tempfile.TemporaryDirectory() as tmp:
             trainer = GANTrainer(
@@ -39,6 +40,7 @@ class GANTrainerTest(unittest.TestCase):
                 critic,
                 TinyVAE(),
                 [images],
+                [fake_volumes],
                 generator_optimizer,
                 critic_optimizer,
                 steps=1,

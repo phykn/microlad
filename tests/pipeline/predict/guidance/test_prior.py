@@ -17,7 +17,33 @@ class ConstantNoiseModel(torch.nn.Module):
         return torch.ones_like(x) * self.weight
 
 
+class ConditionalNoiseModel(ConstantNoiseModel):
+    def __init__(self) -> None:
+        super().__init__(0.0)
+        self.phase_fractions = None
+
+    def forward(self, x, t, phase_fractions=None):
+        self.phase_fractions = phase_fractions
+        return super().forward(x, t)
+
+
 class DiffusionGuidanceTest(unittest.TestCase):
+    def test_sds_repeats_global_fraction_for_each_latent_slice(self):
+        model = ConditionalNoiseModel()
+        latent = torch.randn(3, 1, 2, 2, requires_grad=True)
+
+        sds_loss(
+            latent,
+            model,
+            DDPMProcess(timesteps=4),
+            t_min=1,
+            t_max=3,
+            phase_fractions=torch.tensor([0.25, 0.75]),
+        )
+
+        expected = torch.tensor([[0.25, 0.75]] * 3)
+        self.assertTrue(torch.equal(model.phase_fractions, expected))
+
     def test_sds_loss_uses_sds_gradient_direction(self):
         ddpm = DDPMProcess(timesteps=4, beta_start=0.1, beta_end=0.2)
         model = ConstantNoiseModel(value=0.25)

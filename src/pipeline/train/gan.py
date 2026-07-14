@@ -5,6 +5,7 @@ import torch
 from tqdm import tqdm
 
 from src.modeling.latent_gan import critic_loss, gradient_penalty, guidance_loss
+from src.pipeline.predict.guidance.latent_slices import sample_slices
 from src.pipeline.train.misc.distributed import is_main_process, unwrap_model
 from src.pipeline.train.misc.run import log_stats, setup_run_dirs, write_checkpoint
 
@@ -16,6 +17,7 @@ class GANTrainer:
         critic: torch.nn.Module,
         vae: torch.nn.Module,
         dataloader: Iterable,
+        fake_dataloader: Iterable,
         generator_optimizer: torch.optim.Optimizer,
         critic_optimizer: torch.optim.Optimizer,
         *,
@@ -44,6 +46,8 @@ class GANTrainer:
 
         self.dataloader = dataloader
         self.iterator = iter(dataloader)
+        self.fake_dataloader = fake_dataloader
+        self.fake_iterator = iter(fake_dataloader)
         self.generator_optimizer = generator_optimizer
         self.critic_optimizer = critic_optimizer
         self.steps = steps
@@ -52,6 +56,7 @@ class GANTrainer:
         self.clip_grad_norm = clip_grad_norm
         self.save_every = save_every
         self.step = 0
+        self.axis_offset = 0
         self.is_main_process = is_main_process()
         (
             self.run_dir,
@@ -87,12 +92,29 @@ class GANTrainer:
                     device=self.device,
                     dtype=latent_dtype,
                 )
-                fake = self.generator(noise)
+                generator_fake = self.generator(noise)
+                volumes = self._next_fake_volumes().to(
+                    device=self.device,
+                    dtype=real.dtype,
+                )
+                lmpdd_fake = sample_slices(
+                    volumes,
+                    count=batch_size,
+                    crop_size=int(real.shape[-1]),
+                    axis_offset=self.axis_offset,
+                )
+                self.axis_offset = (self.axis_offset + int(real.shape[0])) % 3
 
             self.critic_optimizer.zero_grad(set_to_none=True)
             real_scores = self.critic(real)
-            fake_scores = self.critic(fake)
-            penalty = gradient_penalty(self.critic, real, fake)
+            fake_scores = torch.cat(
+                (self.critic(generator_fake), self.critic(lmpdd_fake)),
+                dim=0,
+            )
+            penalty = 0.5 * (
+                gradient_penalty(self.critic, real, generator_fake)
+                + gradient_penalty(self.critic, real, lmpdd_fake)
+            )
             loss = critic_loss(
                 real_scores,
                 fake_scores,
@@ -122,12 +144,11 @@ class GANTrainer:
             device=self.device,
             dtype=latent_dtype,
         )
-        fake = self.generator(noise)
-        adversarial = guidance_loss(self.critic(fake))
-        generator_loss = adversarial
-        if not torch.isfinite(generator_loss):
+        generator_fake = self.generator(noise)
+        adversarial = guidance_loss(self.critic(generator_fake))
+        if not torch.isfinite(adversarial):
             raise RuntimeError("GAN generator produced a non-finite loss.")
-        generator_loss.backward()
+        adversarial.backward()
         if self.clip_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(
                 self.generator.parameters(),
@@ -142,8 +163,7 @@ class GANTrainer:
             "critic_loss": float(torch.stack(critic_losses).mean().cpu()),
             "critic_margin": float(torch.stack(margins).mean().cpu()),
             "gradient_penalty": float(torch.stack(penalties).mean().cpu()),
-            "generator_loss": float(generator_loss.detach().cpu()),
-            "adversarial_loss": float(adversarial.detach().cpu()),
+            "generator_loss": float(adversarial.detach().cpu()),
         }
         log_stats(self.writer, stats, self.step)
         self._save()
@@ -186,6 +206,19 @@ class GANTrainer:
                 "batch must be a tensor or a tuple/list whose first item is a tensor."
             )
         return images.to(self.device)
+
+    def _next_fake_volumes(self) -> torch.Tensor:
+        try:
+            batch = next(self.fake_iterator)
+        except StopIteration:
+            self.fake_iterator = iter(self.fake_dataloader)
+            try:
+                batch = next(self.fake_iterator)
+            except StopIteration as exc:
+                raise ValueError("fake dataloader cannot provide latent volumes.") from exc
+        if not isinstance(batch, torch.Tensor) or batch.ndim != 5:
+            raise TypeError("fake batch must have shape [B, C, D, H, W].")
+        return batch
 
     def _save(self) -> None:
         if not self.is_main_process or self.step % self.save_every != 0:

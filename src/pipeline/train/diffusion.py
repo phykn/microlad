@@ -30,6 +30,7 @@ class DiffusionTrainer:
         save_every: int = 1,
         clip_grad_norm: float | None = 1.0,
         ema_decay: float = 0.9999,
+        condition_dropout: float = 0.1,
     ) -> None:
         if steps <= 0:
             raise ValueError("steps must be positive.")
@@ -47,6 +48,8 @@ class DiffusionTrainer:
             raise ValueError(
                 "ema_decay must be between zero inclusive and one exclusive."
             )
+        if not 0.0 <= condition_dropout <= 1.0:
+            raise ValueError("condition_dropout must be between zero and one.")
 
         self.device = torch.device(device)
         self.model = model.to(device)
@@ -66,6 +69,7 @@ class DiffusionTrainer:
         self.save_every = save_every
         self.clip_grad_norm = clip_grad_norm
         self.ema_decay = float(ema_decay)
+        self.condition_dropout = float(condition_dropout)
         self.step = 0
         self.is_main_process = is_main_process()
 
@@ -107,19 +111,36 @@ class DiffusionTrainer:
                 ) from exc
         if isinstance(batch, torch.Tensor):
             image = batch
+            phase_fractions = None
         elif isinstance(batch, (tuple, list)) and batch and isinstance(batch[0], torch.Tensor):
             image = batch[0]
+            phase_fractions = batch[1]
         else:
             raise TypeError(
                 "batch must be a tensor or a tuple/list whose first item is a tensor."
             )
         image = image.to(self.device)
+        if phase_fractions is not None:
+            phase_fractions = phase_fractions.to(self.device)
+            drop = torch.rand(
+                phase_fractions.shape[0],
+                device=self.device,
+            ) < self.condition_dropout
+            phase_fractions = phase_fractions.clone()
+            phase_fractions[drop] = 0.0
 
         with torch.no_grad():
             latent, _ = unwrap_model(self.vae).encode(image)
 
         self.optimizer.zero_grad(set_to_none=True)
-        loss, parts = self.loss_fn(self.model, latent)
+        if phase_fractions is None:
+            loss, parts = self.loss_fn(self.model, latent)
+        else:
+            loss, parts = self.loss_fn(
+                self.model,
+                latent,
+                phase_fractions=phase_fractions,
+            )
         loss.backward()
         if self.clip_grad_norm is None:
             gradients = [

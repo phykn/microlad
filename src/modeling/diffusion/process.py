@@ -89,11 +89,16 @@ class DDPMProcess:
         model: torch.nn.Module,
         x_t: torch.Tensor,
         t: torch.Tensor,
+        phase_fractions: torch.Tensor | None = None,
     ) -> torch.Tensor:
         self._match_device(x_t.device)
         self._validate_timesteps(t, x_t.shape[0])
 
-        pred_noise = model(x_t, t)
+        pred_noise = (
+            model(x_t, t)
+            if phase_fractions is None
+            else model(x_t, t, phase_fractions)
+        )
         return self.p_mean_from_noise(x_t, t, pred_noise)
 
     def p_mean_from_noise(
@@ -118,10 +123,15 @@ class DDPMProcess:
         model: torch.nn.Module,
         x_t: torch.Tensor,
         t: torch.Tensor,
+        phase_fractions: torch.Tensor | None = None,
     ) -> torch.Tensor:
         self._match_device(x_t.device)
         self._validate_timesteps(t, x_t.shape[0])
-        pred_noise = model(x_t, t)
+        pred_noise = (
+            model(x_t, t)
+            if phase_fractions is None
+            else model(x_t, t, phase_fractions)
+        )
         return self.p_sample_from_noise(x_t, t, pred_noise)
 
     def p_sample_from_noise(

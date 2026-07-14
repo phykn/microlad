@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+from tqdm import tqdm
 
 from src.pipeline.data.images import load_gray_image, load_phase_image
 from src.pipeline.data.segmentation import segment_otsu
@@ -69,4 +70,68 @@ class PatchDataset(Dataset):
         if self.augment:
             patch = augment_patch(patch)
 
-        return torch.from_numpy(patch.astype(np.float32, copy=True)).unsqueeze(0)
+        image = torch.from_numpy(patch.astype(np.float32, copy=True)).unsqueeze(0)
+        phase_fractions = torch.bincount(
+            image.to(torch.long).flatten(),
+            minlength=self.num_phases,
+        ).to(torch.float32) / image.numel()
+        return image, phase_fractions
+
+
+class FakeLatentDataset(Dataset):
+    def __init__(self, root: str | Path) -> None:
+        self.paths = sorted(Path(root).glob("*.pt"))
+        if not self.paths:
+            raise ValueError(f"fake latent directory contains no .pt files: {root}")
+
+    def __len__(self) -> int:
+        return len(self.paths)
+
+    def __getitem__(
+        self,
+        index: int,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        latent = torch.load(self.paths[index], map_location="cpu", weights_only=True)
+        if not isinstance(latent, torch.Tensor) or latent.ndim != 4:
+            raise ValueError("fake latent must have shape [C, D, H, W].")
+        if not latent.is_floating_point() or not torch.isfinite(latent).all():
+            raise ValueError("fake latent must be a finite floating point tensor.")
+        return latent
+
+
+@torch.no_grad()
+def generate_lmpdd_fakes(
+    sampler,
+    vae: torch.nn.Module,
+    output_dir: str | Path,
+    *,
+    num_volumes: int,
+    progress: bool = True,
+) -> list[Path]:
+    """Generate individual 3D L-MPDD latent files for critic training."""
+    require_int("num_volumes", num_volumes)
+    if num_volumes <= 0:
+        raise ValueError("num_volumes must be positive.")
+    if not isinstance(progress, bool):
+        raise ValueError("progress must be a boolean.")
+
+    latent_ch = int(vae.latent_ch)
+    latent_size = int(vae.latent_size)
+    shape = (latent_size, latent_ch, latent_size, latent_size)
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+
+    paths = [output / f"{index:05d}.pt" for index in range(num_volumes)]
+    if existing := next((path for path in paths if path.exists()), None):
+        raise FileExistsError(f"critic fake already exists: {existing}")
+
+    for path in tqdm(paths, desc="critic fakes", disable=not progress):
+        latent = sampler.sample_lmpdd(shape, progress=False)
+        if (
+            latent.shape != shape
+            or not latent.is_floating_point()
+            or not torch.isfinite(latent).all()
+        ):
+            raise ValueError(f"L-MPDD sampler must return floating tensor {shape}.")
+        torch.save(latent.permute(1, 0, 2, 3).contiguous().cpu(), path)
+    return paths

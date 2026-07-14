@@ -25,6 +25,7 @@ class DiffusionSampler:
         *,
         anchor_latent: torch.Tensor | None = None,
         anchor_mask: torch.Tensor | None = None,
+        phase_fractions: torch.Tensor | None = None,
     ) -> torch.Tensor:
         shape = self._validate_shape(shape)
         self.model.eval()
@@ -38,9 +39,23 @@ class DiffusionSampler:
         )
 
         batch_size = shape[0]
+        phase_fractions = self._prepare_fractions(
+            phase_fractions,
+            batch_size=batch_size,
+            dtype=x.dtype,
+        )
         for step in range(self.ddpm.num_timesteps - 1, -1, -1):
             t = torch.full((batch_size,), step, dtype=torch.long, device=self.device)
-            x = self.ddpm.p_sample(self.model, x, t)
+            x = (
+                self.ddpm.p_sample(self.model, x, t)
+                if phase_fractions is None
+                else self.ddpm.p_sample(
+                    self.model,
+                    x,
+                    t,
+                    phase_fractions=phase_fractions,
+                )
+            )
 
             if anchor_latent is not None and anchor_mask is not None:
                 x = self._blend_anchor(x, anchor_latent, anchor_mask, step)
@@ -56,6 +71,7 @@ class DiffusionSampler:
         anchor_mask: torch.Tensor | None = None,
         axis_consensus: bool = False,
         progress: bool = False,
+        phase_fractions: torch.Tensor | None = None,
     ) -> torch.Tensor:
         shape = self._validate_shape(shape)
         if shape[0] != shape[2] or shape[0] != shape[3]:
@@ -75,6 +91,11 @@ class DiffusionSampler:
         )
 
         batch_size = shape[0]
+        phase_fractions = self._prepare_fractions(
+            phase_fractions,
+            batch_size=batch_size,
+            dtype=x.dtype,
+        )
         if axis_consensus:
             steps = tqdm(
                 range(self.ddpm.num_timesteps - 1, -1, -1),
@@ -89,7 +110,7 @@ class DiffusionSampler:
                     dtype=torch.long,
                     device=self.device,
                 )
-                pred_noise = self._predict_lmpdd_noise(x, t)
+                pred_noise = self._predict_lmpdd_noise(x, t, phase_fractions)
                 x = self.ddpm.p_sample_from_noise(x, t, pred_noise)
                 if anchor_latent is not None and anchor_mask is not None:
                     x = self._blend_anchor(x, anchor_latent, anchor_mask, step)
@@ -104,7 +125,16 @@ class DiffusionSampler:
         )
         for step in steps:
             t = torch.full((batch_size,), step, dtype=torch.long, device=self.device)
-            x = self.ddpm.p_sample(self.model, x, t)
+            x = (
+                self.ddpm.p_sample(self.model, x, t)
+                if phase_fractions is None
+                else self.ddpm.p_sample(
+                    self.model,
+                    x,
+                    t,
+                    phase_fractions=phase_fractions,
+                )
+            )
 
             if anchor_latent is not None and anchor_mask is not None:
                 x = self._blend_anchor(x, anchor_latent, anchor_mask, step)
@@ -200,11 +230,16 @@ class DiffusionSampler:
         self,
         x: torch.Tensor,
         t: torch.Tensor,
+        phase_fractions: torch.Tensor | None = None,
     ) -> torch.Tensor:
         oriented = x
         canonical_predictions = []
         for orientation in range(3):
-            prediction = self.model(oriented, t)
+            prediction = (
+                self.model(oriented, t)
+                if phase_fractions is None
+                else self.model(oriented, t, phase_fractions)
+            )
             if prediction.shape != oriented.shape:
                 raise ValueError("model output must have the same shape as x.")
             for _ in range((3 - orientation) % 3):
@@ -212,3 +247,19 @@ class DiffusionSampler:
             canonical_predictions.append(prediction)
             oriented = self._rotate_lmpdd(oriented)
         return torch.stack(canonical_predictions).mean(dim=0)
+
+    def _prepare_fractions(
+        self,
+        phase_fractions: torch.Tensor | None,
+        *,
+        batch_size: int,
+        dtype: torch.dtype,
+    ) -> torch.Tensor | None:
+        if phase_fractions is None:
+            return None
+        values = phase_fractions.to(device=self.device, dtype=dtype)
+        if values.ndim == 1:
+            values = values.unsqueeze(0).expand(batch_size, -1)
+        if values.ndim != 2 or values.shape[0] != batch_size:
+            raise ValueError("phase_fractions must have shape [P] or [B, P].")
+        return values

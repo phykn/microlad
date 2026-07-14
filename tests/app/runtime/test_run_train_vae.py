@@ -33,6 +33,7 @@ def write_config(path: Path, data_dir: Path, run_root: Path) -> None:
                 "model:",
                 "  latent_size: 16",
                 "  latent_ch: 2",
+                "  phase_embedding_dim: 4",
                 "  base_ch: 4",
                 "  max_ch: 8",
                 "loss:",

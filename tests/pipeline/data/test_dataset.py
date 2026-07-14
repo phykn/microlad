@@ -6,11 +6,28 @@ import numpy as np
 from PIL import Image
 import torch
 
-from src.pipeline.data import PatchDataset
+from src.pipeline.data import (
+    PatchDataset,
+    generate_lmpdd_fakes,
+)
 
 
 def save_image(path: Path, pixels: np.ndarray) -> None:
     Image.fromarray(pixels.astype(np.uint8)).save(path)
+
+
+class TinyLatentVAE(torch.nn.Module):
+    latent_ch = 2
+    latent_size = 3
+
+
+class RandomSampler:
+    def __init__(self) -> None:
+        self.shapes = []
+
+    def sample_lmpdd(self, shape, *, progress=False):
+        self.shapes.append((tuple(shape), progress))
+        return torch.randn(shape)
 
 
 class PatchDatasetTest(unittest.TestCase):
@@ -47,13 +64,32 @@ class PatchDatasetTest(unittest.TestCase):
                 num_phases=3,
                 segment=False,
             )
-            patch = dataset[0]
+            patch, fractions = dataset[0]
 
         expected = torch.tensor(pixels, dtype=torch.float32).unsqueeze(0)
         self.assertEqual(len(dataset), 1)
         self.assertEqual(patch.shape, torch.Size([1, 4, 4]))
         self.assertEqual(patch.dtype, torch.float32)
         self.assertTrue(torch.allclose(patch, expected))
+        self.assertTrue(
+            torch.equal(fractions, torch.tensor([0.375, 0.3125, 0.3125]))
+        )
+
+    def test_returns_phase_fractions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "phase.png"
+            save_image(path, np.array([[0, 0], [1, 2]], dtype=np.uint8))
+            dataset = PatchDataset(
+                [path],
+                crop_size=2,
+                image_size=2,
+                num_phases=3,
+            )
+
+            patch, fractions = dataset[0]
+
+        self.assertEqual(patch.shape, torch.Size([1, 2, 2]))
+        self.assertTrue(torch.equal(fractions, torch.tensor([0.5, 0.25, 0.25])))
 
     def test_gray_image_can_be_segmented_to_phase_indices(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -76,7 +112,7 @@ class PatchDatasetTest(unittest.TestCase):
                 num_phases=3,
                 segment=True,
             )
-            patch = dataset[0]
+            patch, _ = dataset[0]
 
         self.assertEqual(patch.shape, torch.Size([1, 4, 4]))
         self.assertEqual(patch.dtype, torch.float32)
@@ -103,10 +139,11 @@ class PatchDatasetTest(unittest.TestCase):
                 num_phases=3,
                 segment=True,
             )
-            patch = dataset[0]
+            patch, _ = dataset[0]
 
         self.assertEqual(patch.shape, torch.Size([1, 4, 4]))
         self.assertEqual(sorted(torch.unique(patch).tolist()), [0.0, 1.0, 2.0])
+
 
     def test_segment_false_rejects_normalized_float_intensity_image(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -144,7 +181,7 @@ class PatchDatasetTest(unittest.TestCase):
                 num_phases=4,
                 segment=False,
             )
-            patch = dataset[0]
+            patch, _ = dataset[0]
 
         expected = torch.tensor([[[0.0, 1.0], [2.0, 3.0]]])
         self.assertTrue(torch.allclose(patch, expected))
@@ -190,7 +227,7 @@ class PatchDatasetTest(unittest.TestCase):
                 num_phases=2,
                 segment=False,
             )
-            patch = dataset[0]
+            patch, _ = dataset[0]
 
         self.assertEqual(patch.shape, torch.Size([1, 4, 4]))
 
@@ -222,7 +259,7 @@ class PatchDatasetTest(unittest.TestCase):
                 num_phases=2,
                 segment=False,
             )
-            patch = dataset[0]
+            patch, _ = dataset[0]
 
         self.assertEqual(len(dataset), 2)
         self.assertEqual(patch.shape, torch.Size([1, 4, 4]))
@@ -249,10 +286,47 @@ class PatchDatasetTest(unittest.TestCase):
                 segment=False,
                 augment=True,
             )
-            patch = dataset[0]
+            patch, _ = dataset[0]
 
         self.assertEqual(patch.shape, torch.Size([1, 4, 4]))
         self.assertEqual(sorted(torch.unique(patch).tolist()), [0.0, 1.0, 2.0])
+
+
+class CriticFakeDataTest(unittest.TestCase):
+    def test_generates_individual_lmpdd_latents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "fake"
+            sampler = RandomSampler()
+            paths = generate_lmpdd_fakes(
+                sampler, TinyLatentVAE(), output,
+                num_volumes=2, progress=False,
+            )
+            first = torch.load(output / "00000.pt", weights_only=True)
+
+        self.assertEqual(paths, [output / "00000.pt", output / "00001.pt"])
+        self.assertEqual(first.shape, torch.Size([2, 3, 3, 3]))
+        self.assertEqual(sampler.shapes, [((3, 2, 3, 3), False)] * 2)
+
+    def test_existing_fake_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "fake"
+            generate_lmpdd_fakes(
+                RandomSampler(), TinyLatentVAE(), output,
+                num_volumes=1, progress=False,
+            )
+            with self.assertRaisesRegex(FileExistsError, "already exists"):
+                generate_lmpdd_fakes(
+                    RandomSampler(), TinyLatentVAE(), output,
+                    num_volumes=1, progress=False,
+                )
+
+    def test_rejects_invalid_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "num_volumes"):
+                generate_lmpdd_fakes(
+                    RandomSampler(), TinyLatentVAE(), Path(tmp) / "fake",
+                    num_volumes=0, progress=False,
+                )
 
 
 if __name__ == "__main__":

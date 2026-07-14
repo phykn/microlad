@@ -89,6 +89,7 @@ class TimeUNet(nn.Module):
         latent_ch: int,
         base_ch: int = 128,
         time_dim: int = 64,
+        num_phases: int = 3,
     ) -> None:
         super().__init__()
 
@@ -100,12 +101,21 @@ class TimeUNet(nn.Module):
 
         if time_dim <= 0:
             raise ValueError("time_dim must be positive.")
+        if num_phases < 2:
+            raise ValueError("num_phases must be at least 2.")
 
         self.latent_ch = latent_ch
         self.base_ch = base_ch
         self.time_dim = time_dim
+        self.num_phases = num_phases
 
         self.time_emb = TimeEmbedding(time_dim)
+        self.fraction_emb = nn.Sequential(
+            nn.Linear(num_phases, time_dim),
+            nn.SiLU(),
+            nn.Linear(time_dim, time_dim),
+        )
+        self.null_fraction_emb = nn.Parameter(torch.zeros(time_dim))
         self.enc1 = TimeResStack(latent_ch, base_ch, time_dim)
         self.attn1 = SelfAttention(base_ch)
         self.down1 = nn.Conv2d(base_ch, base_ch * 2, kernel_size=4, stride=2, padding=1)
@@ -138,7 +148,12 @@ class TimeUNet(nn.Module):
         self.dec1 = TimeResStack(base_ch * 2, base_ch, time_dim)
         self.out = nn.Conv2d(base_ch, latent_ch, kernel_size=3, padding=1)
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        phase_fractions: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         if x.ndim != 4 or x.shape[1] != self.latent_ch:
             raise ValueError(
                 f"latent batch must have shape [B, {self.latent_ch}, H, W]."
@@ -153,7 +168,23 @@ class TimeUNet(nn.Module):
         if x.shape[-2] % 4 != 0 or x.shape[-1] % 4 != 0:
             raise ValueError("latent height and width must be divisible by 4.")
 
-        time_emb = self.time_emb(t)
+        if phase_fractions is None:
+            fraction_emb = self.null_fraction_emb.expand(x.shape[0], -1)
+        else:
+            if phase_fractions.shape != (x.shape[0], self.num_phases):
+                raise ValueError("phase_fractions must have shape [B, num_phases].")
+            phase_fractions = phase_fractions.to(device=x.device, dtype=x.dtype)
+            if not torch.isfinite(phase_fractions).all():
+                raise ValueError("phase_fractions must be finite.")
+            null = phase_fractions.sum(dim=1) == 0
+            fraction_emb = self.fraction_emb(phase_fractions)
+            fraction_emb = torch.where(
+                null[:, None],
+                self.null_fraction_emb.expand_as(fraction_emb),
+                fraction_emb,
+            )
+
+        time_emb = self.time_emb(t) + fraction_emb
         e1 = self.attn1(self.enc1(x, time_emb))
         e2 = self.attn2(self.enc2(self.down1(e1), time_emb))
         h = self.attn_mid(self.mid(self.down2(e2), time_emb))

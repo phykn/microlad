@@ -20,6 +20,7 @@ def sample_large_lmpdd(
     anchor_latent: torch.Tensor | None = None,
     anchor_mask: torch.Tensor | None = None,
     progress: bool = False,
+    phase_fractions: torch.Tensor | None = None,
 ) -> torch.Tensor:
     shape = _validate_latent_shape(latent_shape, tile_size=tile_size)
     num_timesteps = _validate_num_timesteps(ddpm)
@@ -65,6 +66,7 @@ def sample_large_lmpdd(
             tile_size=tile_size,
             overlap=tile_overlap,
             batch_size=batch_size,
+            phase_fractions=phase_fractions,
         )
         latent = _planes_to_lmpdd_pass(planes, axis)
 
@@ -84,6 +86,7 @@ def denoise_tiled_plane(
     tile_size: int,
     overlap: int,
     batch_size: int = 16,
+    phase_fractions: torch.Tensor | None = None,
 ) -> torch.Tensor:
     if planes.ndim != 4:
         raise ValueError("planes must have shape [B, C, H, W].")
@@ -131,7 +134,22 @@ def denoise_tiled_plane(
                 row : row + tile_size,
                 col : col + tile_size,
             ]
-            mean_tile = ddpm.p_mean(model, patch, timesteps[start:stop])
+            if phase_fractions is None:
+                mean_tile = ddpm.p_mean(model, patch, timesteps[start:stop])
+            else:
+                fractions = phase_fractions.to(device=patch.device, dtype=patch.dtype)
+                if fractions.ndim == 1:
+                    fractions = fractions.unsqueeze(0).expand(patch.shape[0], -1)
+                elif fractions.ndim == 2:
+                    fractions = fractions[start:stop]
+                if fractions.ndim != 2 or fractions.shape[0] != patch.shape[0]:
+                    raise ValueError("phase_fractions must have shape [P] or [B, P].")
+                mean_tile = ddpm.p_mean(
+                    model,
+                    patch,
+                    timesteps[start:stop],
+                    phase_fractions=fractions,
+                )
             if mean_tile.shape != patch.shape:
                 raise ValueError("ddpm.p_mean output must match input patch shape.")
             require_finite("p_mean output", mean_tile)

@@ -65,6 +65,7 @@ def build_diffusion_trainer(
         save_every=args.save_every,
         clip_grad_norm=args.clip_grad_norm,
         ema_decay=args.ema_decay,
+        condition_dropout=getattr(args, "condition_dropout", 0.1),
     )
 
 
@@ -73,6 +74,7 @@ def build_gan_trainer(
     critic: torch.nn.Module,
     vae: torch.nn.Module,
     loader: Iterator,
+    fake_loader: Iterator,
     args: argparse.Namespace,
     device: torch.device,
 ) -> GANTrainer:
@@ -92,6 +94,7 @@ def build_gan_trainer(
         critic=critic,
         vae=vae,
         dataloader=loader,
+        fake_dataloader=fake_loader,
         generator_optimizer=generator_optimizer,
         critic_optimizer=critic_optimizer,
         steps=args.steps,

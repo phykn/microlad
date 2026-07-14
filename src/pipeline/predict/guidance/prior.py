@@ -13,6 +13,7 @@ def sds_loss(
     t_max: int,
     t: torch.Tensor | None = None,
     noise: torch.Tensor | None = None,
+    phase_fractions: torch.Tensor | None = None,
     spatial_weight: torch.Tensor | None = None,
     spatial_normalizer: float | torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
@@ -46,7 +47,15 @@ def sds_loss(
     noisy_latent = ddpm.q_sample(latent, t, noise=noise)
 
     with torch.no_grad():
-        pred_noise = denoiser(noisy_latent, t)
+        if phase_fractions is None:
+            pred_noise = denoiser(noisy_latent, t)
+        else:
+            fractions = phase_fractions.to(device=latent.device, dtype=latent.dtype)
+            if fractions.ndim == 1:
+                fractions = fractions.unsqueeze(0).expand(latent.shape[0], -1)
+            if fractions.ndim != 2 or fractions.shape[0] != latent.shape[0]:
+                raise ValueError("phase_fractions must have shape [P] or [B, P].")
+            pred_noise = denoiser(noisy_latent, t, fractions)
 
     if pred_noise.shape != latent.shape:
         raise ValueError("denoiser output must have the same shape as latent.")

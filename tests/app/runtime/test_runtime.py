@@ -81,7 +81,12 @@ def write_predictor_run(
 
     if write_diffusion_checkpoint:
         source_diffusion = build_denoiser(
-            argparse.Namespace(latent_ch=latent_ch, base_ch=4, time_dim=8)
+            argparse.Namespace(
+                latent_ch=latent_ch,
+                base_ch=4,
+                time_dim=8,
+                num_phases=2,
+            )
         )
         diffusion_ckpt = run_dir / "weight" / "diffusion" / "last" / "model.pt"
         diffusion_ckpt.parent.mkdir(parents=True)
@@ -198,10 +203,11 @@ class BuildTest(unittest.TestCase):
             )
 
             dataset = build_dataset(args)
-            sample = dataset[0]
+            sample, fractions = dataset[0]
 
         self.assertEqual(dataset.image_paths, [image_path])
         self.assertEqual(sample.shape, torch.Size([1, 4, 4]))
+        self.assertTrue(torch.equal(fractions, torch.tensor([1.0, 0.0])))
 
     def test_build_dataset_rejects_empty_data_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -237,10 +243,36 @@ class BuildTest(unittest.TestCase):
                 device=torch.device("cpu"),
             )
 
-            batch = next(loader)
+            images, fractions = next(loader)
 
         self.assertEqual(len(dataset), 1)
-        self.assertEqual(batch.shape, torch.Size([8, 1, 4, 4]))
+        self.assertEqual(images.shape, torch.Size([8, 1, 4, 4]))
+        self.assertEqual(fractions.shape, torch.Size([8, 2]))
+
+    def test_build_loader_batches_phase_fractions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            save_image(root / "phase.png", np.array([[0, 0], [1, 1]], dtype=np.uint8))
+            args = argparse.Namespace(
+                data_dir=root,
+                crop_size=2,
+                size=2,
+                num_phases=2,
+                segment=False,
+                augment=False,
+                batch_size=3,
+            )
+            loader = build_loader(
+                build_dataset(args),
+                args,
+                device=torch.device("cpu"),
+            )
+
+            images, fractions = next(loader)
+
+        self.assertEqual(images.shape, torch.Size([3, 1, 2, 2]))
+        self.assertEqual(fractions.shape, torch.Size([3, 2]))
+        self.assertTrue(torch.allclose(fractions, torch.tensor([[0.5, 0.5]] * 3)))
 
     def test_build_vae_uses_model_config(self):
         args = argparse.Namespace(
@@ -248,6 +280,7 @@ class BuildTest(unittest.TestCase):
             latent_size=16,
             latent_ch=2,
             num_phases=5,
+            phase_embedding_dim=6,
             base_ch=8,
             max_ch=16,
         )
@@ -259,10 +292,16 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(vae.latent_size, 16)
         self.assertEqual(vae.latent_ch, 2)
         self.assertEqual(vae.num_phases, 5)
+        self.assertEqual(vae.phase_embedding_dim, 6)
         self.assertEqual(vae.channels, (8, 16, 16))
 
     def test_build_denoiser_uses_model_config(self):
-        args = argparse.Namespace(latent_ch=4, base_ch=8, time_dim=16)
+        args = argparse.Namespace(
+            latent_ch=4,
+            base_ch=8,
+            time_dim=16,
+            num_phases=5,
+        )
 
         model = build_denoiser(args)
 
@@ -270,6 +309,7 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(model.latent_ch, 4)
         self.assertEqual(model.base_ch, 8)
         self.assertEqual(model.time_dim, 16)
+        self.assertEqual(model.num_phases, 5)
 
     def test_save_run_config_writes_flat_config_yaml(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -39,6 +39,7 @@ def sample_latent(
     anchor_mask: torch.Tensor | None = None,
     axis_consensus: bool = False,
     progress: bool = False,
+    phase_fractions: torch.Tensor | None = None,
 ) -> torch.Tensor:
     latent_ch = int(vae.latent_ch)
     latent_size = int(vae.latent_size)
@@ -50,6 +51,7 @@ def sample_latent(
         anchor_mask=anchor_mask,
         axis_consensus=axis_consensus,
         progress=progress,
+        phase_fractions=phase_fractions,
     )
     return latent_batch.permute(1, 0, 2, 3).contiguous()
 

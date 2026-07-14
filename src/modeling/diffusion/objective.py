@@ -9,6 +9,7 @@ def diffusion_loss(
     model: nn.Module,
     ddpm: DDPMProcess,
     clean_latent: torch.Tensor,
+    phase_fractions: torch.Tensor | None = None,
     t: torch.Tensor | None = None,
     noise: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
@@ -30,7 +31,11 @@ def diffusion_loss(
         raise ValueError("noise must have the same shape as clean_latent.")
 
     noisy_latent = ddpm.add_noise(clean_latent, t, noise=noise)
-    pred_noise = model(noisy_latent, t)
+    pred_noise = (
+        model(noisy_latent, t)
+        if phase_fractions is None
+        else model(noisy_latent, t, phase_fractions)
+    )
 
     if pred_noise.shape != noise.shape:
         raise ValueError("model output must have the same shape as noise.")
@@ -48,6 +53,7 @@ class DiffusionLoss(nn.Module):
         self,
         model: nn.Module,
         clean_latent: torch.Tensor,
+        phase_fractions: torch.Tensor | None = None,
         t: torch.Tensor | None = None,
         noise: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
@@ -55,6 +61,7 @@ class DiffusionLoss(nn.Module):
             model,
             self.ddpm,
             clean_latent,
+            phase_fractions=phase_fractions,
             t=t,
             noise=noise,
         )

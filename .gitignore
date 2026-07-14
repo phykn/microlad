@@ -1,14 +1,12 @@
 __pycache__/
 *.pyc
 .venv/
-venv/
 .worktrees/
 .obsidian/
+
 AGENTS.md
 docs/
 run/
+fake/
 script/
 tests/script/
-output/
-microlad-anode/
-reference/

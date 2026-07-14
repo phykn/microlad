@@ -56,6 +56,21 @@ volume, stats = predictor.predict(options)
 
 기본 흐름은 `L-MPDD → Joint → optional Refine → categorical volume`입니다.
 
+## Critic fake data
+
+기존 VAE와 Diffusion checkpoint를 고정한 채 L-MPDD 3D latent를 미리 생성합니다.
+모델 학습은 수행하지 않습니다.
+
+```powershell
+.venv\Scripts\python.exe gen_fake.py --check
+.venv\Scripts\python.exe gen_fake.py --device cuda
+```
+
+설정은 `config/gen_fake.yaml`에 있으며 결과는 저장소 루트의 `fake/` 아래에
+`00000.pt`, `00001.pt` 형태의 `[C, D, H, W]` latent로 저장됩니다. Critic 학습에서는
+`config/gan.yaml`의 `data.fake_dir`을 읽어 XY·XZ·YZ 단면을 균형 추출합니다.
+Generator는 기존처럼 함께 학습됩니다.
+
 ## 테스트
 
 ```powershell

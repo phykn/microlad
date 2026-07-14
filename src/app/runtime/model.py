@@ -13,6 +13,7 @@ def build_vae(args: argparse.Namespace) -> PatchVAE:
         latent_size=args.latent_size,
         latent_ch=args.latent_ch,
         num_phases=args.num_phases,
+        phase_embedding_dim=getattr(args, "phase_embedding_dim", 4),
         base_ch=args.base_ch,
         max_ch=args.max_ch,
     )
@@ -23,6 +24,7 @@ def build_denoiser(args: argparse.Namespace) -> TimeUNet:
         latent_ch=args.latent_ch,
         base_ch=args.base_ch,
         time_dim=args.time_dim,
+        num_phases=args.num_phases,
     )
 
 

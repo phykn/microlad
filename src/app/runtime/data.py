@@ -3,6 +3,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import torch
+from torch.utils.data import default_collate
 
 from src.pipeline.data import PatchDataset
 
@@ -33,7 +34,7 @@ def build_dataset(args: argparse.Namespace) -> PatchDataset:
 
 
 def build_loader(
-    dataset: PatchDataset,
+    dataset: torch.utils.data.Dataset,
     args: argparse.Namespace,
     device: torch.device,
 ) -> Iterator:
@@ -42,5 +43,10 @@ def build_loader(
 
     while True:
         indices = torch.randint(0, len(dataset), (args.batch_size,)).tolist()
-        batch = torch.stack([dataset[index] for index in indices])
-        yield batch.pin_memory() if device.type == "cuda" else batch
+        batch = default_collate([dataset[index] for index in indices])
+        if device.type == "cuda":
+            if isinstance(batch, torch.Tensor):
+                batch = batch.pin_memory()
+            else:
+                batch = [item.pin_memory() for item in batch]
+        yield batch

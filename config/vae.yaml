@@ -9,12 +9,13 @@ data:
 
 model:
   latent_size: 16
-  latent_ch: 8
+  latent_ch: 4
+  phase_embedding_dim: 4
   base_ch: 64
   max_ch: 256
 
 loss:
-  beta: 1.0
+  beta: 0.5
   phase_balance: 0.35
 
 optimization:
@@ -23,8 +24,8 @@ optimization:
   clip_grad_norm: 1.0
 
 training:
-  steps: 50000
-  save_every: 5000
+  steps: 10000
+  save_every: 1000
 
 output:
   run_root: run

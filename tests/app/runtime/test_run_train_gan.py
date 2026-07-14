@@ -51,7 +51,7 @@ def write_diffusion_run(run_dir: Path) -> None:
         beta_start=0.001,
         beta_end=0.02,
     )
-    denoiser = TimeUNet(latent_ch=2, base_ch=4, time_dim=8)
+    denoiser = TimeUNet(latent_ch=2, base_ch=4, time_dim=8, num_phases=2)
     checkpoint = run_dir / "weight" / "diffusion" / "last" / "model.pt"
     checkpoint.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"model": denoiser.state_dict()}, checkpoint)
@@ -64,6 +64,7 @@ def write_config(path: Path, source: Path, run_root: Path) -> None:
             (
                 "data:",
                 "  data_dir: data",
+                "  fake_dir: fake",
                 "  augment: true",
                 "  batch_size: 2",
                 "model:",

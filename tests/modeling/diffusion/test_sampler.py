@@ -10,9 +10,17 @@ class RecordingDenoiser(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.steps: list[int] = []
+        self.fractions: list[torch.Tensor] = []
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        phase_fractions: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         self.steps.append(int(t[0].item()))
+        if phase_fractions is not None:
+            self.fractions.append(phase_fractions.detach().clone())
         return torch.zeros_like(x)
 
 
@@ -129,6 +137,19 @@ class PredictSamplerTest(unittest.TestCase):
 
         self.assertTrue(torch.equal(latent, base))
         self.assertEqual(ddpm.steps, [2, 1, 0])
+
+    def test_sample_lmpdd_repeats_one_fraction_condition_for_all_slices(self):
+        model = RecordingDenoiser()
+        sampler = DiffusionSampler(model, DDPMProcess(timesteps=2), device="cpu")
+
+        sampler.sample_lmpdd(
+            (2, 1, 2, 2),
+            phase_fractions=torch.tensor([0.25, 0.75]),
+        )
+
+        expected = torch.tensor([[0.25, 0.75], [0.25, 0.75]])
+        self.assertEqual(len(model.fractions), 2)
+        self.assertTrue(all(torch.equal(value, expected) for value in model.fractions))
 
     def test_sample_lmpdd_shows_optional_progress(self):
         sampler = DiffusionSampler(

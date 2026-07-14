@@ -132,6 +132,7 @@ class JointConfig:
             Set to None to decode each axis in one batch without checkpointing.
         learning_rate: Learning rate for the 3D generator.
         axis_weight: Weight aligning decoded phase probabilities across axes.
+        axis_mass_weight: Weight aligning decoded phase fractions across axes.
         continuity_weight: Weight encouraging continuity between slices.
         anchor_weight: Weight of exact decoded anchor conditioning.
         residual_scale: Maximum residual in channel standard deviations.
@@ -144,6 +145,7 @@ class JointConfig:
     learning_rate: float = 1e-4
 
     axis_weight: float = 1.0
+    axis_mass_weight: float = 0.25
     continuity_weight: float = 5e-2
     anchor_weight: float = 1.0
 
@@ -166,6 +168,7 @@ class JointConfig:
             raise ValueError("learning_rate must be positive.")
         for name in (
             "axis_weight",
+            "axis_mass_weight",
             "continuity_weight",
             "anchor_weight",
             "preservation_weight",

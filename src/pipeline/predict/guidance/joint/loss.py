@@ -11,7 +11,6 @@ def axis_loss(probabilities: torch.Tensor) -> torch.Tensor:
         probabilities
     ).all():
         raise ValueError("axis probabilities must be finite floating-point values.")
-
     spatial = tuple(range(2, probabilities.ndim))
     mass = probabilities.sum(dim=spatial, keepdim=True)
     tiny = torch.finfo(probabilities.dtype).tiny
@@ -21,6 +20,21 @@ def axis_loss(probabilities: torch.Tensor) -> torch.Tensor:
         normalized.clamp_min(tiny).log() - mean.clamp_min(tiny).log()
     )
     return divergence.sum(dim=spatial).mean()
+
+
+def axis_mass_loss(probabilities: torch.Tensor) -> torch.Tensor:
+    if probabilities.ndim != 5 or probabilities.shape[0] < 2:
+        raise ValueError(
+            "axis probabilities must have shape [axes, phases, depth, height, width]."
+        )
+    if not probabilities.is_floating_point() or not torch.isfinite(
+        probabilities
+    ).all():
+        raise ValueError("axis probabilities must be finite floating-point values.")
+
+    spatial = tuple(range(2, probabilities.ndim))
+    fractions = probabilities.mean(dim=spatial)
+    return (fractions - fractions.mean(dim=0, keepdim=True)).square().mean()
 
 
 def anchor_loss(

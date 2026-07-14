@@ -68,7 +68,7 @@ class PatchVAETest(unittest.TestCase):
                 lambda _module, _inputs, _output: calls.append(_module)
             )
 
-        model(torch.randn(1, 1, 64, 64))
+        model(torch.randint(0, 3, (1, 1, 64, 64), dtype=torch.float32))
 
         self.assertEqual(calls, attention_blocks)
 
@@ -100,7 +100,7 @@ class PatchVAETest(unittest.TestCase):
                     )
                 )
 
-        model(torch.randn(1, 1, 64, 64))
+        model(torch.randint(0, 3, (1, 1, 64, 64), dtype=torch.float32))
 
         self.assertEqual(first_down_shapes, [(64, 64), (64, 64)])
         self.assertEqual(first_up_shapes, [(16, 16), (16, 16)])
@@ -120,7 +120,12 @@ class PatchVAETest(unittest.TestCase):
                     base_ch=8,
                     max_ch=32,
                 )
-                x = torch.randn(1, 1, image_size, image_size)
+                x = torch.randint(
+                    0,
+                    3,
+                    (1, 1, image_size, image_size),
+                    dtype=torch.float32,
+                )
 
                 logits, mu, logvar = model(x)
 
@@ -129,6 +134,35 @@ class PatchVAETest(unittest.TestCase):
                 self.assertEqual(logvar.shape, torch.Size([1, 4, 16, 16]))
                 self.assertEqual(model.downsample_factor, image_size // 16)
                 self.assertEqual(model.downsample_steps, downsample_steps(image_size, 16))
+
+    def test_encoder_embeds_categorical_phase_ids(self):
+        model = PatchVAE(
+            image_size=64,
+            latent_size=16,
+            num_phases=3,
+            phase_embedding_dim=5,
+            base_ch=8,
+            max_ch=32,
+        )
+        image = torch.randint(0, 3, (2, 1, 64, 64), dtype=torch.float32)
+
+        mu, logvar = model.encode(image)
+
+        self.assertEqual(model.phase_embedding.num_embeddings, 3)
+        self.assertEqual(model.phase_embedding.embedding_dim, 5)
+        self.assertEqual(model.conv_in.net[0].in_channels, 5)
+        self.assertEqual(mu.shape, torch.Size([2, 4, 16, 16]))
+        self.assertEqual(logvar.shape, mu.shape)
+
+    def test_encoder_rejects_non_categorical_phase_values(self):
+        model = PatchVAE(image_size=64, latent_size=16, base_ch=8, max_ch=32)
+
+        for value in (-1.0, 0.5, 3.0, float("nan")):
+            with self.subTest(value=value):
+                image = torch.zeros(1, 1, 64, 64)
+                image[0, 0, 0, 0] = value
+                with self.assertRaisesRegex(ValueError, "phase"):
+                    model.encode(image)
 
     def test_decode_logits_returns_phase_channels_and_decode_returns_expected_phase_image(self):
         model = PatchVAE(

@@ -29,8 +29,15 @@ class TinyDenoiser(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.conv = torch.nn.Conv2d(4, 4, kernel_size=1)
+        self.seen_phase_fractions = None
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        phase_fractions: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        self.seen_phase_fractions = phase_fractions
         return self.conv(x)
 
 
@@ -77,6 +84,31 @@ class FakeProgress:
 
 
 class DiffusionTrainerTest(unittest.TestCase):
+    def test_condition_dropout_trains_null_fraction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model = TinyDenoiser()
+            trainer = DiffusionTrainer(
+                model=model,
+                vae=TinyVAE(),
+                dataloader=[
+                    (
+                        torch.randn(2, 1, 64, 64),
+                        torch.tensor([[0.25, 0.75], [0.5, 0.5]]),
+                    )
+                ],
+                loss_fn=DiffusionLoss(DDPMProcess(timesteps=4)),
+                optimizer=torch.optim.Adam(model.parameters(), lr=1e-3),
+                steps=1,
+                device="cpu",
+                run_root=tmp,
+                condition_dropout=1.0,
+            )
+
+            trainer.train_step()
+            trainer.close()
+
+        self.assertTrue(torch.equal(model.seen_phase_fractions, torch.zeros(2, 2)))
+
     def test_train_step_updates_denoiser_and_keeps_vae_frozen(self):
         with tempfile.TemporaryDirectory() as tmp:
             vae = TinyVAE()

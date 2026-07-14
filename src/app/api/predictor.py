@@ -126,6 +126,8 @@ class Predictor:
         guidance_labels = target_labels
         if guidance_labels is None and uses_descriptor_targets(options):
             guidance_labels = anchor_labels
+        reference_labels = target_labels if target_labels is not None else anchor_labels
+        target_fraction = self._resolve_fraction(options, reference_labels)
 
         if volume_size == image_size:
             assert t_max is not None or options.joint.steps == 0
@@ -149,6 +151,7 @@ class Predictor:
             volume_size,
             options=options,
             anchors=anchors,
+            phase_fractions=target_fraction,
         )
         stats: dict[str, object] = dict(base_stats)
         stats["critic_enabled"] = torch.tensor(
@@ -165,6 +168,7 @@ class Predictor:
                 target_labels=guidance_labels,
                 descriptor_tile_size=descriptor_tile_size,
                 t_max=t_max,
+                phase_fractions=target_fraction,
             )
             stats["scale_history"] = scale_history
         else:
@@ -173,7 +177,6 @@ class Predictor:
                 "step": torch.empty(0, device=self.device, dtype=torch.long)
             }
 
-        reference_labels = target_labels if target_labels is not None else anchor_labels
         references = (
             None
             if reference_labels is None
@@ -184,7 +187,6 @@ class Predictor:
             .movedim(-1, 1)
             .float()
         )
-        target_fraction = self._resolve_fraction(options, guidance_labels)
         anchor_mask = build_volume_anchor_mask(
             (volume_size, volume_size, volume_size),
             volume_anchors,
@@ -238,6 +240,8 @@ class Predictor:
             if volume_anchors
             else None
         )
+        reference_labels = target_labels if target_labels is not None else anchor_labels
+        target_fraction = self._resolve_fraction(options, reference_labels)
         anchor_latent, anchor_mask = (
             encode_anchors(
                 self.vae,
@@ -256,6 +260,7 @@ class Predictor:
             anchor_latent=anchor_latent,
             anchor_mask=anchor_mask,
             progress=options.progress,
+            phase_fractions=target_fraction,
         ).to(self.device)
         guidance_labels = target_labels
         if guidance_labels is None and uses_descriptor_targets(options):
@@ -274,10 +279,9 @@ class Predictor:
             target_labels=guidance_labels,
             critic=self.critic,
             t_max=(int(self.ddpm.num_timesteps) if t_max is None else t_max),
+            phase_fractions=target_fraction,
         )
         stats["joint_history"] = joint_history
-        target_fraction = self._resolve_fraction(options, guidance_labels)
-        reference_labels = target_labels if target_labels is not None else anchor_labels
         reference_probabilities = (
             None
             if reference_labels is None
@@ -333,11 +337,7 @@ class Predictor:
                 device=self.device,
                 dtype=torch.float32,
             )
-        needs_fraction = (
-            options.targets.slice_fraction_weight > 0.0
-            or options.targets.global_fraction_weight > 0.0
-        )
-        if not needs_fraction or target_labels is None:
+        if target_labels is None:
             return None
         labels = target_labels.to(self.device).long()
         return (
@@ -357,6 +357,7 @@ class Predictor:
         target_labels: torch.Tensor | None,
         critic: LatentCritic | None,
         t_max: int,
+        phase_fractions: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         targets = self._build_targets(options, target_labels)
         solver = targets.get("diffusivity_solver")
@@ -380,6 +381,7 @@ class Predictor:
             critic_weight=options.critic.weight if critic is not None else 0.0,
             anchor_weight=options.joint.anchor_weight if anchors else 0.0,
             fraction_targets=targets.get("fraction_targets"),
+            phase_fractions=phase_fractions,
             slice_fraction_weight=options.targets.slice_fraction_weight,
             global_fraction_weight=options.targets.global_fraction_weight,
             tpc_targets=targets.get("tpc_targets"),
@@ -390,6 +392,7 @@ class Predictor:
             diffusivity_solver=solver,
             diffusivity_weight=options.targets.diffusivity_weight,
             axis_weight=options.joint.axis_weight,
+            axis_mass_weight=options.joint.axis_mass_weight,
             continuity_weight=options.joint.continuity_weight,
             residual_scale=options.joint.residual_scale,
             preservation_weight=options.joint.preservation_weight,
@@ -401,6 +404,7 @@ class Predictor:
         volume_size: int,
         options: PredictOptions,
         anchors: Sequence[AnchorSlice] | None,
+        phase_fractions: torch.Tensor | None,
     ) -> tuple[torch.Tensor, dict[str, int]]:
         factor = get_downsample_factor(self.vae)
         tile_size = int(self.vae.latent_size)
@@ -442,6 +446,7 @@ class Predictor:
             anchor_latent=anchor_latent,
             anchor_mask=anchor_mask,
             progress=options.progress,
+            phase_fractions=phase_fractions,
         )
         stats = {
             "volume_size": int(volume_size),
@@ -463,6 +468,7 @@ class Predictor:
         target_labels: torch.Tensor | None,
         descriptor_tile_size: int | None,
         t_max: int,
+        phase_fractions: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         targets = self._build_targets(
             options,
@@ -491,6 +497,7 @@ class Predictor:
             ),
             anchor_weight=options.scale.anchor_weight if anchors else 0.0,
             fraction_targets=targets.get("fraction_targets"),
+            phase_fractions=phase_fractions,
             slice_fraction_weight=options.targets.slice_fraction_weight,
             global_fraction_weight=options.targets.global_fraction_weight,
             tpc_targets=targets.get("tpc_targets"),

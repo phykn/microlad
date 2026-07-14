@@ -14,6 +14,7 @@ from src.pipeline.predict.guidance.conditioning.prepare import build_anchor_cons
 from src.pipeline.predict.guidance.joint.loss import (
     anchor_loss,
     axis_loss,
+    axis_mass_loss,
     continuity_loss,
     fraction_loss,
 )
@@ -50,6 +51,7 @@ def optimize_latent(
     critic_weight: float = 0.0,
     anchor_weight: float = 0.0,
     fraction_targets: Mapping[int, float] | torch.Tensor | None = None,
+    phase_fractions: torch.Tensor | None = None,
     slice_fraction_weight: float = 0.0,
     global_fraction_weight: float = 0.0,
     tpc_targets: Mapping[int, torch.Tensor] | torch.Tensor | None = None,
@@ -60,6 +62,7 @@ def optimize_latent(
     diffusivity_solver: ConductanceSolver | None = None,
     diffusivity_weight: float = 0.0,
     axis_weight: float = 1.0,
+    axis_mass_weight: float = 0.25,
     continuity_weight: float = 1e-3,
     residual_scale: float = 0.25,
     preservation_weight: float = 5.0,
@@ -147,6 +150,7 @@ def optimize_latent(
                 ddpm,
                 t_min=t_min,
                 t_max=t_max,
+                phase_fractions=phase_fractions,
             )
             total = total + sds_weight * prior
             stats["sds"] = (sds_weight * prior).detach()
@@ -238,6 +242,11 @@ def optimize_latent(
             total = total + axis_weight * axis
             stats["axis"] = (axis_weight * axis).detach()
             display["axis"] = axis.detach()
+
+        if axis_mass_weight > 0.0:
+            axis_mass = axis_mass_loss(axis_probabilities)
+            total = total + axis_mass_weight * axis_mass
+            stats["axis_mass"] = (axis_mass_weight * axis_mass).detach()
 
         if continuity_weight > 0.0:
             continuity = continuity_loss(probabilities)

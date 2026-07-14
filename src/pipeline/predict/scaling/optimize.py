@@ -39,6 +39,7 @@ def optimize_large_latent(
     critic_weight: float = 0.0,
     anchor_weight: float = 0.0,
     fraction_targets: Mapping[int, float] | torch.Tensor | None = None,
+    phase_fractions: torch.Tensor | None = None,
     slice_fraction_weight: float = 0.0,
     global_fraction_weight: float = 0.0,
     tpc_targets: Mapping[int, torch.Tensor] | torch.Tensor | None = None,
@@ -159,6 +160,7 @@ def optimize_large_latent(
                 ddpm,
                 t_min=t_min,
                 t_max=t_max,
+                phase_fractions=phase_fractions,
             )
             total = total + sds_weight * prior
             stats["sds"] = (sds_weight * prior).detach()

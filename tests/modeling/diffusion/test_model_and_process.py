@@ -154,6 +154,16 @@ class TimeUNetTest(unittest.TestCase):
 
         self.assertEqual(noise.shape, x.shape)
 
+    def test_null_fraction_embedding_is_learnable(self):
+        model = TimeUNet(latent_ch=4, base_ch=8, time_dim=16, num_phases=3)
+        x = torch.randn(2, 4, 16, 16)
+        t = torch.tensor([0, 1], dtype=torch.long)
+
+        model(x, t).sum().backward()
+
+        self.assertIsNotNone(model.null_fraction_emb.grad)
+        self.assertTrue(torch.isfinite(model.null_fraction_emb.grad).all())
+
     def test_rejects_wrong_latent_shape(self):
         model = TimeUNet(latent_ch=4, base_ch=8, time_dim=16)
 

@@ -30,6 +30,7 @@ joint:
   decode_batch_size: 16
   learning_rate: 0.0003
   axis_weight: 1.0
+  axis_mass_weight: 0.25
   continuity_weight: 0.05
   anchor_weight: 2.0
   residual_scale: 2.0

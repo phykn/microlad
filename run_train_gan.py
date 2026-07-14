@@ -16,6 +16,7 @@ from src.app.runtime import (
     setup_device,
     wrap_distributed,
 )
+from src.pipeline.data import FakeLatentDataset
 
 
 DEFAULT_CONFIG = "config/gan.yaml"
@@ -32,6 +33,8 @@ def parse_args_from_list(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("data.data_dir or data.image_paths is required in the config file")
     if getattr(args, "vae_run_dir", None) is None:
         parser.error("output.vae_run_dir is required in the config file")
+    if getattr(args, "fake_dir", None) is None:
+        parser.error("data.fake_dir is required in the config file")
     apply_gan_defaults(args)
     return args
 
@@ -48,6 +51,8 @@ def main() -> None:
         rank = int(os.environ.get("RANK", "0"))
         dataset = build_dataset(args)
         loader = build_loader(dataset, args, device=device)
+        fake_dataset = FakeLatentDataset(args.fake_dir)
+        fake_loader = build_loader(fake_dataset, args, device=device)
         vae = load_run_vae(args.vae_run_dir, device)
         generator = wrap_distributed(
             build_generator(args).to(device),
@@ -64,6 +69,7 @@ def main() -> None:
             critic,
             vae,
             loader,
+            fake_loader,
             args,
             device,
         )

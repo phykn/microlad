@@ -10,6 +10,7 @@ from src.modeling.diffusion import DDPMProcess
 from src.pipeline.predict.guidance.joint.loss import (
     anchor_loss,
     axis_loss,
+    axis_mass_loss,
     fraction_loss,
 )
 from src.pipeline.predict.guidance.joint.model import LatentRefiner
@@ -90,6 +91,41 @@ class JointOptimizationTest(unittest.TestCase):
         )
 
         self.assertAlmostEqual(float(axis_loss(probabilities)), 0.0, places=6)
+
+    def test_axis_mass_loss_detects_phase_fraction_disagreement(self):
+        probabilities = torch.tensor(
+            [
+                [[[[0.8, 0.8]]], [[[0.2, 0.2]]]],
+                [[[[0.4, 0.4]]], [[[0.6, 0.6]]]],
+                [[[[0.6, 0.6]]], [[[0.4, 0.4]]]],
+            ]
+        )
+        matched = probabilities.mean(dim=0, keepdim=True).repeat(3, 1, 1, 1, 1)
+
+        self.assertGreater(float(axis_mass_loss(probabilities)), 0.0)
+        self.assertEqual(float(axis_mass_loss(matched)), 0.0)
+
+    def test_joint_records_axis_mass_consistency(self):
+        _, history = optimize_latent(
+            torch.zeros(1, 2, 2, 2),
+            IdentityCategoricalVAE(),
+            ZeroNoiseModel(),
+            DDPMProcess(timesteps=4),
+            steps=1,
+            batch_size=1,
+            lr=0.1,
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            sds_weight=0.0,
+            axis_weight=0.0,
+            axis_mass_weight=0.25,
+            continuity_weight=0.0,
+            preservation_weight=0.0,
+        )
+
+        self.assertIn("axis_mass", history)
+        self.assertEqual(history["axis_mass"].shape, torch.Size([1]))
 
     def test_anchor_loss_balances_present_phases(self):
         probabilities = torch.tensor(

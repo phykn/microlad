@@ -132,6 +132,7 @@ class PatchVAE(nn.Module):
         latent_size: int = 16,
         latent_ch: int = 4,
         num_phases: int = 3,
+        phase_embedding_dim: int = 4,
         base_ch: int = 64,
         max_ch: int = 512,
     ) -> None:
@@ -149,10 +150,14 @@ class PatchVAE(nn.Module):
         if num_phases < 2:
             raise ValueError("num_phases must be at least 2.")
 
+        if phase_embedding_dim <= 0:
+            raise ValueError("phase_embedding_dim must be positive.")
+
         self.image_size = image_size
         self.latent_size = latent_size
         self.latent_ch = latent_ch
         self.num_phases = num_phases
+        self.phase_embedding_dim = phase_embedding_dim
         self.downsample_steps = downsample_steps(image_size, latent_size)
         self.downsample_factor = image_size // latent_size
 
@@ -161,7 +166,8 @@ class PatchVAE(nn.Module):
             channels.append(min(base_ch * 2 ** (step + 1), max_ch))
         self.channels = tuple(channels)
 
-        self.conv_in = ConvBlock(1, channels[0])
+        self.phase_embedding = nn.Embedding(num_phases, phase_embedding_dim)
+        self.conv_in = ConvBlock(phase_embedding_dim, channels[0])
         self.down_blocks = nn.ModuleList(
             DownBlock(channels[i], channels[i + 1])
             for i in range(self.downsample_steps)
@@ -195,7 +201,17 @@ class PatchVAE(nn.Module):
                 f"input image size must be {self.image_size}x{self.image_size}."
             )
 
-        h = self.conv_in(x)
+        labels = x[:, 0]
+        if not torch.isfinite(labels).all() or not torch.equal(labels, labels.round()):
+            raise ValueError("input must contain integer phase IDs.")
+        labels = labels.to(torch.long)
+        if labels.min() < 0 or labels.max() >= self.num_phases:
+            raise ValueError(
+                f"input phase IDs must be between 0 and {self.num_phases - 1}."
+            )
+
+        h = self.phase_embedding(labels).permute(0, 3, 1, 2).contiguous()
+        h = self.conv_in(h)
         for block in self.down_blocks:
             h = block(h)
         h = self.enc_mid(h)
