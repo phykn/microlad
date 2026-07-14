@@ -125,11 +125,8 @@ class Predictor:
             else None
         )
         guidance_labels = target_labels
-        if guidance_labels is None and (
-            uses_descriptor_targets(options) or options.critic.weight > 0.0
-        ):
+        if guidance_labels is None and uses_descriptor_targets(options):
             guidance_labels = anchor_labels
-        critic_fraction = self._resolve_fraction(options, guidance_labels)
 
         if volume_size == image_size:
             assert t_max is not None or options.joint.steps == 0
@@ -167,7 +164,6 @@ class Predictor:
                 options=options,
                 anchors=anchors,
                 target_labels=guidance_labels,
-                critic_fraction=critic_fraction,
                 t_max=t_max,
             )
             stats.update(joint_stats)
@@ -291,11 +287,8 @@ class Predictor:
             progress=options.progress,
         ).to(self.device)
         guidance_labels = target_labels
-        if guidance_labels is None and (
-            uses_descriptor_targets(options) or options.critic.weight > 0.0
-        ):
+        if guidance_labels is None and uses_descriptor_targets(options):
             guidance_labels = anchor_labels
-        critic_fraction = self._resolve_fraction(options, guidance_labels)
         stats: dict[str, torch.Tensor | int] = {
             "critic_enabled": torch.tensor(
                 self.critic is not None and options.critic.weight > 0.0,
@@ -309,7 +302,6 @@ class Predictor:
             anchors=anchors,
             target_labels=guidance_labels,
             critic=self.critic,
-            critic_fraction=critic_fraction,
             t_max=(int(self.ddpm.num_timesteps) if t_max is None else t_max),
         )
         stats.update(joint_stats)
@@ -358,7 +350,7 @@ class Predictor:
                 device=self.device,
                 dtype=torch.float32,
             )
-        needs_fraction = options.critic.weight > 0.0 or (
+        needs_fraction = (
             options.targets.slice_fraction_weight > 0.0
             or options.targets.global_fraction_weight > 0.0
         )
@@ -381,7 +373,6 @@ class Predictor:
         anchors: Sequence[AnchorSlice] | None,
         target_labels: torch.Tensor | None,
         critic: LatentCritic | None,
-        critic_fraction: torch.Tensor | None,
         t_max: int,
     ) -> tuple[tuple[torch.Tensor, ...], dict[str, torch.Tensor]]:
         targets = self._build_targets(options, target_labels)
@@ -403,7 +394,6 @@ class Predictor:
             segment_anchors=options.segment_anchors,
             sds_weight=options.prior.weight,
             critic=critic,
-            critic_fraction=critic_fraction,
             critic_weight=options.critic.weight if critic is not None else 0.0,
             anchor_weight=options.joint.anchor_weight if anchors else 0.0,
             fraction_targets=targets.get("fraction_targets"),
@@ -489,7 +479,6 @@ class Predictor:
         options: PredictOptions,
         anchors: Sequence[AnchorSlice] | None,
         target_labels: torch.Tensor | None,
-        critic_fraction: torch.Tensor | None,
         t_max: int,
     ) -> tuple[tuple[torch.Tensor, ...], dict[str, torch.Tensor]]:
         targets = self._build_targets(options, target_labels)
@@ -510,7 +499,6 @@ class Predictor:
             segment_anchors=options.segment_anchors,
             sds_weight=options.prior.weight,
             critic=self.critic,
-            critic_fraction=critic_fraction,
             critic_weight=(
                 options.critic.weight if self.critic is not None else 0.0
             ),

@@ -6,17 +6,17 @@ def critic_loss(
     fake_scores: torch.Tensor,
     penalty: torch.Tensor,
     *,
-    gradient_weight: float = 10.0,
+    gp_weight: float = 10.0,
 ) -> torch.Tensor:
     """Computes the WGAN-GP critic objective."""
-    if gradient_weight < 0.0:
-        raise ValueError("gradient_weight must be non-negative.")
+    if gp_weight < 0.0:
+        raise ValueError("gp_weight must be non-negative.")
     if real_scores.numel() == 0 or fake_scores.numel() == 0:
         raise ValueError("critic scores must not be empty.")
     if penalty.ndim != 0:
         raise ValueError("penalty must be a scalar tensor.")
 
-    return fake_scores.mean() - real_scores.mean() + gradient_weight * penalty
+    return fake_scores.mean() - real_scores.mean() + gp_weight * penalty
 
 
 def guidance_loss(fake_scores: torch.Tensor) -> torch.Tensor:
@@ -30,7 +30,6 @@ def gradient_penalty(
     critic: torch.nn.Module,
     real: torch.Tensor,
     fake: torch.Tensor,
-    fractions: torch.Tensor,
 ) -> torch.Tensor:
     """Penalizes critic gradients along real/fake interpolations."""
     if real.shape != fake.shape:
@@ -41,9 +40,6 @@ def gradient_penalty(
         raise ValueError("real and fake batches must be floating point.")
     if real.device != fake.device:
         raise ValueError("real and fake batches must be on the same device.")
-    if fractions.ndim != 2 or fractions.shape[0] != real.shape[0]:
-        raise ValueError("fractions must contain one condition per sample.")
-
     epsilon = torch.rand(
         real.shape[0],
         1,
@@ -54,7 +50,7 @@ def gradient_penalty(
     )
     mixed = (epsilon * real + (1.0 - epsilon) * fake).requires_grad_(True)
     gradients = torch.autograd.grad(
-        outputs=critic(mixed, fractions).sum(),
+        outputs=critic(mixed).sum(),
         inputs=mixed,
         create_graph=True,
         only_inputs=True,

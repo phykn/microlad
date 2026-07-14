@@ -2,11 +2,9 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import torch
-import torch.nn.functional as F
 from tqdm import tqdm
 
 from src.modeling.critic import critic_loss, gradient_penalty, guidance_loss
-from src.modeling.phases import phase_target_indices
 from src.pipelines.training.misc.distributed import is_main_process, unwrap_model
 from src.pipelines.training.misc.run import log_stats, setup_run_dirs, write_checkpoint
 
@@ -23,8 +21,7 @@ class GANTrainer:
         *,
         steps: int,
         critic_steps: int,
-        gradient_weight: float,
-        fraction_weight: float,
+        gp_weight: float,
         clip_grad_norm: float | None,
         save_every: int,
         device: str | torch.device,
@@ -32,8 +29,8 @@ class GANTrainer:
     ) -> None:
         if steps <= 0 or critic_steps <= 0 or save_every <= 0:
             raise ValueError("training and save counts must be positive.")
-        if gradient_weight < 0.0 or fraction_weight < 0.0:
-            raise ValueError("loss weights must be non-negative.")
+        if gp_weight < 0.0:
+            raise ValueError("gp_weight must be non-negative.")
         if clip_grad_norm is not None and clip_grad_norm <= 0.0:
             raise ValueError("clip_grad_norm must be positive or None.")
 
@@ -51,8 +48,7 @@ class GANTrainer:
         self.critic_optimizer = critic_optimizer
         self.steps = steps
         self.critic_steps = critic_steps
-        self.gradient_weight = gradient_weight
-        self.fraction_weight = fraction_weight
+        self.gp_weight = gp_weight
         self.clip_grad_norm = clip_grad_norm
         self.save_every = save_every
         self.step = 0
@@ -76,30 +72,32 @@ class GANTrainer:
         critic_losses = []
         penalties = []
         margins = []
-        fractions = None
+        batch_size = None
+        latent_dtype = None
 
         for _ in range(self.critic_steps):
             images = self._next_images()
-            fractions = self._fractions(images)
             with torch.no_grad():
                 real, _ = self.vae.encode(images)
+                batch_size = int(real.shape[0])
+                latent_dtype = real.dtype
                 noise = torch.randn(
-                    images.shape[0],
+                    batch_size,
                     int(unwrap_model(self.generator).noise_ch),
                     device=self.device,
-                    dtype=real.dtype,
+                    dtype=latent_dtype,
                 )
-                fake = self.generator(noise, fractions)
+                fake = self.generator(noise)
 
             self.critic_optimizer.zero_grad(set_to_none=True)
-            real_scores = self.critic(real, fractions)
-            fake_scores = self.critic(fake, fractions)
-            penalty = gradient_penalty(self.critic, real, fake, fractions)
+            real_scores = self.critic(real)
+            fake_scores = self.critic(fake)
+            penalty = gradient_penalty(self.critic, real, fake)
             loss = critic_loss(
                 real_scores,
                 fake_scores,
                 penalty,
-                gradient_weight=self.gradient_weight,
+                gp_weight=self.gp_weight,
             )
             if not torch.isfinite(loss):
                 raise RuntimeError("GAN critic produced a non-finite loss.")
@@ -114,22 +112,19 @@ class GANTrainer:
             penalties.append(penalty.detach())
             margins.append((real_scores.mean() - fake_scores.mean()).detach())
 
-        assert fractions is not None
+        assert batch_size is not None and latent_dtype is not None
         for parameter in self.critic.parameters():
             parameter.requires_grad_(False)
         self.generator_optimizer.zero_grad(set_to_none=True)
         noise = torch.randn(
-            fractions.shape[0],
+            batch_size,
             int(unwrap_model(self.generator).noise_ch),
             device=self.device,
-            dtype=fractions.dtype,
+            dtype=latent_dtype,
         )
-        fake = self.generator(noise, fractions)
-        adversarial = guidance_loss(self.critic(fake, fractions))
-        probabilities = self.vae.decode_probs(fake)
-        generated_fractions = probabilities.mean(dim=(2, 3))
-        fraction = F.l1_loss(generated_fractions, fractions)
-        generator_loss = adversarial + self.fraction_weight * fraction
+        fake = self.generator(noise)
+        adversarial = guidance_loss(self.critic(fake))
+        generator_loss = adversarial
         if not torch.isfinite(generator_loss):
             raise RuntimeError("GAN generator produced a non-finite loss.")
         generator_loss.backward()
@@ -149,7 +144,6 @@ class GANTrainer:
             "gradient_penalty": float(torch.stack(penalties).mean().cpu()),
             "generator_loss": float(generator_loss.detach().cpu()),
             "adversarial_loss": float(adversarial.detach().cpu()),
-            "fraction_error": float(fraction.detach().cpu()),
         }
         log_stats(self.writer, stats, self.step)
         self._save()
@@ -192,14 +186,6 @@ class GANTrainer:
                 "batch must be a tensor or a tuple/list whose first item is a tensor."
             )
         return images.to(self.device)
-
-    def _fractions(self, images: torch.Tensor) -> torch.Tensor:
-        indices = phase_target_indices(images, int(self.vae.num_phases))
-        return (
-            F.one_hot(indices, num_classes=int(self.vae.num_phases))
-            .to(dtype=images.dtype)
-            .mean(dim=(1, 2))
-        )
 
     def _save(self) -> None:
         if not self.is_main_process or self.step % self.save_every != 0:

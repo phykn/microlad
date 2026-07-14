@@ -24,11 +24,10 @@ class GANTrainerTest(unittest.TestCase):
         generator = LatentGenerator(
             latent_ch=2,
             latent_size=16,
-            num_phases=2,
             noise_ch=8,
             base_ch=8,
         )
-        critic = LatentCritic(2, 2, base_ch=4)
+        critic = LatentCritic(2, base_ch=4)
         generator_optimizer = torch.optim.Adam(generator.parameters(), lr=1e-4)
         critic_optimizer = torch.optim.Adam(critic.parameters(), lr=1e-4)
         images = torch.zeros(2, 1, 16, 16)
@@ -44,8 +43,7 @@ class GANTrainerTest(unittest.TestCase):
                 critic_optimizer,
                 steps=1,
                 critic_steps=1,
-                gradient_weight=10.0,
-                fraction_weight=5.0,
+                gp_weight=10.0,
                 clip_grad_norm=1.0,
                 save_every=1,
                 device="cpu",
@@ -62,6 +60,7 @@ class GANTrainerTest(unittest.TestCase):
         self.assertTrue(all(torch.isfinite(torch.tensor(value)) for value in stats.values()))
         self.assertIn("generator", checkpoint)
         self.assertIn("critic", checkpoint)
+        self.assertNotIn("fraction_error", stats)
         self.assertEqual(checkpoint["step"], 1)
 
 

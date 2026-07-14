@@ -29,9 +29,9 @@ categorical 2D training images
     -> frozen categorical VAE mean latent
     -> WGAN real latent patches
 
-2D conditional WGAN generator
+2D unconditional WGAN generator
     -> fake latent patches
-    -> phase-conditioned WGAN-GP critic training
+    -> unconditional WGAN-GP critic training
     -> generator and critic checkpoint
 
 frozen 2D diffusion
@@ -74,8 +74,8 @@ VAE, diffusion, WGAN critic weight는 prediction 중 갱신하지 않는다. 예
 ### Critic guidance
 
 - 기존 categorical patch loader와 고정 VAE로 real latent를 만든다.
-- 2D conditional generator와 critic을 SliceGAN 계열 WGAN-GP objective로 사전학습한다.
-- generator와 critic 모두 phase fraction을 조건으로 받는다.
+- 2D unconditional generator와 critic을 SliceGAN 계열 WGAN-GP objective로 사전학습한다.
+- generator는 noise만 받고 critic은 latent slice만 평가한다.
 - GAN run은 VAE checkpoint만 이어받고 generator·critic을 함께 저장한다.
 - prediction은 `predict.yaml`에서 VAE·diffusion·GAN run을 각각 명시해 조합한다.
 - prediction은 generator를 사용하지 않고 critic만 read-only guidance로 사용한다.
@@ -97,13 +97,14 @@ VAE, diffusion, WGAN critic weight는 prediction 중 갱신하지 않는다. 예
 ## Critic 계약
 
 Real은 categorical 2D patch를 고정 VAE posterior mean으로 encode한 latent다. Fake는
-phase fraction과 noise를 입력받은 2D generator의 latent다. Critic은 real과 fake에
-같은 fraction condition을 받아 조성 자체가 아니라 같은 조성에서의 형태 차이를
-평가한다. 입력은 channel별 공간 평균을 제거하고 slice 전체 RMS로 정규화한다.
+noise를 입력받은 2D generator의 latent다. Critic은 phase fraction 조건 없이 real과
+fake의 2D 형태 품질을 평가한다. 입력은 channel별 공간 평균을 제거하고 slice 전체
+RMS로 정규화한다. 목표 phase fraction은 GAN이 아니라 prediction의 global fraction
+loss가 담당한다.
 
 학습은 critic을 `critic_steps`번 갱신한 뒤 generator를 한 번 갱신하는 WGAN-GP다.
-Generator는 adversarial loss와 VAE categorical decode의 fraction loss를 함께 받는다.
-Prediction에서는 두 네트워크를 동시에 갱신하지 않으며 critic을 완전히 고정한다.
+Generator는 adversarial loss만 받는다. Prediction에서는 두 네트워크를 동시에
+갱신하지 않으며 critic을 완전히 고정한다.
 
 ## Exact anchor와 공간 척도
 

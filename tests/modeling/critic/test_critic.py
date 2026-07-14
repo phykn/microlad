@@ -15,43 +15,35 @@ from src.modeling.critic import (
 class LatentCriticTest(unittest.TestCase):
     def test_critic_supports_trained_vae_latent_sizes(self):
         with torch.device("meta"):
-            critic = LatentCritic(latent_ch=8, num_phases=3)
+            critic = LatentCritic(latent_ch=8)
             for size in (16, 20, 24, 32):
                 with self.subTest(size=size):
-                    scores = critic(
-                        torch.empty(2, 8, size, size, device="meta"),
-                        torch.full((2, 3), 1 / 3, device="meta"),
-                    )
+                    scores = critic(torch.empty(2, 8, size, size, device="meta"))
                     self.assertEqual(scores.shape, torch.Size([2, 1]))
 
     def test_critic_rejects_too_small_slices(self):
         with self.assertRaisesRegex(ValueError, "at least 16"):
-            LatentCritic(2, 3)(
-                torch.zeros(1, 2, 15, 15),
-                torch.tensor([[0.2, 0.3, 0.5]]),
-            )
+            LatentCritic(2)(torch.zeros(1, 2, 15, 15))
 
     def test_critic_is_invariant_to_channel_affine_statistics(self):
-        critic = LatentCritic(2, 3, base_ch=4)
+        critic = LatentCritic(2, base_ch=4)
         latent = torch.randn(3, 2, 16, 16)
-        fractions = torch.tensor([[0.2, 0.3, 0.5]]).expand(3, -1)
 
-        original = critic(latent, fractions)
-        shifted = critic(latent * 1.5 + 0.25, fractions)
+        original = critic(latent)
+        shifted = critic(latent * 1.5 + 0.25)
 
         self.assertTrue(torch.allclose(original, shifted, atol=1e-5, rtol=1e-5))
 
     def test_critic_does_not_amplify_nearly_constant_channels(self):
         torch.manual_seed(0)
-        critic = LatentCritic(8, 3, base_ch=4)
+        critic = LatentCritic(8, base_ch=4)
         latent = torch.randn(3, 8, 16, 16) * 1e-6
         latent[:, -1] = torch.randn(3, 16, 16)
         perturbed = latent.clone()
         perturbed[:, :-1] = torch.randn_like(perturbed[:, :-1]) * 1e-6
 
-        fractions = torch.tensor([[0.2, 0.3, 0.5]]).expand(3, -1)
-        original = critic(latent, fractions)
-        changed = critic(perturbed, fractions)
+        original = critic(latent)
+        changed = critic(perturbed)
 
         self.assertTrue(torch.allclose(original, changed, atol=1e-4, rtol=1e-4))
 
@@ -101,38 +93,33 @@ class LatentCriticTest(unittest.TestCase):
         fake = torch.tensor([-1.0])
         penalty = torch.tensor(0.5)
 
-        critic = critic_loss(real, fake, penalty, gradient_weight=2.0)
+        critic = critic_loss(real, fake, penalty, gp_weight=2.0)
         guidance = guidance_loss(fake)
 
         self.assertEqual(float(critic), -2.0)
         self.assertEqual(float(guidance), 1.0)
 
     def test_gradient_penalty_is_finite_and_differentiable(self):
-        critic = LatentCritic(2, 3, base_ch=4)
+        critic = LatentCritic(2, base_ch=4)
         real = torch.randn(2, 2, 16, 16)
         fake = torch.randn_like(real)
-        fractions = torch.tensor([[0.2, 0.3, 0.5]]).expand(2, -1)
 
-        penalty = gradient_penalty(critic, real, fake, fractions)
+        penalty = gradient_penalty(critic, real, fake)
         penalty.backward()
 
         self.assertTrue(torch.isfinite(penalty))
         self.assertTrue(any(parameter.grad is not None for parameter in critic.parameters()))
 
-    def test_generator_creates_conditioned_latent_patches(self):
+    def test_generator_creates_latent_patches_from_noise(self):
         for size in (16, 20, 32):
             with self.subTest(size=size):
                 generator = LatentGenerator(
                     latent_ch=4,
                     latent_size=size,
-                    num_phases=3,
                     noise_ch=8,
                     base_ch=8,
                 )
-                generated = generator(
-                    torch.randn(2, 8),
-                    torch.tensor([[0.2, 0.3, 0.5], [0.4, 0.1, 0.5]]),
-                )
+                generated = generator(torch.randn(2, 8))
 
                 self.assertEqual(generated.shape, torch.Size([2, 4, size, size]))
                 self.assertTrue(torch.isfinite(generated).all())

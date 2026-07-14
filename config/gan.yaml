@@ -9,8 +9,7 @@ model:
   critic_ch: 64
 
 loss:
-  gradient_weight: 10.0
-  fraction_weight: 5.0
+  gp_weight: 10.0
 
 optimization:
   generator_lr: 1.0e-4
@@ -19,7 +18,7 @@ optimization:
   clip_grad_norm: 1.0
 
 training:
-  steps: 50000
+  steps: 25000
   critic_steps: 5
   save_every: 5000
 

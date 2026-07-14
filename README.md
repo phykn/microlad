@@ -162,7 +162,7 @@ volume, stats = predictor.predict(
 )
 ```
 
-Train the phase-conditioned 2D latent WGAN with `run_train_gan.py` after VAE
+Train the unconditional 2D latent WGAN with `run_train_gan.py` after VAE
 training. Its run copies the VAE checkpoint and adds the GAN checkpoint. Prediction
 loads VAE, diffusion, and GAN runs independently from `config/predict.yaml` and uses
 only the frozen critic; the WGAN generator is retained for `03_gan.ipynb` evaluation.
@@ -176,7 +176,7 @@ each axis in one batch on a large-memory GPU.
 Prediction progress is shown by default for L-MPDD sampling, Joint guidance, and
 scale-up guidance. Set `progress: false` in the prediction config to hide every
 progress bar. GAN training reports generator loss, critic loss, margin, gradient
-penalty, and fraction error. Joint reports total loss and active anchor, critic,
+penalty. Joint reports total loss and active anchor, critic,
 and global fraction losses.
 
 Anchors are full 2D slices assigned to a volume axis and index. They are soft

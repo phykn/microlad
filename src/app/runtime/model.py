@@ -30,7 +30,6 @@ def build_generator(args: argparse.Namespace) -> LatentGenerator:
     return LatentGenerator(
         latent_ch=args.latent_ch,
         latent_size=args.latent_size,
-        num_phases=args.num_phases,
         noise_ch=args.noise_ch,
         base_ch=args.generator_ch,
     )
@@ -39,7 +38,6 @@ def build_generator(args: argparse.Namespace) -> LatentGenerator:
 def build_critic(args: argparse.Namespace) -> LatentCritic:
     return LatentCritic(
         latent_ch=args.latent_ch,
-        num_phases=args.num_phases,
         base_ch=args.critic_ch,
     )
 

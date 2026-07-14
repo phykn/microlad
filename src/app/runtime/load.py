@@ -105,7 +105,6 @@ def load_run_generator(
         "gan config",
         "latent_ch",
         "latent_size",
-        "num_phases",
         "noise_ch",
         "generator_ch",
     )
@@ -128,7 +127,6 @@ def load_run_critic(
         config,
         "gan config",
         "latent_ch",
-        "num_phases",
         "critic_ch",
     )
     model = build_critic(argparse.Namespace(**config)).to(device)

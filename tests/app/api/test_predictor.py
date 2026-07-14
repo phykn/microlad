@@ -172,7 +172,6 @@ class PredictorTest(unittest.TestCase):
                 anchors=None,
                 target_labels=None,
                 critic=None,
-                critic_fraction=None,
                 t_max=3,
             )
 
@@ -317,7 +316,6 @@ class PredictorTest(unittest.TestCase):
                 anchors=None,
                 target_labels=torch.zeros(1, 2, 2, dtype=torch.long),
                 critic=None,
-                critic_fraction=None,
                 t_max=3,
             )
 
@@ -435,10 +433,9 @@ class PredictorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "models.gan_run_dir"):
             self.predictor.predict(options, anchors=[anchor])
 
-    def test_pretrained_critic_and_fraction_reach_joint_guidance(self):
+    def test_pretrained_critic_reaches_joint_without_fraction_condition(self):
         options = PredictOptions(
             num_phases=2,
-            phase_fractions=(0.25, 0.75),
             joint=JointConfig(steps=1),
             critic=CriticConfig(weight=0.1),
             refine=RefineConfig(candidates=(0,)),
@@ -469,17 +466,11 @@ class PredictorTest(unittest.TestCase):
             self.predictor.predict(options)
 
         self.assertIs(joint.call_args.kwargs["critic"], critic)
-        self.assertTrue(
-            torch.allclose(
-                joint.call_args.kwargs["critic_fraction"],
-                torch.tensor([0.25, 0.75]),
-            )
-        )
+        self.assertNotIn("critic_fraction", joint.call_args.kwargs)
 
     def test_large_prediction_uses_scale_refinement_not_base_joint(self):
         options = PredictOptions(
             num_phases=2,
-            phase_fractions=(0.25, 0.75),
             critic=CriticConfig(weight=0.1),
             scale=ScaleConfig(steps=1),
             refine=RefineConfig(candidates=(0,)),
@@ -510,12 +501,7 @@ class PredictorTest(unittest.TestCase):
 
         generate.assert_called_once()
         refine.assert_called_once()
-        self.assertTrue(
-            torch.allclose(
-                refine.call_args.kwargs["critic_fraction"],
-                torch.tensor([0.25, 0.75]),
-            )
-        )
+        self.assertNotIn("critic_fraction", refine.call_args.kwargs)
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
         self.assertIn("final_phase_fraction", stats)
 
