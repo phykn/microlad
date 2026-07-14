@@ -1,7 +1,7 @@
 models:
-  vae_run_dir: run/20260714-032419-015034
-  diffusion_run_dir: run/20260714-050533-017623
-  gan_run_dir: run/20260714-163017-030235
+  vae_run_dir: run/20260714-202424-225286
+  diffusion_run_dir: run/20260714-204642-744006
+  gan_run_dir: run/20260714-212941-630628
 
 progress: true
 phase_fractions: null

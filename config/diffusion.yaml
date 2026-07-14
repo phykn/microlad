@@ -18,11 +18,11 @@ optimization:
   clip_grad_norm: 1.0
 
 training:
-  steps: 50000
-  save_every: 5000
+  steps: 10000
+  save_every: 1000
   ema_decay: 0.9999
   condition_dropout: 0.1
 
 output:
-  vae_run_dir: run/20260714-032419-015034
+  vae_run_dir: run/20260714-202424-225286
   run_root: run

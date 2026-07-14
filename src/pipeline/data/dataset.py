@@ -105,7 +105,9 @@ def generate_lmpdd_fakes(
     vae: torch.nn.Module,
     output_dir: str | Path,
     *,
+    condition_dataset: Dataset,
     num_volumes: int,
+    unconditional_ratio: float = 0.1,
     progress: bool = True,
 ) -> list[Path]:
     """Generate individual 3D L-MPDD latent files for critic training."""
@@ -114,6 +116,14 @@ def generate_lmpdd_fakes(
         raise ValueError("num_volumes must be positive.")
     if not isinstance(progress, bool):
         raise ValueError("progress must be a boolean.")
+    if (
+        not isinstance(unconditional_ratio, (int, float))
+        or isinstance(unconditional_ratio, bool)
+        or not 0.0 <= unconditional_ratio <= 1.0
+    ):
+        raise ValueError("unconditional_ratio must be between 0 and 1.")
+    if len(condition_dataset) == 0:
+        raise ValueError("condition_dataset must not be empty.")
 
     latent_ch = int(vae.latent_ch)
     latent_size = int(vae.latent_size)
@@ -125,8 +135,21 @@ def generate_lmpdd_fakes(
     if existing := next((path for path in paths if path.exists()), None):
         raise FileExistsError(f"critic fake already exists: {existing}")
 
-    for path in tqdm(paths, desc="critic fakes", disable=not progress):
-        latent = sampler.sample_lmpdd(shape, progress=False)
+    unconditional_count = round(num_volumes * unconditional_ratio)
+    if 0.0 < unconditional_ratio < 1.0 and num_volumes > 1:
+        unconditional_count = min(max(unconditional_count, 1), num_volumes - 1)
+    for index, path in enumerate(
+        tqdm(paths, desc="critic fakes", disable=not progress)
+    ):
+        phase_fractions = None
+        if index >= unconditional_count:
+            sample_index = int(torch.randint(len(condition_dataset), (1,)).item())
+            _, phase_fractions = condition_dataset[sample_index]
+        latent = sampler.sample_lmpdd(
+            shape,
+            progress=False,
+            phase_fractions=phase_fractions,
+        )
         if (
             latent.shape != shape
             or not latent.is_floating_point()

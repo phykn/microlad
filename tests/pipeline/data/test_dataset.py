@@ -24,10 +24,19 @@ class TinyLatentVAE(torch.nn.Module):
 class RandomSampler:
     def __init__(self) -> None:
         self.shapes = []
+        self.phase_fractions = []
 
-    def sample_lmpdd(self, shape, *, progress=False):
+    def sample_lmpdd(self, shape, *, progress=False, phase_fractions=None):
         self.shapes.append((tuple(shape), progress))
+        self.phase_fractions.append(
+            None if phase_fractions is None else phase_fractions.clone()
+        )
         return torch.randn(shape)
+
+
+CONDITION_DATASET = [
+    (torch.zeros(1, 2, 2), torch.tensor([0.25, 0.75])),
+]
 
 
 class PatchDatasetTest(unittest.TestCase):
@@ -299,24 +308,51 @@ class CriticFakeDataTest(unittest.TestCase):
             sampler = RandomSampler()
             paths = generate_lmpdd_fakes(
                 sampler, TinyLatentVAE(), output,
-                num_volumes=2, progress=False,
+                condition_dataset=CONDITION_DATASET,
+                num_volumes=2, unconditional_ratio=0.0, progress=False,
             )
             first = torch.load(output / "00000.pt", weights_only=True)
 
         self.assertEqual(paths, [output / "00000.pt", output / "00001.pt"])
         self.assertEqual(first.shape, torch.Size([2, 3, 3, 3]))
         self.assertEqual(sampler.shapes, [((3, 2, 3, 3), False)] * 2)
+        self.assertTrue(
+            all(
+                torch.equal(value, torch.tensor([0.25, 0.75]))
+                for value in sampler.phase_fractions
+            )
+        )
+
+    def test_mixes_unconditional_and_conditioned_lmpdd_latents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sampler = RandomSampler()
+            generate_lmpdd_fakes(
+                sampler,
+                TinyLatentVAE(),
+                Path(tmp) / "fake",
+                condition_dataset=CONDITION_DATASET,
+                num_volumes=2,
+                unconditional_ratio=0.1,
+                progress=False,
+            )
+
+        self.assertIsNone(sampler.phase_fractions[0])
+        self.assertTrue(
+            torch.equal(sampler.phase_fractions[1], torch.tensor([0.25, 0.75]))
+        )
 
     def test_existing_fake_is_not_overwritten(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "fake"
             generate_lmpdd_fakes(
                 RandomSampler(), TinyLatentVAE(), output,
+                condition_dataset=CONDITION_DATASET,
                 num_volumes=1, progress=False,
             )
             with self.assertRaisesRegex(FileExistsError, "already exists"):
                 generate_lmpdd_fakes(
                     RandomSampler(), TinyLatentVAE(), output,
+                    condition_dataset=CONDITION_DATASET,
                     num_volumes=1, progress=False,
                 )
 
@@ -325,6 +361,7 @@ class CriticFakeDataTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "num_volumes"):
                 generate_lmpdd_fakes(
                     RandomSampler(), TinyLatentVAE(), Path(tmp) / "fake",
+                    condition_dataset=CONDITION_DATASET,
                     num_volumes=0, progress=False,
                 )
 

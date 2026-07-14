@@ -13,6 +13,8 @@ class GenerateCriticFakesEntrypointTest(unittest.TestCase):
         config = load_config(args.config)
 
         self.assertEqual(config["num_volumes"], 500)
+        self.assertEqual(config["data_dir"], "data")
+        self.assertEqual(config["unconditional_ratio"], 0.1)
 
     def test_rejects_invalid_count_before_model_loading(self):
         values = {
@@ -20,8 +22,10 @@ class GenerateCriticFakesEntrypointTest(unittest.TestCase):
                 "vae_run_dir": "run/vae",
                 "diffusion_run_dir": "run/diffusion",
             },
+            "data": {"data_dir": "data"},
             "generation": {
                 "num_volumes": 0,
+                "unconditional_ratio": 0.1,
                 "progress": False,
             },
         }

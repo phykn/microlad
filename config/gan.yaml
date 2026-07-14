@@ -19,10 +19,10 @@ optimization:
   clip_grad_norm: 1.0
 
 training:
-  steps: 25000
+  steps: 10000
   critic_steps: 5
-  save_every: 5000
+  save_every: 1000
 
 output:
-  vae_run_dir: run/20260714-032419-015034
+  vae_run_dir: run/20260714-202424-225286
   run_root: run
