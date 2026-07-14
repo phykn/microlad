@@ -2,7 +2,7 @@ import argparse
 
 import torch
 
-from src.modeling.critic import LatentCritic, LatentGenerator
+from src.modeling.latent_gan import LatentCritic, LatentGenerator
 from src.modeling.diffusion import DDPMProcess, TimeUNet
 from src.modeling.vae import PatchVAE
 

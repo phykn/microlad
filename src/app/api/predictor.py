@@ -12,32 +12,31 @@ from src.app.api.prepare import (
     uses_descriptor_targets,
 )
 from src.modeling.diffusion import DDPMProcess, DiffusionSampler, TimeUNet
-from src.modeling.critic import LatentCritic
+from src.modeling.latent_gan import LatentCritic
 from src.modeling.phases.quantization import quantize_phase
 from src.modeling.vae import PatchVAE, get_downsample_factor
-from src.pipelines.guidance.conditioning.images import prepare_volume_anchors
-from src.pipelines.guidance.conditioning.latents import encode_anchors
-from src.pipelines.guidance.conditioning.model import AnchorSlice, VolumeAnchor
-from src.pipelines.guidance.conditioning.prepare import build_volume_anchor_mask
-from src.pipelines.guidance.conditioning.targets import (
+from src.pipeline.predict.guidance.conditioning.images import prepare_volume_anchors
+from src.pipeline.predict.guidance.conditioning.latents import encode_anchors
+from src.pipeline.predict.guidance.conditioning.model import AnchorSlice, VolumeAnchor
+from src.pipeline.predict.guidance.conditioning.prepare import build_volume_anchor_mask
+from src.pipeline.predict.guidance.conditioning.targets import (
     DescriptorTargets,
     build_descriptor_targets,
     prepare_target_images,
 )
-from src.pipelines.finalize.select import (
-    select_latent_volume,
-    select_probability_volume,
-)
-from src.pipelines.guidance.joint.optimize import optimize_latent
-from src.pipelines.reconstruction.volume import sample_latent
-from src.pipelines.scaling.conditioning import (
+from src.pipeline.predict.guidance.metrics.diagnostics import evaluate_phase_volume
+from src.pipeline.predict.guidance.joint.optimize import optimize_latent
+from src.pipeline.predict.reconstruction.refine import refine_probabilities
+from src.pipeline.predict.reconstruction.volume import decode_volume_probs, sample_latent
+from src.pipeline.predict.scaling.conditioning import (
     center_start,
     encode_scale_anchors,
 )
-from src.pipelines.scaling.decoding import decode_large_volume_probabilities
-from src.pipelines.scaling.optimize import optimize_large_latent
-from src.pipelines.scaling.refine import refine_large_probabilities
-from src.pipelines.scaling.sampling import sample_large_lmpdd
+from src.pipeline.predict.scaling.decoding import decode_large_volume_probabilities
+from src.pipeline.predict.scaling.optimize import optimize_large_latent
+from src.pipeline.predict.scaling.refine import refine_large_probabilities
+from src.pipeline.predict.scaling.sampling import sample_large_lmpdd
+from src.pipeline.predict.scaling.tiles import tile_grid
 
 
 class Predictor:
@@ -76,7 +75,7 @@ class Predictor:
         anchors: Sequence[AnchorSlice] | None = None,
         target_images: Sequence[np.ndarray] | None = None,
         volume_size: int | None = None,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor | int]]:
+    ) -> tuple[torch.Tensor, dict[str, object]]:
         """Generates a categorical 3D volume.
 
         Args:
@@ -103,7 +102,7 @@ class Predictor:
                 segment=options.targets.segment,
             )
         )
-        volume_size, _, t_max = prepare_prediction(
+        volume_size, descriptor_tile_size, t_max = prepare_prediction(
             options,
             anchors,
             target_labels,
@@ -151,7 +150,7 @@ class Predictor:
             options=options,
             anchors=anchors,
         )
-        stats: dict[str, torch.Tensor | int] = dict(base_stats)
+        stats: dict[str, object] = dict(base_stats)
         stats["critic_enabled"] = torch.tensor(
             self.critic is not None and options.critic.weight > 0.0,
             device=self.device,
@@ -159,20 +158,20 @@ class Predictor:
 
         if options.scale.steps > 0:
             assert t_max is not None
-            latent_candidates, joint_stats = self._refine_large(
+            final_latent, scale_history = self._refine_large(
                 latent,
                 options=options,
                 anchors=anchors,
                 target_labels=guidance_labels,
+                descriptor_tile_size=descriptor_tile_size,
                 t_max=t_max,
             )
-            stats.update(joint_stats)
-            scale_steps = joint_stats["scale_candidate_steps"].tolist()
+            stats["scale_history"] = scale_history
         else:
-            latent_candidates = (latent,)
-            scale_steps = [0]
-            stats["scale_steps"] = torch.tensor(0, device=self.device)
-            stats["scale_candidate_steps"] = torch.tensor([0], device=self.device)
+            final_latent = latent
+            stats["scale_history"] = {
+                "step": torch.empty(0, device=self.device, dtype=torch.long)
+            }
 
         reference_labels = target_labels if target_labels is not None else anchor_labels
         references = (
@@ -191,66 +190,38 @@ class Predictor:
             volume_anchors,
             device=self.device,
         )
-        base_std = latent_candidates[0].std().clamp_min(1e-6)
-        probability_candidates = []
-        candidate_steps = []
-        refine_steps = []
-        candidate_deltas = []
-        for scale_step, candidate in zip(
-            scale_steps,
-            latent_candidates,
-            strict=True,
-        ):
-            probabilities = decode_large_volume_probabilities(
-                self.vae,
-                candidate,
-                tile_overlap=_tile_overlap(
-                    int(self.vae.latent_size),
-                    options.scale.overlap,
-                ),
-                batch_size=options.scale.decode_batch_size,
-            )
-            refined = refine_large_probabilities(
+        probabilities = decode_large_volume_probabilities(
+            self.vae,
+            final_latent,
+            tile_overlap=_tile_overlap(
+                int(self.vae.latent_size),
+                options.scale.overlap,
+            ),
+            batch_size=options.scale.decode_batch_size,
+        )
+        if options.refine.enabled:
+            probabilities = refine_large_probabilities(
                 probabilities,
                 self.vae,
-                candidates=options.refine.candidates,
                 tile_overlap=_tile_overlap(image_size, options.scale.overlap),
                 tile_batch_size=options.scale.decode_batch_size,
                 strength=options.refine.strength,
                 anchor_strength=options.refine.anchor_strength,
                 anchor_mask=anchor_mask,
             )
-            delta = (candidate - latent_candidates[0]).square().mean().sqrt() / base_std
-            for steps, values in zip(
-                options.refine.candidates,
-                refined,
-                strict=True,
-            ):
-                probability_candidates.append(values)
-                candidate_steps.append(int(scale_step))
-                refine_steps.append(int(steps))
-                candidate_deltas.append(delta)
-
-        volume, final_stats = select_probability_volume(
-            probability_candidates,
-            candidate_steps=candidate_steps,
-            refine_steps=refine_steps,
+        volume = probabilities.argmax(dim=1)[0].float()
+        final_stats = evaluate_phase_volume(
+            volume,
             num_phases=options.num_phases,
-            target_fraction=target_fraction,
-            phase_fraction_tolerance=options.phase_fraction_tolerance,
-            anchors=volume_anchors,
             references=references,
-            quality=options.quality,
-            candidate_deltas=candidate_deltas,
+            target_fraction=target_fraction,
+            anchors=volume_anchors,
         )
-        stats.update(final_stats)
-        if "quality_passed" in final_stats and not bool(final_stats["quality_passed"]):
-            warnings.warn(
-                "prediction returned the least-violation candidate; "
-                "inspect quality_* statistics.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+        stats.update({f"final_{name}": value for name, value in final_stats.items()})
+        stats["refine_applied"] = torch.tensor(
+            options.refine.enabled,
+            device=self.device,
+        )
         return quantize_phase(volume, options.num_phases), stats
 
     def _predict_base(
@@ -261,7 +232,7 @@ class Predictor:
         volume_anchors: Sequence[VolumeAnchor],
         target_labels: torch.Tensor | None,
         t_max: int | None,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor | int]]:
+    ) -> tuple[torch.Tensor, dict[str, object]]:
         anchor_labels = (
             torch.stack([anchor.image for anchor in volume_anchors])
             if volume_anchors
@@ -289,14 +260,14 @@ class Predictor:
         guidance_labels = target_labels
         if guidance_labels is None and uses_descriptor_targets(options):
             guidance_labels = anchor_labels
-        stats: dict[str, torch.Tensor | int] = {
+        stats: dict[str, object] = {
             "critic_enabled": torch.tensor(
                 self.critic is not None and options.critic.weight > 0.0,
                 device=self.device,
             )
         }
 
-        candidates, joint_stats = self._run_joint(
+        final_latent, joint_history = self._run_joint(
             latent,
             options=options,
             anchors=anchors,
@@ -304,7 +275,7 @@ class Predictor:
             critic=self.critic,
             t_max=(int(self.ddpm.num_timesteps) if t_max is None else t_max),
         )
-        stats.update(joint_stats)
+        stats["joint_history"] = joint_history
         target_fraction = self._resolve_fraction(options, guidance_labels)
         reference_labels = target_labels if target_labels is not None else anchor_labels
         reference_probabilities = (
@@ -317,26 +288,38 @@ class Predictor:
             .movedim(-1, 1)
             .float()
         )
-        volume, final_stats = select_latent_volume(
+        probabilities = decode_volume_probs(
             self.vae,
-            candidates,
-            candidate_steps=joint_stats["joint_candidate_steps"].tolist(),
+            final_latent,
             num_phases=options.num_phases,
-            target_fraction=target_fraction,
-            phase_fraction_tolerance=options.phase_fraction_tolerance,
-            anchors=volume_anchors,
-            references=reference_probabilities,
-            refine=options.refine,
-            quality=options.quality,
         )
-        stats.update(final_stats)
-        if "quality_passed" in final_stats and not bool(final_stats["quality_passed"]):
-            warnings.warn(
-                "prediction returned the least-violation candidate; "
-                "inspect quality_* statistics.",
-                RuntimeWarning,
-                stacklevel=2,
+        if options.refine.enabled:
+            probabilities = refine_probabilities(
+                probabilities,
+                self.vae,
+                steps=1,
+                batch_size=options.refine.batch_size,
+                strength=options.refine.strength,
+                anchor_strength=options.refine.anchor_strength,
+                anchor_mask=build_volume_anchor_mask(
+                    tuple(map(int, probabilities.shape[2:])),
+                    volume_anchors,
+                    device=self.device,
+                ),
             )
+        volume = probabilities.argmax(dim=1)[0].float()
+        final_stats = evaluate_phase_volume(
+            volume,
+            num_phases=options.num_phases,
+            references=reference_probabilities,
+            target_fraction=target_fraction,
+            anchors=volume_anchors,
+        )
+        stats.update({f"final_{name}": value for name, value in final_stats.items()})
+        stats["refine_applied"] = torch.tensor(
+            options.refine.enabled,
+            device=self.device,
+        )
         return quantize_phase(volume, options.num_phases), stats
 
     def _resolve_fraction(
@@ -374,7 +357,7 @@ class Predictor:
         target_labels: torch.Tensor | None,
         critic: LatentCritic | None,
         t_max: int,
-    ) -> tuple[tuple[torch.Tensor, ...], dict[str, torch.Tensor]]:
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         targets = self._build_targets(options, target_labels)
         solver = targets.get("diffusivity_solver")
 
@@ -410,7 +393,6 @@ class Predictor:
             continuity_weight=options.joint.continuity_weight,
             residual_scale=options.joint.residual_scale,
             preservation_weight=options.joint.preservation_weight,
-            checkpoint_every=options.joint.checkpoint_every,
             progress=options.progress,
         )
 
@@ -479,9 +461,14 @@ class Predictor:
         options: PredictOptions,
         anchors: Sequence[AnchorSlice] | None,
         target_labels: torch.Tensor | None,
+        descriptor_tile_size: int | None,
         t_max: int,
-    ) -> tuple[tuple[torch.Tensor, ...], dict[str, torch.Tensor]]:
-        targets = self._build_targets(options, target_labels)
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        targets = self._build_targets(
+            options,
+            target_labels,
+            descriptor_tile_size=descriptor_tile_size,
+        )
         solver = targets.get("diffusivity_solver")
 
         return optimize_large_latent(
@@ -516,7 +503,6 @@ class Predictor:
             continuity_weight=options.scale.continuity_weight,
             preservation_weight=options.scale.preservation_weight,
             residual_scale=options.scale.residual_scale,
-            checkpoint_every=options.scale.checkpoint_every,
             decode_batch_size=options.scale.decode_batch_size,
             tile_overlap=_tile_overlap(
                 int(self.vae.latent_size),
@@ -529,25 +515,40 @@ class Predictor:
         self,
         options: PredictOptions,
         target_labels: torch.Tensor | None,
+        *,
+        descriptor_tile_size: int | None = None,
     ) -> DescriptorTargets:
         targets: DescriptorTargets = {}
+        needs_reference_fraction = (
+            (
+                options.targets.slice_fraction_weight > 0.0
+                or options.targets.global_fraction_weight > 0.0
+            )
+            and options.phase_fractions is None
+        )
         if uses_descriptor_targets(options):
+            descriptor_labels = _tile_descriptor_labels(
+                target_labels,
+                tile_size=descriptor_tile_size,
+            )
             targets.update(
                 build_descriptor_targets(
-                    target_labels,
+                    descriptor_labels,
                     num_phases=options.num_phases,
-                    use_fraction=(
-                        (
-                            options.targets.slice_fraction_weight > 0.0
-                            or options.targets.global_fraction_weight > 0.0
-                        )
-                        and options.phase_fractions is None
-                    ),
+                    use_fraction=False,
                     use_tpc=options.targets.tpc_weight > 0.0,
                     use_sa=options.targets.surface_area_weight > 0.0,
                     use_diffusivity=options.targets.diffusivity_weight > 0.0,
                     diffusivity_grid_size=options.targets.diffusivity_grid_size,
                     low_phase_conductivity=options.targets.low_phase_conductivity,
+                )
+            )
+        if needs_reference_fraction:
+            targets.update(
+                build_descriptor_targets(
+                    target_labels,
+                    num_phases=options.num_phases,
+                    use_fraction=True,
                 )
             )
         if options.phase_fractions is not None:
@@ -566,3 +567,29 @@ def _tile_overlap(tile_size: int, ratio: float) -> int:
     if tile_size <= 1 or ratio == 0.0:
         return 0
     return max(int(tile_size * ratio), 1)
+
+
+def _tile_descriptor_labels(
+    labels: torch.Tensor | None,
+    *,
+    tile_size: int | None,
+) -> torch.Tensor | None:
+    if labels is None or tile_size is None:
+        return labels
+    height, width = map(int, labels.shape[-2:])
+    if (height, width) == (tile_size, tile_size):
+        return labels
+    if height < tile_size or width < tile_size:
+        raise ValueError("descriptor target images must contain one full tile.")
+    return torch.stack(
+        [
+            image[row : row + tile_size, col : col + tile_size]
+            for image in labels
+            for row, col in tile_grid(
+                height,
+                width,
+                tile_size=tile_size,
+                overlap=0,
+            )
+        ]
+    )

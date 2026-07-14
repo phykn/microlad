@@ -6,7 +6,7 @@ import torch
 from src.app.runtime.model import build_ddpm
 from src.modeling.diffusion import DiffusionLoss
 from src.modeling.vae import VAELoss
-from src.pipelines.training import DiffusionTrainer, GANTrainer, VAETrainer
+from src.pipeline.train import DiffusionTrainer, GANTrainer, VAETrainer
 
 
 def build_optimizer(

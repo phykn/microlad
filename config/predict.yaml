@@ -1,12 +1,10 @@
 models:
   vae_run_dir: run/20260714-032419-015034
   diffusion_run_dir: run/20260714-050533-017623
-  # Set this to the run created by run_train_gan.py.
-  gan_run_dir: null
+  gan_run_dir: run/20260714-163017-030235
 
 progress: true
 phase_fractions: null
-phase_fraction_tolerance: 0.01
 segment_anchors: false
 
 prior:
@@ -36,7 +34,6 @@ joint:
   anchor_weight: 2.0
   residual_scale: 2.0
   preservation_weight: 1.0
-  checkpoint_every: 100
 
 critic:
   weight: 0.1
@@ -52,17 +49,9 @@ scale:
   continuity_weight: 0.05
   preservation_weight: 1.0
   residual_scale: 2.0
-  checkpoint_every: 100
 
 refine:
-  candidates: [0, 1, 2]
+  enabled: true
   batch_size: 16
   strength: 0.15
   anchor_strength: 0.05
-
-quality:
-  anchor_tolerance: 0.125
-  morphology_tolerance: 0.05
-  continuity_tolerance: 0.08
-  repeat_tolerance: 0.0
-  calibration_budget: 0.05

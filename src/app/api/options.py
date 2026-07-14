@@ -136,7 +136,6 @@ class JointConfig:
         anchor_weight: Weight of exact decoded anchor conditioning.
         residual_scale: Maximum residual in channel standard deviations.
         preservation_weight: Weight keeping the result close to L-MPDD.
-        checkpoint_every: Interval between candidate checkpoints.
     """
 
     steps: int = 0
@@ -150,7 +149,6 @@ class JointConfig:
 
     residual_scale: float = 0.25
     preservation_weight: float = 5.0
-    checkpoint_every: int = 100
 
     def __post_init__(self) -> None:
         require_int("steps", self.steps)
@@ -174,9 +172,6 @@ class JointConfig:
         ):
             _require_non_negative(name, getattr(self, name))
         _require_positive("residual_scale", self.residual_scale)
-        _require_non_negative_int("checkpoint_every", self.checkpoint_every)
-        if self.checkpoint_every == 0:
-            raise ValueError("checkpoint_every must be positive.")
 
 
 @dataclass(frozen=True)
@@ -208,7 +203,6 @@ class ScaleConfig:
         continuity_weight: Weight preserving three-axis latent continuity.
         preservation_weight: Weight keeping the result near the initial L-MPDD.
         residual_scale: Maximum residual in latent channel standard deviations.
-        checkpoint_every: Interval between scale-up candidate checkpoints.
     """
 
     overlap: float = 0.25
@@ -221,7 +215,6 @@ class ScaleConfig:
     continuity_weight: float = 0.05
     preservation_weight: float = 1.0
     residual_scale: float = 2.0
-    checkpoint_every: int = 100
 
     def __post_init__(self) -> None:
         require_finite_number("overlap", self.overlap)
@@ -243,69 +236,32 @@ class ScaleConfig:
         ):
             _require_non_negative(name, getattr(self, name))
         _require_positive("residual_scale", self.residual_scale)
-        _require_non_negative_int("checkpoint_every", self.checkpoint_every)
-        if self.checkpoint_every == 0:
-            raise ValueError("checkpoint_every must be positive.")
 
 
 @dataclass(frozen=True)
 class RefineConfig:
-    """Configures categorical VAE refinement candidates.
+    """Configures one optional categorical VAE refinement pass.
 
     Attributes:
-        candidates: Refinement sweep counts evaluated after latent optimization.
+        enabled: Whether to apply one categorical VAE refinement pass.
         batch_size: Maximum number of base-volume slices decoded together.
         strength: Blend weight of each categorical projection.
         anchor_strength: Blend weight used inside anchor footprints.
     """
 
-    candidates: tuple[int, ...] = (0, 1, 2)
+    enabled: bool = True
     batch_size: int = 16
     strength: float = 0.15
     anchor_strength: float = 0.05
 
     def __post_init__(self) -> None:
-        if not isinstance(self.candidates, tuple) or not self.candidates:
-            raise ValueError("candidates must be a non-empty tuple.")
-        normalized = []
-        for index, steps in enumerate(self.candidates):
-            _require_non_negative_int(f"candidates[{index}]", steps)
-            normalized.append(int(steps))
-        object.__setattr__(self, "candidates", tuple(dict.fromkeys(normalized)))
+        if not isinstance(self.enabled, bool):
+            raise ValueError("enabled must be a boolean.")
         _require_non_negative_int("batch_size", self.batch_size)
         if self.batch_size == 0:
             raise ValueError("batch_size must be positive.")
         _require_unit_interval("strength", self.strength)
         _require_unit_interval("anchor_strength", self.anchor_strength)
-
-
-@dataclass(frozen=True)
-class QualityConfig:
-    """Configures final candidate feasibility checks.
-
-    Attributes:
-        anchor_tolerance: Maximum mismatch allowed for any anchor.
-        morphology_tolerance: Maximum transition or run-profile error.
-        continuity_tolerance: Maximum global boundary-profile jump.
-        repeat_tolerance: Maximum exact adjacent-slice repetition rate.
-        calibration_budget: Maximum voxel fraction changed by calibration.
-    """
-
-    anchor_tolerance: float = 0.08
-    morphology_tolerance: float = 0.05
-    continuity_tolerance: float = 0.08
-    repeat_tolerance: float = 0.0
-    calibration_budget: float = 0.05
-
-    def __post_init__(self) -> None:
-        for name in (
-            "anchor_tolerance",
-            "morphology_tolerance",
-            "continuity_tolerance",
-            "repeat_tolerance",
-            "calibration_budget",
-        ):
-            _require_unit_interval(name, getattr(self, name))
 
 
 @dataclass(frozen=True)
@@ -315,21 +271,18 @@ class PredictOptions:
     Attributes:
         num_phases: Number of categorical material phases.
         phase_fractions: Desired global fraction of each phase, ordered by label.
-        phase_fraction_tolerance: Allowed fraction error after final calibration.
         segment_anchors: Whether to segment anchor images before conditioning.
         progress: Whether to show prediction progress bars.
         prior: Diffusion prior used during latent refinement.
         targets: Losses derived from reference images.
         joint: Full-volume joint optimization settings.
         critic: Pretrained latent critic guidance used by Joint and scale-up.
-        quality: Final candidate feasibility settings.
         scale: Tiled scale-up settings.
         refine: Optional VAE refinement settings.
     """
 
     num_phases: int
     phase_fractions: Sequence[float] | None = None
-    phase_fraction_tolerance: float = 0.01
 
     segment_anchors: bool = False
     progress: bool = True
@@ -339,7 +292,6 @@ class PredictOptions:
     critic: CriticConfig = field(default_factory=CriticConfig)
     scale: ScaleConfig = field(default_factory=ScaleConfig)
     refine: RefineConfig = field(default_factory=RefineConfig)
-    quality: QualityConfig = field(default_factory=QualityConfig)
 
     def __post_init__(self) -> None:
         require_int("num_phases", self.num_phases)
@@ -362,12 +314,6 @@ class PredictOptions:
             if abs(sum(fractions) - 1.0) > 1e-4:
                 raise ValueError("phase_fractions must sum to one.")
             object.__setattr__(self, "phase_fractions", tuple(map(float, fractions)))
-        require_finite_number(
-            "phase_fraction_tolerance",
-            self.phase_fraction_tolerance,
-        )
-        if self.phase_fraction_tolerance < 0.0 or self.phase_fraction_tolerance > 1.0:
-            raise ValueError("phase_fraction_tolerance must be between 0 and 1.")
         if not isinstance(self.segment_anchors, bool):
             raise ValueError("segment_anchors must be a boolean.")
         if not isinstance(self.progress, bool):
@@ -379,7 +325,6 @@ class PredictOptions:
             ("critic", self.critic, CriticConfig),
             ("scale", self.scale, ScaleConfig),
             ("refine", self.refine, RefineConfig),
-            ("quality", self.quality, QualityConfig),
         ):
             if not isinstance(value, expected):
                 raise TypeError(f"{name} must be {expected.__name__}.")

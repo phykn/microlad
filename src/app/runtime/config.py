@@ -7,7 +7,6 @@ from src.app.api.options import (
     CriticConfig,
     JointConfig,
     PriorConfig,
-    QualityConfig,
     RefineConfig,
     ScaleConfig,
     TargetConfig,
@@ -103,11 +102,9 @@ def load_predict_config(
         "critic": CriticConfig,
         "scale": ScaleConfig,
         "refine": RefineConfig,
-        "quality": QualityConfig,
     }
     root_settings = {
         "phase_fractions",
-        "phase_fraction_tolerance",
         "progress",
         "segment_anchors",
     }
@@ -133,8 +130,6 @@ def load_predict_config(
         if not isinstance(section, dict):
             raise ValueError(f"prediction config {name} must contain a mapping.")
         section = dict(section)
-        if name == "refine" and "candidates" in section:
-            section["candidates"] = tuple(section["candidates"])
         try:
             config[name] = cls(**section)
         except TypeError as exc:

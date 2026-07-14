@@ -12,7 +12,7 @@ The source tree has four ownership layers:
 
 - `common`: shared image, neural, and tensor utilities
 - `modeling`: phase representation, VAE, and diffusion models
-- `pipelines`: data, training, reconstruction, guidance, and scale-up workflows
+- `pipeline`: shared `data`, model `train`, and volume `predict` workflows
 - `app`: prediction API, configuration, loading, and object construction
 
 ## Install
@@ -45,6 +45,7 @@ such as `from src.app.runtime import load_predictor` resolve.
 - Diffusion checkpoints store an exponential moving average of the online model.
   `training.ema_decay` controls the update and does not change the fixed step or
   checkpoint schedule.
+- Final Refine is controlled only by `refine.enabled`; when enabled it runs once.
 
 ## Test
 
@@ -167,7 +168,7 @@ training. Its run copies the VAE checkpoint and adds the GAN checkpoint. Predict
 loads VAE, diffusion, and GAN runs independently from `config/predict.yaml` and uses
 only the frozen critic; the WGAN generator is retained for `03_gan.ipynb` evaluation.
 `config/predict.yaml` controls the critic guidance weight along with the L-MPDD prior,
-latent refinement, final quality gates, and scale-up settings.
+latent refinement, optional one-pass Refine, and scale-up settings.
 
 `joint.decode_batch_size` controls decoder memory use. Keep a positive batch size
 for chunked decoding with gradient checkpointing, or set it to `null` to decode
@@ -186,8 +187,8 @@ Multiple-axis anchor intersections must request compatible categorical labels.
 For scale-up, pass a larger `volume_size`; the `scale` section controls tiled
 L-MPDD sampling and one shared 3D latent residual. Guidance samples balanced
 latent crops from all three axes, so it never optimizes or overwrites scalar phase
-label slices. The initial L-MPDD latent and periodic scale checkpoints are all kept
-as final candidates. Scale anchors use the same tiled tri-axis probability consensus
+label slices. The final scale-optimized latent is decoded directly. Scale anchors use
+the same tiled tri-axis probability consensus
 as final decoding, sampled over anchors and image regions during optimization without
 copying target labels. `scale.decode_batch_size` limits tiled sampling, anchor loss,
 decoding, and refinement memory; set it to `null` to process each stage in one batch
@@ -199,10 +200,7 @@ every slice unless `slice_fraction_weight` is also enabled.
 Set `phase_fractions: null` to derive the target from `target_images`, or from the
 anchors when no separate target bundle is provided. An explicit list conditions on a
 requested global composition. `target_images` remain optional morphology references
-for final candidate evaluation and are not merged into the anchor constraints.
-
-The full pipeline design and scale-up boundary are documented in
-[`PIPELINE.md`](PIPELINE.md).
+for final diagnostics and are not merged into the anchor constraints.
 
 ## Reference
 

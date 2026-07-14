@@ -5,7 +5,7 @@
 > 이 문서의 SliceGAN generator, noise conditioning, 6000-step 결과는
 > `144336e` 이전 레거시 경로의 실험 기록이다. 현재
 > `L-MPDD → online latent critic → residual Joint` 경로의 품질 증거가 아니며,
-> 현재 설계 계약은 `PIPELINE.md`를 기준으로 한다.
+> 현재 구조와 사용법은 유지되는 코드와 `README.md`를 기준으로 한다.
 
 ## 목표와 판정 순서
 
@@ -164,7 +164,7 @@ conditioning: 앵커 조건화와 generator/noise 미세조정
 rendering: scale-up 타일 크기와 halo
 ```
 
-구형 flat 인자 호환 계층은 사용처가 없어 제거했다. 네트워크와 WGAN-GP loss는 `src/modeling/slicegan/`, GAN update는 `pipelines/training/slicegan.py`, 앵커 모델·교차 검증은 기존 `guidance/conditioning`, 조건화·품질 판정·실행 조율은 `guidance/slicegan/`, scale-up latent 타일 렌더는 기존 `pipelines/scaling`이 담당한다.
+구형 flat 인자 호환 계층은 사용처가 없어 제거했다. 네트워크와 WGAN-GP loss는 `src/modeling/slicegan/`, GAN update는 `pipeline/train/slicegan.py`, 앵커 모델·교차 검증은 기존 `guidance/conditioning`, 조건화·품질 판정·실행 조율은 `guidance/slicegan/`, scale-up latent 타일 렌더는 기존 `pipeline/predict/scaling`이 담당한다.
 
 ## SliceGAN 원 구현에서 확인한 차이
 

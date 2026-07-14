@@ -6,5 +6,4 @@ from src.app.api.options import RefineConfig as RefineConfig
 from src.app.api.options import ScaleConfig as ScaleConfig
 from src.app.api.options import TargetConfig as TargetConfig
 from src.app.api.predictor import Predictor as Predictor
-from src.pipelines.guidance.conditioning.model import AnchorSlice as AnchorSlice
-from src.app.api.options import QualityConfig as QualityConfig
+from src.pipeline.predict.guidance.conditioning.model import AnchorSlice as AnchorSlice

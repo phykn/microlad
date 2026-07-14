@@ -4,7 +4,7 @@ from pathlib import Path
 
 import torch
 
-from src.pipelines.data import PatchDataset
+from src.pipeline.data import PatchDataset
 
 
 IMAGE_EXTENSIONS = {".bmp", ".jpg", ".jpeg", ".png", ".tif", ".tiff"}

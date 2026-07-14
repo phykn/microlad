@@ -4,8 +4,8 @@ import numpy as np
 import torch
 
 from src.app.api.options import PredictOptions
-from src.pipelines.guidance.conditioning.model import AnchorSlice
-from src.pipelines.guidance.conditioning.validation import (
+from src.pipeline.predict.guidance.conditioning.model import AnchorSlice
+from src.pipeline.predict.guidance.conditioning.validation import (
     validate_anchor_positions,
     validate_anchors,
 )
@@ -104,7 +104,9 @@ def prepare_prediction(
     if active_steps > 0:
         t_max = resolve_t_max(options, num_timesteps)
 
-    descriptor_tile_size: int | None = None
+    descriptor_tile_size = (
+        image_size if not base_size and descriptor_targets else None
+    )
     if target_labels is not None:
         height, width = map(int, target_labels.shape[-2:])
         if height != width:
@@ -113,9 +115,7 @@ def prepare_prediction(
         if base_size and target_size != image_size:
             raise ValueError("target images must match vae.image_size.")
         if not base_size:
-            if target_size == image_size:
-                descriptor_tile_size = target_size if descriptor_targets else None
-            elif target_size != volume_size:
+            if target_size not in (image_size, volume_size):
                 raise ValueError(
                     "scale-up target images must match vae.image_size or volume_size."
                 )

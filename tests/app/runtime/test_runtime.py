@@ -27,7 +27,7 @@ from src.app.runtime import (
     wrap_distributed,
 )
 from src.app.runtime.model import build_ddpm
-from src.pipelines.data import PatchDataset
+from src.pipeline.data import PatchDataset
 from src.modeling.diffusion import DDPMProcess, TimeUNet
 from src.modeling.vae import PatchVAE
 from src.app.api import PredictOptions, Predictor
@@ -131,7 +131,6 @@ class BuildTest(unittest.TestCase):
                         "  gan_run_dir: run/gan",
                         "progress: false",
                         "phase_fractions: [0.25, 0.15, 0.60]",
-                        "phase_fraction_tolerance: 0.02",
                         "segment_anchors: true",
                         "joint:",
                         "  steps: 12",
@@ -140,9 +139,7 @@ class BuildTest(unittest.TestCase):
                         "critic:",
                         "  weight: 0.05",
                         "refine:",
-                        "  candidates: [0, 1, 2]",
-                        "quality:",
-                        "  anchor_tolerance: 0.12",
+                        "  enabled: false",
                     ]
                 ),
                 encoding="utf-8",
@@ -158,11 +155,9 @@ class BuildTest(unittest.TestCase):
         self.assertIsNone(config["joint"].decode_batch_size)
         self.assertFalse(config["progress"])
         self.assertEqual(config["phase_fractions"], (0.25, 0.15, 0.60))
-        self.assertEqual(config["phase_fraction_tolerance"], 0.02)
         self.assertTrue(config["segment_anchors"])
         self.assertEqual(config["critic"].weight, 0.05)
-        self.assertEqual(config["refine"].candidates, (0, 1, 2))
-        self.assertEqual(config["quality"].anchor_tolerance, 0.12)
+        self.assertFalse(config["refine"].enabled)
 
     def test_build_dataset_expands_image_files_from_data_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -322,8 +317,7 @@ class BuildTest(unittest.TestCase):
             write_predictor_run(run_dir)
 
             predictor = load_predictor(run_dir, run_dir, device="cpu")
-            with self.assertWarnsRegex(RuntimeWarning, "least-violation"):
-                volume, stats = predictor.predict(PredictOptions(num_phases=2))
+            volume, stats = predictor.predict(PredictOptions(num_phases=2))
 
         self.assertIsInstance(predictor, Predictor)
         self.assertEqual(predictor.device, torch.device("cpu"))
