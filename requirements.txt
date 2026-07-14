@@ -1,13 +1,9 @@
-ipykernel
-ipython
-ipywidgets
+torch
 matplotlib
 numpy
 pillow
-pytest
 pyyaml
 scikit-image
 tensorboard
 tifffile
-torch
 tqdm

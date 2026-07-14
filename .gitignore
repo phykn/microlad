@@ -7,6 +7,8 @@ venv/
 AGENTS.md
 docs/
 run/
+script/
+tests/script/
 output/
 microlad-anode/
 reference/
