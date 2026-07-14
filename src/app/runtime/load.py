@@ -17,7 +17,7 @@ from src.app.runtime.run import (
     require_values,
 )
 from src.modeling.diffusion import TimeUNet
-from src.modeling.latent_gan import LatentCritic, LatentGenerator
+from src.modeling.latent_gan import ImageCritic, LatentGenerator
 from src.modeling.vae import PatchVAE
 
 
@@ -121,12 +121,13 @@ def load_run_generator(
 def load_run_critic(
     run_dir: str | Path,
     device: torch.device,
-) -> LatentCritic:
+) -> ImageCritic:
     config = load_run_config(run_dir, "gan")
     require_values(
         config,
         "gan config",
-        "latent_ch",
+        "num_phases",
+        "size",
         "critic_ch",
     )
     model = build_critic(argparse.Namespace(**config)).to(device)

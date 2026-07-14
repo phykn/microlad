@@ -2,7 +2,7 @@ import argparse
 
 import torch
 
-from src.modeling.latent_gan import LatentCritic, LatentGenerator
+from src.modeling.latent_gan import ImageCritic, LatentGenerator
 from src.modeling.diffusion import DDPMProcess, TimeUNet
 from src.modeling.vae import PatchVAE
 
@@ -37,9 +37,10 @@ def build_generator(args: argparse.Namespace) -> LatentGenerator:
     )
 
 
-def build_critic(args: argparse.Namespace) -> LatentCritic:
-    return LatentCritic(
-        latent_ch=args.latent_ch,
+def build_critic(args: argparse.Namespace) -> ImageCritic:
+    return ImageCritic(
+        num_phases=args.num_phases,
+        image_size=args.size,
         base_ch=args.critic_ch,
     )
 

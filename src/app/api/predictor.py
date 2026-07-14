@@ -12,7 +12,7 @@ from src.app.api.prepare import (
     uses_descriptor_targets,
 )
 from src.modeling.diffusion import DDPMProcess, DiffusionSampler, TimeUNet
-from src.modeling.latent_gan import LatentCritic
+from src.modeling.latent_gan import ImageCritic
 from src.modeling.phases.quantization import quantize_phase
 from src.modeling.vae import PatchVAE, get_downsample_factor
 from src.pipeline.predict.guidance.conditioning.images import prepare_volume_anchors
@@ -55,7 +55,7 @@ class Predictor:
         diffusion_model: TimeUNet,
         ddpm: DDPMProcess,
         *,
-        critic: LatentCritic | None = None,
+        critic: ImageCritic | None = None,
         device: str | torch.device,
     ) -> None:
         self.device = torch.device(device)
@@ -355,7 +355,7 @@ class Predictor:
         options: PredictOptions,
         anchors: Sequence[AnchorSlice] | None,
         target_labels: torch.Tensor | None,
-        critic: LatentCritic | None,
+        critic: ImageCritic | None,
         t_max: int,
         phase_fractions: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:

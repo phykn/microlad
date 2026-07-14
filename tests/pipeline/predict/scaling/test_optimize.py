@@ -71,10 +71,12 @@ class RecordingCritic(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.batch_sizes = []
+        self.channel_sizes = []
 
-    def forward(self, latent: torch.Tensor) -> torch.Tensor:
-        self.batch_sizes.append(int(latent.shape[0]))
-        return latent.mean(dim=(1, 2, 3), keepdim=True)
+    def forward(self, probabilities: torch.Tensor) -> torch.Tensor:
+        self.batch_sizes.append(int(probabilities.shape[0]))
+        self.channel_sizes.append(int(probabilities.shape[1]))
+        return probabilities[:, -1].mean(dim=(1, 2)).unsqueeze(1)
 
 
 class ScaleOptimizeTest(unittest.TestCase):
@@ -115,7 +117,9 @@ class ScaleOptimizeTest(unittest.TestCase):
 
     def test_pretrained_critic_guides_scale_crops_without_condition(self):
         critic = RecordingCritic()
-        _, stats = self.optimize(
+        latent = torch.zeros(1, 4, 4, 4)
+        refined, stats = self.optimize(
+            latent,
             steps=1,
             batch_size=2,
             critic=critic,
@@ -124,6 +128,8 @@ class ScaleOptimizeTest(unittest.TestCase):
 
         self.assertIn("critic", stats)
         self.assertEqual(critic.batch_sizes, [2])
+        self.assertEqual(critic.channel_sizes, [2])
+        self.assertFalse(torch.equal(refined, latent))
 
     def test_anchor_is_soft_and_updates_shared_3d_latent(self):
         anchor = AnchorSlice(

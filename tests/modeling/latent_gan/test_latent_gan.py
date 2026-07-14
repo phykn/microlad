@@ -3,7 +3,7 @@ import unittest
 import torch
 
 from src.modeling.latent_gan import (
-    LatentCritic,
+    ImageCritic,
     LatentGenerator,
     critic_loss,
     gradient_penalty,
@@ -11,37 +11,43 @@ from src.modeling.latent_gan import (
 )
 
 
-class LatentCriticTest(unittest.TestCase):
-    def test_critic_supports_trained_vae_latent_sizes(self):
+class ImageCriticTest(unittest.TestCase):
+    def test_critic_supports_decoded_image_sizes(self):
         with torch.device("meta"):
-            critic = LatentCritic(latent_ch=8)
-            for size in (16, 20, 24, 32):
+            for size in (16, 32, 64, 128):
                 with self.subTest(size=size):
-                    scores = critic(torch.empty(2, 8, size, size, device="meta"))
+                    critic = ImageCritic(num_phases=3, image_size=size)
+                    scores = critic(torch.empty(2, 3, size, size, device="meta"))
                     self.assertEqual(scores.shape, torch.Size([2, 1]))
 
-    def test_critic_rejects_too_small_slices(self):
+    def test_critic_rejects_too_small_images(self):
         with self.assertRaisesRegex(ValueError, "at least 16"):
-            LatentCritic(2)(torch.zeros(1, 2, 15, 15))
+            ImageCritic(2, image_size=15)
 
-    def test_critic_is_invariant_to_channel_affine_statistics(self):
-        critic = LatentCritic(2, base_ch=4)
-        latent = torch.randn(3, 2, 16, 16)
+    def test_critic_rejects_images_that_do_not_match_vae_size(self):
+        critic = ImageCritic(2, image_size=64, base_ch=4)
 
-        original = critic(latent)
-        shifted = critic(latent * 1.5 + 0.25)
+        with self.assertRaisesRegex(ValueError, "configured VAE image size"):
+            critic(torch.zeros(1, 2, 128, 128))
+
+    def test_critic_shape_normalization_removes_phase_offsets_and_scale(self):
+        critic = ImageCritic(2, image_size=16, base_ch=4)
+        probabilities = torch.randn(3, 2, 16, 16)
+
+        original = critic(probabilities)
+        shifted = critic(probabilities * 1.5 + 0.25)
 
         self.assertTrue(torch.allclose(original, shifted, atol=1e-5, rtol=1e-5))
 
-    def test_critic_does_not_amplify_nearly_constant_channels(self):
+    def test_critic_does_not_amplify_nearly_constant_phases(self):
         torch.manual_seed(0)
-        critic = LatentCritic(8, base_ch=4)
-        latent = torch.randn(3, 8, 16, 16) * 1e-6
-        latent[:, -1] = torch.randn(3, 16, 16)
-        perturbed = latent.clone()
+        critic = ImageCritic(3, image_size=16, base_ch=4)
+        probabilities = torch.randn(3, 3, 16, 16) * 1e-6
+        probabilities[:, -1] = torch.randn(3, 16, 16)
+        perturbed = probabilities.clone()
         perturbed[:, :-1] = torch.randn_like(perturbed[:, :-1]) * 1e-6
 
-        original = critic(latent)
+        original = critic(probabilities)
         changed = critic(perturbed)
 
         self.assertTrue(torch.allclose(original, changed, atol=1e-4, rtol=1e-4))
@@ -58,9 +64,9 @@ class LatentCriticTest(unittest.TestCase):
         self.assertEqual(float(guidance), 1.0)
 
     def test_gradient_penalty_is_finite_and_differentiable(self):
-        critic = LatentCritic(2, base_ch=4)
-        real = torch.randn(2, 2, 16, 16)
-        fake = torch.randn_like(real)
+        critic = ImageCritic(3, image_size=16, base_ch=4)
+        real = torch.randn(2, 3, 16, 16).softmax(dim=1)
+        fake = torch.randn_like(real).softmax(dim=1)
 
         penalty = gradient_penalty(critic, real, fake)
         penalty.backward()

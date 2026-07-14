@@ -121,6 +121,7 @@ class RunTrainGANTest(unittest.TestCase):
             write_vae_run(gan_run)
             write_diffusion_run(diffusion_run)
             args = argparse.Namespace(
+                size=64,
                 latent_ch=2,
                 latent_size=16,
                 num_phases=2,
@@ -152,10 +153,39 @@ class RunTrainGANTest(unittest.TestCase):
 
         self.assertFalse(loaded_generator.training)
         self.assertFalse(loaded_critic.training)
+        self.assertEqual(loaded_critic.num_phases, 2)
         self.assertIsNotNone(predictor.critic)
         self.assertTrue(
             all(not parameter.requires_grad for parameter in loaded_critic.parameters())
         )
+
+    def test_predictor_rejects_gan_from_different_vae_image_size(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vae_run = root / "vae"
+            diffusion_run = root / "diffusion"
+            gan_run = root / "gan"
+            write_vae_run(vae_run)
+            write_diffusion_run(diffusion_run)
+            save_run_config(
+                gan_run,
+                argparse.Namespace(
+                    size=128,
+                    latent_ch=2,
+                    latent_size=16,
+                    num_phases=2,
+                    critic_ch=4,
+                ),
+                name="gan",
+            )
+
+            with self.assertRaisesRegex(ValueError, "GAN size"):
+                load_predictor(
+                    vae_run,
+                    diffusion_run,
+                    gan_run,
+                    device="cpu",
+                )
 
 
 if __name__ == "__main__":

@@ -179,10 +179,10 @@ class JointConfig:
 
 @dataclass(frozen=True)
 class CriticConfig:
-    """Configures pretrained latent critic guidance.
+    """Configures pretrained image-space critic guidance.
 
     Attributes:
-        weight: Critic guidance weight during latent refinement.
+        weight: Image critic guidance weight during latent refinement.
     """
 
     weight: float = 0.0
@@ -279,7 +279,7 @@ class PredictOptions:
         prior: Diffusion prior used during latent refinement.
         targets: Losses derived from reference images.
         joint: Full-volume joint optimization settings.
-        critic: Pretrained latent critic guidance used by Joint and scale-up.
+        critic: Pretrained image critic guidance used by Joint and scale-up.
         scale: Tiled scale-up settings.
         refine: Optional VAE refinement settings.
     """

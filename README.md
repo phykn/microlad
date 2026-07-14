@@ -68,8 +68,9 @@ volume, stats = predictor.predict(options)
 
 설정은 `config/gen_fake.yaml`에 있으며 결과는 저장소 루트의 `fake/` 아래에
 `00000.pt`, `00001.pt` 형태의 `[C, D, H, W]` latent로 저장됩니다. Critic 학습에서는
-`config/gan.yaml`의 `data.fake_dir`을 읽어 XY·XZ·YZ 단면을 균형 추출합니다.
-Generator는 기존처럼 함께 학습됩니다.
+`config/gan.yaml`의 `data.fake_dir`을 읽어 XY·XZ·YZ latent 단면을 균형 추출하고,
+VAE로 phase probability 이미지에 디코딩한 뒤 image critic에 입력합니다. Generator는
+기존처럼 latent를 생성하며 image critic의 gradient로 함께 학습됩니다.
 
 ## 테스트
 

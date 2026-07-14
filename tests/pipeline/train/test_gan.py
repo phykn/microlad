@@ -4,7 +4,7 @@ from pathlib import Path
 
 import torch
 
-from src.modeling.latent_gan import LatentCritic, LatentGenerator
+from src.modeling.latent_gan import ImageCritic, LatentGenerator
 from src.pipeline.train import GANTrainer
 
 
@@ -12,27 +12,27 @@ class TinyVAE(torch.nn.Module):
     num_phases = 2
 
     def encode(self, images: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        latent = torch.cat((images, -images), dim=1)
+        latent = torch.cat((images, -images, torch.zeros_like(images)), dim=1)
         return latent, torch.zeros_like(latent)
 
     def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
-        return torch.softmax(latent, dim=1)
+        return torch.softmax(latent[:, :2], dim=1)
 
 
 class GANTrainerTest(unittest.TestCase):
     def test_trains_and_saves_generator_and_critic(self):
         generator = LatentGenerator(
-            latent_ch=2,
+            latent_ch=3,
             latent_size=16,
             noise_ch=8,
             base_ch=8,
         )
-        critic = LatentCritic(2, base_ch=4)
+        critic = ImageCritic(2, image_size=16, base_ch=4)
         generator_optimizer = torch.optim.Adam(generator.parameters(), lr=1e-4)
         critic_optimizer = torch.optim.Adam(critic.parameters(), lr=1e-4)
         images = torch.zeros(2, 1, 16, 16)
         images[:, :, 8:] = 1.0
-        fake_volumes = torch.randn(2, 2, 16, 16, 16)
+        fake_volumes = torch.randn(2, 3, 16, 16, 16)
 
         with tempfile.TemporaryDirectory() as tmp:
             trainer = GANTrainer(

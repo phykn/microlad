@@ -83,37 +83,51 @@ class GANTrainer:
         for _ in range(self.critic_steps):
             images = self._next_images()
             with torch.no_grad():
-                real, _ = self.vae.encode(images)
-                batch_size = int(real.shape[0])
-                latent_dtype = real.dtype
+                real_latent, _ = self.vae.encode(images)
+                real_probabilities = self.vae.decode_probs(real_latent)
+                batch_size = int(real_latent.shape[0])
+                latent_dtype = real_latent.dtype
                 noise = torch.randn(
                     batch_size,
                     int(unwrap_model(self.generator).noise_ch),
                     device=self.device,
                     dtype=latent_dtype,
                 )
-                generator_fake = self.generator(noise)
+                generator_latent = self.generator(noise)
+                generator_probabilities = self.vae.decode_probs(generator_latent)
                 volumes = self._next_fake_volumes().to(
                     device=self.device,
-                    dtype=real.dtype,
+                    dtype=real_latent.dtype,
                 )
-                lmpdd_fake = sample_slices(
+                lmpdd_latent = sample_slices(
                     volumes,
                     count=batch_size,
-                    crop_size=int(real.shape[-1]),
+                    crop_size=int(real_latent.shape[-1]),
                     axis_offset=self.axis_offset,
                 )
-                self.axis_offset = (self.axis_offset + int(real.shape[0])) % 3
+                lmpdd_probabilities = self.vae.decode_probs(lmpdd_latent)
+                self.axis_offset = (self.axis_offset + batch_size) % 3
 
             self.critic_optimizer.zero_grad(set_to_none=True)
-            real_scores = self.critic(real)
+            real_scores = self.critic(real_probabilities)
             fake_scores = torch.cat(
-                (self.critic(generator_fake), self.critic(lmpdd_fake)),
+                (
+                    self.critic(generator_probabilities),
+                    self.critic(lmpdd_probabilities),
+                ),
                 dim=0,
             )
             penalty = 0.5 * (
-                gradient_penalty(self.critic, real, generator_fake)
-                + gradient_penalty(self.critic, real, lmpdd_fake)
+                gradient_penalty(
+                    self.critic,
+                    real_probabilities,
+                    generator_probabilities,
+                )
+                + gradient_penalty(
+                    self.critic,
+                    real_probabilities,
+                    lmpdd_probabilities,
+                )
             )
             loss = critic_loss(
                 real_scores,
@@ -144,8 +158,9 @@ class GANTrainer:
             device=self.device,
             dtype=latent_dtype,
         )
-        generator_fake = self.generator(noise)
-        adversarial = guidance_loss(self.critic(generator_fake))
+        generator_latent = self.generator(noise)
+        generator_probabilities = self.vae.decode_probs(generator_latent)
+        adversarial = guidance_loss(self.critic(generator_probabilities))
         if not torch.isfinite(adversarial):
             raise RuntimeError("GAN generator produced a non-finite loss.")
         adversarial.backward()

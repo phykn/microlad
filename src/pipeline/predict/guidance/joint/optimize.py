@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from src.modeling.latent_gan import LatentCritic, guidance_loss
+from src.modeling.latent_gan import ImageCritic, guidance_loss
 from src.pipeline.predict.guidance.latent_slices import sample_slices
 from src.modeling.diffusion import DDPMProcess
 from src.modeling.inference import freeze
@@ -47,7 +47,7 @@ def optimize_latent(
     anchors: Sequence[AnchorSlice] | None = None,
     segment_anchors: bool = False,
     sds_weight: float = 1.0,
-    critic: LatentCritic | None = None,
+    critic: ImageCritic | None = None,
     critic_weight: float = 0.0,
     anchor_weight: float = 0.0,
     fraction_targets: Mapping[int, float] | torch.Tensor | None = None,
@@ -156,7 +156,8 @@ def optimize_latent(
             stats["sds"] = (sds_weight * prior).detach()
 
         if critic is not None and critic_weight > 0.0:
-            critic_term = guidance_loss(critic(latent_slices))
+            image_slices = vae.decode_probs(latent_slices)
+            critic_term = guidance_loss(critic(image_slices))
             total = total + critic_weight * critic_term
             stats["critic"] = (critic_weight * critic_term).detach()
             display["critic"] = critic_term.detach()
@@ -304,7 +305,7 @@ def _validate_inputs(
     decode_batch_size: int | None,
     lr: float,
     num_phases: int,
-    critic: LatentCritic | None,
+    critic: ImageCritic | None,
     critic_weight: float,
     progress: bool,
 ) -> None:

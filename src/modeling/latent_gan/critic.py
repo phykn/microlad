@@ -1,27 +1,33 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
-MIN_SLICE_SIZE = 16
+MIN_IMAGE_SIZE = 16
+GLOBAL_FEATURE_SIZE = 4
 
 
-class LatentCritic(nn.Module):
-    """Scores 2D VAE latent feature maps."""
+class ImageCritic(nn.Module):
+    """Scores decoded 2D phase-probability images at local and global scales."""
 
     def __init__(
         self,
-        latent_ch: int,
+        num_phases: int,
+        image_size: int,
         *,
         base_ch: int = 64,
     ) -> None:
         super().__init__()
-        if latent_ch <= 0:
-            raise ValueError("latent_ch must be positive.")
+        if num_phases <= 0:
+            raise ValueError("num_phases must be positive.")
+        if image_size < MIN_IMAGE_SIZE:
+            raise ValueError(f"image_size must be at least {MIN_IMAGE_SIZE}.")
         if base_ch <= 0:
             raise ValueError("base_ch must be positive.")
 
-        self.latent_ch = latent_ch
-        channels = (latent_ch, base_ch, base_ch * 2, base_ch * 4)
+        self.num_phases = num_phases
+        self.image_size = image_size
+        channels = (num_phases, base_ch, base_ch * 2, base_ch * 4)
         layers = []
         for source, target in zip(channels, channels[1:]):
             layers.extend(
@@ -37,20 +43,35 @@ class LatentCritic(nn.Module):
                 )
             )
         self.features = nn.Sequential(*layers)
-        self.score = nn.Linear(channels[-1], 1)
+        self.local_score = nn.Conv2d(
+            channels[-1],
+            1,
+            kernel_size=3,
+            padding=1,
+        )
+        self.global_score = nn.Linear(
+            channels[-1] * GLOBAL_FEATURE_SIZE**2,
+            1,
+        )
 
-    def forward(self, latent_slices: torch.Tensor) -> torch.Tensor:
-        if latent_slices.ndim != 4 or latent_slices.shape[1] != self.latent_ch:
+    def forward(self, probabilities: torch.Tensor) -> torch.Tensor:
+        if probabilities.ndim != 4 or probabilities.shape[1] != self.num_phases:
             raise ValueError(
-                "latent_slices must have shape "
-                f"[B, {self.latent_ch}, H, W]."
+                "phase probabilities must have shape "
+                f"[B, {self.num_phases}, H, W]."
             )
-        if min(latent_slices.shape[-2:]) < MIN_SLICE_SIZE:
+        if min(probabilities.shape[-2:]) < MIN_IMAGE_SIZE:
             raise ValueError(
-                f"latent slice size must be at least {MIN_SLICE_SIZE}."
+                f"phase probability image size must be at least {MIN_IMAGE_SIZE}."
+            )
+        expected_size = (self.image_size, self.image_size)
+        if probabilities.shape[-2:] != expected_size:
+            raise ValueError(
+                "phase probability image size must match the configured VAE "
+                f"image size {self.image_size}x{self.image_size}."
             )
 
-        centered = latent_slices - latent_slices.mean(
+        centered = probabilities - probabilities.mean(
             dim=(-2, -1),
             keepdim=True,
         )
@@ -59,5 +80,11 @@ class LatentCritic(nn.Module):
             keepdim=True,
         )
         normalized = centered * torch.rsqrt(scale + 1e-6)
-        features = self.features(normalized).mean(dim=(-2, -1))
-        return self.score(features)
+        features = self.features(normalized)
+        local_score = self.local_score(features).mean(dim=(-2, -1))
+        global_features = F.adaptive_avg_pool2d(
+            features,
+            output_size=(GLOBAL_FEATURE_SIZE, GLOBAL_FEATURE_SIZE),
+        )
+        global_score = self.global_score(global_features.flatten(start_dim=1))
+        return 0.5 * (local_score + global_score)

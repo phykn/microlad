@@ -43,10 +43,12 @@ class RecordingCritic(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.batch_sizes = []
+        self.channel_sizes = []
 
-    def forward(self, latent: torch.Tensor) -> torch.Tensor:
-        self.batch_sizes.append(int(latent.shape[0]))
-        return latent.mean(dim=(1, 2, 3), keepdim=True)
+    def forward(self, probabilities: torch.Tensor) -> torch.Tensor:
+        self.batch_sizes.append(int(probabilities.shape[0]))
+        self.channel_sizes.append(int(probabilities.shape[1]))
+        return probabilities[:, -1].mean(dim=(1, 2)).unsqueeze(1)
 
 
 class FakeProgress:
@@ -209,8 +211,9 @@ class JointOptimizationTest(unittest.TestCase):
 
     def test_pretrained_critic_guides_shared_latent_without_condition(self):
         critic = RecordingCritic()
-        _, stats = optimize_latent(
-            torch.zeros(1, 2, 2, 2),
+        latent = torch.zeros(1, 2, 2, 2)
+        refined, stats = optimize_latent(
+            latent,
             IdentityCategoricalVAE(),
             ZeroNoiseModel(),
             DDPMProcess(timesteps=4),
@@ -230,6 +233,8 @@ class JointOptimizationTest(unittest.TestCase):
 
         self.assertIn("critic", stats)
         self.assertEqual(critic.batch_sizes, [2])
+        self.assertEqual(critic.channel_sizes, [2])
+        self.assertFalse(torch.equal(refined, latent))
 
     def test_unlimited_decode_batch_disables_checkpointing(self):
         latent = torch.randn(1, 2, 2, 2)

@@ -45,11 +45,12 @@ def load_predictor(
         require_values(
             gan_config,
             "gan config",
+            "size",
             "latent_ch",
             "latent_size",
             "num_phases",
         )
-        for name in ("latent_ch", "latent_size", "num_phases"):
+        for name in ("size", "latent_ch", "latent_size", "num_phases"):
             if gan_config[name] != vae_config[name]:
                 raise ValueError(f"GAN {name} must match the selected VAE run.")
         critic = load_run_critic(gan_run_dir, device=device)

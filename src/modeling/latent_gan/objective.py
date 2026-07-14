@@ -20,7 +20,7 @@ def critic_loss(
 
 
 def guidance_loss(fake_scores: torch.Tensor) -> torch.Tensor:
-    """Encourages latent slices to receive higher critic scores."""
+    """Encourages decoded fake images to receive higher critic scores."""
     if fake_scores.numel() == 0:
         raise ValueError("critic scores must not be empty.")
     return -fake_scores.mean()
