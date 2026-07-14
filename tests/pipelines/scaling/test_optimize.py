@@ -3,496 +3,270 @@ import unittest
 import numpy as np
 import torch
 
-from src.modeling.diffusion import DDPMProcess
 from src.app.api import AnchorSlice
-from src.pipelines.scaling.tiles import blend_window
-from src.pipelines.scaling.optimize import optimize_large_volume
-from src.pipelines.scaling.objective import (
-    batch_objective,
-    slice_objective,
+from src.modeling.diffusion import DDPMProcess
+from src.pipelines.scaling.decoding import (
+    decode_anchor_patch,
+    decode_large_volume_probabilities,
 )
-from src.pipelines.scaling.tiles import tile_grid
+from src.pipelines.scaling.optimize import optimize_large_latent
 
 
-class IdentityVAE(torch.nn.Module):
+class TinyVAE(torch.nn.Module):
     image_size = 2
     latent_size = 2
     latent_ch = 1
     num_phases = 2
 
-    def encode(self, image: torch.Tensor):
-        return image.clone(), torch.zeros_like(image)
-
     def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
-        base = torch.where(
-            latent >= 0.0,
-            torch.tanh(latent),
-            torch.zeros_like(latent),
-        )
-        phase_one = 1e-3 + (1.0 - 2e-3) * base
+        phase_one = torch.sigmoid(latent)
         return torch.cat([1.0 - phase_one, phase_one], dim=1)
 
 
-class ShiftDecodeVAE(IdentityVAE):
+class ContextVAE(TinyVAE):
     def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
-        shifted = latent + 0.25
-        base = torch.where(
-            shifted >= 0.0,
-            torch.tanh(shifted),
-            torch.zeros_like(shifted),
-        )
-        phase_one = 1e-3 + (1.0 - 2e-3) * base
-        return torch.cat([1.0 - phase_one, phase_one], dim=1)
-
-
-class NonFiniteEncodeVAE(IdentityVAE):
-    def encode(self, image: torch.Tensor):
-        return torch.full_like(image, float("nan")), torch.zeros_like(image)
-
-
-class NonFiniteDecodeVAE(IdentityVAE):
-    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
-        return torch.full(
-            (latent.shape[0], self.num_phases, *latent.shape[-2:]),
-            float("nan"),
-            dtype=latent.dtype,
-            device=latent.device,
-        )
-
-
-class LocalPatternVAE(torch.nn.Module):
-    image_size = 3
-    latent_size = 3
-    latent_ch = 1
-    num_phases = 2
-
-    def encode(self, image: torch.Tensor):
-        return image.clone(), torch.zeros_like(image)
-
-    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
-        rows = torch.arange(
+        mean = latent.mean(dim=(1, 2, 3), keepdim=True)
+        phase_one = torch.sigmoid(mean).expand(
+            latent.shape[0],
+            1,
             self.image_size,
-            dtype=latent.dtype,
-            device=latent.device,
-        ).view(1, 1, self.image_size, 1)
-        cols = torch.arange(
             self.image_size,
-            dtype=latent.dtype,
-            device=latent.device,
-        ).view(1, 1, 1, self.image_size)
-        phase_one = ((rows * 10.0 + cols) / 22.0).expand(
-            latent.shape[0], 1, -1, -1
         )
         return torch.cat([1.0 - phase_one, phase_one], dim=1)
 
 
-class ZeroNoiseModel(torch.nn.Module):
-    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        return torch.zeros_like(x)
+class UpsampleContextVAE(ContextVAE):
+    image_size = 4
+    downsample_factor = 2
 
 
-class RecordingNoiseModel(torch.nn.Module):
+class ThreePhaseVAE(TinyVAE):
+    num_phases = 3
+
+    def encode(self, image: torch.Tensor):
+        raise AssertionError("scale guidance must not optimize scalar phase images")
+
+    def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
+        return torch.cat([-latent, torch.zeros_like(latent), latent], dim=1).softmax(
+            dim=1
+        )
+
+
+class ZeroNoise(torch.nn.Module):
+    def forward(self, values: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
+        return torch.zeros_like(values)
+
+
+class RecordingNoise(ZeroNoise):
     def __init__(self) -> None:
         super().__init__()
-        self.batch_sizes: list[int] = []
+        self.batch_sizes = []
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        self.batch_sizes.append(int(x.shape[0]))
-        return torch.zeros_like(x)
+    def forward(self, values: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
+        self.batch_sizes.append(int(values.shape[0]))
+        return super().forward(values, timesteps)
 
 
 class ScaleOptimizeTest(unittest.TestCase):
-    def optimize(self, volume: torch.Tensor | None = None, **overrides):
+    def optimize(self, latent: torch.Tensor | None = None, **overrides):
         kwargs = {
-            "steps": 1,
-            "slice_steps": 1,
+            "steps": 2,
+            "batch_size": 3,
             "lr": 0.1,
             "t_min": 1,
             "t_max": 3,
             "num_phases": 2,
-            "slice_schedule": [(0, 2)],
             "sds_weight": 0.0,
-            "tile_overlap": 0,
+            "continuity_weight": 0.0,
+            "preservation_weight": 0.0,
+            "checkpoint_every": 1,
         }
         kwargs.update(overrides)
-
-        return optimize_large_volume(
-            torch.zeros(4, 4, 4) if volume is None else volume,
-            kwargs.pop("vae", IdentityVAE()),
-            kwargs.pop("diffusion_model", ZeroNoiseModel()),
+        return optimize_large_latent(
+            torch.zeros(1, 4, 4, 4) if latent is None else latent,
+            kwargs.pop("vae", TinyVAE()),
+            kwargs.pop("diffusion_model", ZeroNoise()),
             kwargs.pop("ddpm", DDPMProcess(timesteps=4)),
             **kwargs,
         )
 
-    def test_optimize_large_volume_updates_scheduled_anchor_slice_tiles(self):
-        volume = torch.zeros(4, 4, 4)
+    def test_initial_lmpdd_and_each_checkpoint_are_candidates(self):
+        candidates, stats = self.optimize()
+
+        self.assertEqual(len(candidates), 3)
+        self.assertEqual(stats["scale_candidate_steps"].tolist(), [0, 1, 2])
+        self.assertTrue(torch.equal(candidates[0], torch.zeros_like(candidates[0])))
+        self.assertEqual(stats["scale_candidate_delta_rms"].shape, torch.Size([3]))
+
+    def test_zero_steps_returns_only_initial_lmpdd(self):
+        latent = torch.randn(1, 4, 4, 4)
+        candidates, stats = self.optimize(latent, steps=0)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertTrue(torch.equal(candidates[0], latent))
+        self.assertEqual(stats["scale_candidate_steps"].tolist(), [0])
+
+    def test_anchor_is_soft_and_updates_shared_3d_latent(self):
         anchor = AnchorSlice(
-            image=np.ones((4, 4), dtype=np.uint8),
+            image=np.ones((2, 2), dtype=np.uint8),
             axis=0,
             index=2,
         )
 
-        updated, stats = optimize_large_volume(
-            volume,
-            IdentityVAE(),
-            ZeroNoiseModel(),
-            DDPMProcess(timesteps=4),
-            steps=1,
-            slice_steps=1,
-            lr=0.1,
-            t_min=1,
-            t_max=3,
-            num_phases=2,
-            slice_schedule=[(0, 2)],
+        candidates, stats = self.optimize(
+            steps=3,
             anchors=[anchor],
             anchor_weight=1.0,
-            sds_weight=0.0,
-            tile_overlap=0,
         )
 
-        self.assertGreater(float(updated[2].mean()), 0.0)
-        self.assertLess(float(updated[2].mean()), 1.0)
-        self.assertTrue(torch.allclose(updated[0], volume[0]))
-        self.assertIn("history_anchor", stats)
-        self.assertIn("steps", stats)
-
-    def test_optimize_large_volume_with_zero_slice_steps_preserves_slice(self):
-        volume = torch.zeros(4, 4, 4)
-
-        updated, stats = optimize_large_volume(
-            volume,
-            ShiftDecodeVAE(),
-            ZeroNoiseModel(),
-            DDPMProcess(timesteps=4),
-            steps=1,
-            slice_steps=0,
-            lr=0.1,
-            t_min=1,
-            t_max=3,
-            num_phases=2,
-            slice_schedule=[(0, 2)],
-            sds_weight=0.0,
-            tile_overlap=0,
-        )
-
-        self.assertTrue(torch.equal(updated, volume))
-        self.assertEqual(int(stats["steps"].item()), 1)
-
-    def test_optimize_large_volume_applies_masked_anchor_target_patch(self):
-        target = torch.zeros(4, 4)
-        target[1:3, 1:3] = 1
-        mask = torch.zeros(4, 4)
-        mask[1:3, 1:3] = 1
-
-        updated, stats = optimize_large_volume(
-            torch.zeros(4, 4, 4),
-            IdentityVAE(),
-            ZeroNoiseModel(),
-            DDPMProcess(timesteps=4),
-            steps=1,
-            slice_steps=1,
-            lr=0.1,
-            t_min=1,
-            t_max=3,
-            num_phases=2,
-            slice_schedule=[(0, 2)],
-            anchor_targets={(0, 2): target},
-            anchor_masks={(0, 2): mask},
-            anchor_weight=1.0,
-            sds_weight=0.0,
-            tile_overlap=0,
-        )
-
-        self.assertTrue(torch.all(updated[2] == updated[2].round()))
-        self.assertFalse(torch.equal(updated[2], target))
-        self.assertEqual(float(updated[2, 0, 0]), 0.0)
+        refined = candidates[-1]
+        self.assertGreater(float(refined[:, 1:3, 1:3, 1:3].mean()), 0.0)
+        self.assertLess(float(refined.max()), 1.0)
         self.assertIn("history_anchor", stats)
 
-    def test_optimize_large_volume_applies_slice_fraction_loss(self):
-        updated, stats = optimize_large_volume(
-            torch.zeros(4, 4, 4),
-            IdentityVAE(),
-            ZeroNoiseModel(),
-            DDPMProcess(timesteps=4),
-            steps=1,
-            slice_steps=2,
-            lr=0.5,
-            t_min=1,
-            t_max=3,
+    def test_anchor_patch_matches_final_tri_axis_decoder(self):
+        latent = torch.linspace(-2.0, 2.0, steps=64).view(1, 4, 4, 4)
+        cases = (
+            (ContextVAE(), 2, 2, slice(1, 3)),
+            (UpsampleContextVAE(), 4, 4, slice(2, 6)),
+            (UpsampleContextVAE(), 8, 4, slice(0, 8)),
+        )
+        for vae, target_size, index, span in cases:
+            full = decode_large_volume_probabilities(
+                vae,
+                latent,
+                tile_overlap=1,
+                batch_size=None,
+            )[0]
+            for axis in range(3):
+                with self.subTest(
+                    axis=axis,
+                    target_size=target_size,
+                    factor=vae.downsample_factor
+                    if hasattr(vae, "downsample_factor")
+                    else 1,
+                ):
+                    anchor = AnchorSlice(
+                        image=np.zeros((target_size, target_size), dtype=np.uint8),
+                        axis=axis,
+                        index=index,
+                    )
+                    patch = decode_anchor_patch(
+                        vae,
+                        latent,
+                        anchor,
+                        target_size=target_size,
+                        num_phases=2,
+                        tile_overlap=1,
+                    )
+                    slices = [span, span, span]
+                    slices[axis] = index
+                    expected = full[(slice(None), *slices)]
+
+                    self.assertTrue(
+                        torch.allclose(patch, expected, atol=1e-6, rtol=1e-6)
+                    )
+
+    def test_anchor_patch_has_finite_latent_gradient(self):
+        latent = torch.randn(1, 4, 4, 4, requires_grad=True)
+        patch = decode_anchor_patch(
+            TinyVAE(),
+            latent,
+            AnchorSlice(
+                image=np.zeros((2, 2), dtype=np.uint8),
+                axis=1,
+                index=2,
+            ),
+            target_size=2,
             num_phases=2,
-            slice_schedule=[(0, 1)],
-            sds_weight=0.0,
-            fraction_targets=torch.tensor([1.0, 0.0]),
-            slice_fraction_weight=1.0,
-            temperature=0.5,
             tile_overlap=0,
         )
 
-        self.assertLessEqual(float(updated[1].mean()), 0.0)
-        self.assertIn("history_fraction", stats)
-        self.assertIn("history_loss", stats)
+        patch[1].mean().backward()
 
-    def test_global_fraction_guidance_does_not_force_each_slice_fraction(self):
-        updated, stats = optimize_large_volume(
-            torch.zeros(4, 4, 4),
-            IdentityVAE(),
-            ZeroNoiseModel(),
-            DDPMProcess(timesteps=4),
-            steps=1,
-            slice_steps=2,
-            lr=0.5,
-            t_min=1,
-            t_max=3,
-            num_phases=2,
-            slice_schedule=[(0, 1)],
-            sds_weight=0.0,
-            fraction_targets=torch.tensor([0.75, 0.25]),
-            global_fraction_weight=1.0,
-            temperature=0.5,
-            tile_overlap=0,
-        )
+        self.assertIsNotNone(latent.grad)
+        self.assertTrue(torch.isfinite(latent.grad).all())
+        self.assertGreater(float(latent.grad.abs().sum()), 0.0)
 
-        self.assertEqual(updated.shape, torch.Size([4, 4, 4]))
-        self.assertIn("history_global_fraction", stats)
-        self.assertNotIn("history_fraction", stats)
-
-    def test_optimize_large_volume_batches_same_axis_slices_for_sds_prior(self):
-        model = RecordingNoiseModel()
-
-        updated, stats = optimize_large_volume(
-            torch.zeros(4, 4, 4),
-            IdentityVAE(),
-            model,
-            DDPMProcess(timesteps=4),
-            steps=1,
-            slice_steps=1,
-            batch_size=2,
-            lr=0.1,
-            t_min=1,
-            t_max=3,
-            num_phases=2,
-            slice_schedule=[(0, 1), (0, 3)],
-            sds_weight=1.0,
-            tile_overlap=0,
-        )
-
-        self.assertEqual(model.batch_sizes, [2, 2, 2, 2])
-        self.assertEqual(updated.shape, torch.Size([4, 4, 4]))
-        self.assertIn("history_sds", stats)
-
-    def test_optimize_large_volume_rejects_non_floating_volume(self):
-        with self.assertRaisesRegex(ValueError, "floating"):
-            self.optimize(torch.zeros(4, 4, 4, dtype=torch.int64))
-
-    def test_optimize_large_volume_rejects_non_finite_volume(self):
-        with self.assertRaisesRegex(ValueError, "volume.*finite"):
-            self.optimize(torch.full((4, 4, 4), float("nan")))
-
-    def test_optimize_large_volume_rejects_empty_volume(self):
-        with self.assertRaisesRegex(ValueError, "positive"):
-            self.optimize(torch.empty(0, 0, 0))
-
-    def test_optimize_large_volume_rejects_invalid_anchor_target_key(self):
-        with self.assertRaisesRegex(ValueError, "anchor_targets.*inside"):
-            self.optimize(
-                anchor_targets={(0, 99): torch.zeros(4, 4)},
-                anchor_weight=1.0,
-            )
-
-    def test_optimize_large_volume_rejects_non_finite_anchor_mask(self):
-        with self.assertRaisesRegex(ValueError, "anchor_masks.*finite"):
-            self.optimize(
-                anchor_targets={(0, 2): torch.zeros(4, 4)},
-                anchor_masks={(0, 2): torch.full((4, 4), float("nan"))},
-                anchor_weight=1.0,
-            )
-
-    def test_optimize_large_volume_rejects_anchor_mask_outside_unit_interval(self):
-        with self.assertRaisesRegex(ValueError, "anchor_masks.*between 0 and 1"):
-            self.optimize(
-                anchor_targets={(0, 2): torch.zeros(4, 4)},
-                anchor_masks={(0, 2): torch.full((4, 4), 2.0)},
-                anchor_weight=1.0,
-            )
-
-    def test_optimize_large_volume_rejects_non_finite_encoded_latent(self):
-        with self.assertRaisesRegex(ValueError, "latent.*finite"):
-            self.optimize(vae=NonFiniteEncodeVAE())
-
-    def test_optimize_large_volume_rejects_non_finite_decoded_tile(self):
-        with self.assertRaisesRegex(ValueError, "decoded.*finite"):
-            self.optimize(vae=NonFiniteDecodeVAE())
-
-    def test_optimize_large_volume_rejects_non_finite_scalar_parameters(self):
-        for name in ("lr", "sds_weight", "temperature"):
-            with self.subTest(name=name):
-                with self.assertRaisesRegex(ValueError, name):
-                    self.optimize(**{name: float("nan")})
-
-    def test_large_slice_prior_loss_is_averaged_across_tiles(self):
-        decoded, _, total, stats = slice_objective(
-            torch.zeros(4, 4),
-            IdentityVAE(),
-            ZeroNoiseModel(),
-            DDPMProcess(timesteps=4),
-            t_min=1,
-            t_max=3,
-            num_phases=2,
-            sds_weight=0.0,
-            anchor_target=torch.ones(4, 4),
-            anchor_weight=1.0,
-            temperature=0.5,
-            tile_overlap=0,
-        )
-
-        self.assertEqual(decoded.shape, torch.Size([4, 4]))
-        self.assertIn("anchor", stats)
-        self.assertTrue(torch.allclose(total.detach(), stats["anchor"]))
-
-    def test_large_slice_batch_descriptor_loss_averages_per_slice_losses(self):
-        images = torch.stack(
-            [
-                torch.full((2, 2), 0.0),
-                torch.full((2, 2), 1.0),
-            ]
-        )
-
-        _, _, total, stats = batch_objective(
-            images,
-            IdentityVAE(),
-            ZeroNoiseModel(),
-            DDPMProcess(timesteps=4),
-            t_min=1,
-            t_max=3,
-            num_phases=2,
-            sds_weight=0.0,
-            anchor_targets=[None, None],
-            anchor_masks=[None, None],
-            anchor_weight=0.0,
-            temperature=0.01,
-            tile_overlap=0,
-            fraction_targets=torch.tensor([0.5, 0.5]),
-            fraction_weight=1.0,
-        )
-
-        self.assertGreater(float(total.detach()), 0.1)
-        self.assertGreater(float(stats["fraction"]), 0.1)
-
-    def test_large_slice_batch_anchor_loss_includes_unanchored_slices_in_mean(self):
-        images = torch.zeros(2, 2, 2)
-        target = torch.ones(2, 2)
-
-        _, _, single_total, _ = slice_objective(
-            images[0],
-            IdentityVAE(),
-            ZeroNoiseModel(),
-            DDPMProcess(timesteps=4),
-            t_min=1,
-            t_max=3,
-            num_phases=2,
-            sds_weight=0.0,
-            anchor_target=target,
-            anchor_weight=1.0,
-            temperature=0.5,
-            tile_overlap=0,
-        )
-        _, _, batch_total, stats = batch_objective(
-            images,
-            IdentityVAE(),
-            ZeroNoiseModel(),
-            DDPMProcess(timesteps=4),
-            t_min=1,
-            t_max=3,
-            num_phases=2,
-            sds_weight=0.0,
-            anchor_targets=[target, None],
-            anchor_masks=[None, None],
-            anchor_weight=1.0,
-            temperature=0.5,
-            tile_overlap=0,
-        )
-
-        self.assertTrue(torch.allclose(batch_total, single_total / 2.0))
-        self.assertTrue(torch.allclose(stats["anchor"], single_total.detach() / 2.0))
-
-    def test_slice_objective_uses_weighted_tile_stitching(self):
-        vae = LocalPatternVAE()
-
-        decoded, _, total, stats = slice_objective(
-            torch.zeros(4, 4),
+    def test_cropped_anchor_patch_matches_final_decoder_region(self):
+        latent = torch.linspace(-2.0, 2.0, steps=64).view(1, 4, 4, 4)
+        vae = UpsampleContextVAE()
+        full = decode_large_volume_probabilities(
             vae,
-            ZeroNoiseModel(),
-            DDPMProcess(timesteps=4),
-            t_min=1,
-            t_max=3,
-            num_phases=2,
-            sds_weight=0.0,
-            anchor_target=None,
-            anchor_weight=0.0,
-            temperature=0.5,
-            tile_overlap=2,
+            latent,
+            tile_overlap=1,
+            batch_size=None,
+        )[0]
+        anchor = AnchorSlice(
+            image=np.zeros((4, 4), dtype=np.uint8),
+            axis=0,
+            index=4,
         )
 
-        expected = _expected_local_pattern_stitch(vae, torch.zeros(4, 4))
-
-        self.assertTrue(torch.allclose(decoded, expected))
-        self.assertTrue(torch.equal(total.detach(), torch.tensor(0.0)))
-        self.assertEqual(stats, {})
-
-    def test_batch_objective_uses_weighted_tile_stitching(self):
-        vae = LocalPatternVAE()
-
-        decoded, _, _, _ = batch_objective(
-            torch.zeros(2, 4, 4),
+        patch = decode_anchor_patch(
             vae,
-            ZeroNoiseModel(),
-            DDPMProcess(timesteps=4),
-            t_min=1,
-            t_max=3,
+            latent,
+            anchor,
+            target_size=4,
             num_phases=2,
-            sds_weight=0.0,
-            anchor_targets=[None, None],
-            anchor_masks=[None, None],
-            anchor_weight=0.0,
-            temperature=0.5,
-            tile_overlap=2,
+            tile_overlap=1,
+            crop_start=(1, 1),
+            crop_size=2,
         )
-
-        expected = _expected_local_pattern_stitch(vae, torch.zeros(4, 4))
 
         self.assertTrue(
-            torch.allclose(
-                decoded,
-                expected.unsqueeze(0).expand(2, -1, -1),
-            )
+            torch.allclose(patch, full[:, 4, 3:5, 3:5], atol=1e-6, rtol=1e-6)
         )
 
+    def test_three_phase_guidance_never_optimizes_ordinal_phase_values(self):
+        candidates, _ = self.optimize(
+            vae=ThreePhaseVAE(),
+            num_phases=3,
+            global_fraction_weight=1.0,
+            fraction_targets=torch.tensor([0.2, 0.3, 0.5]),
+        )
 
-def _expected_local_pattern_stitch(
-    vae: LocalPatternVAE,
-    image: torch.Tensor,
-) -> torch.Tensor:
-    tile_size = int(vae.image_size)
-    out = image.new_zeros(image.shape)
-    weight_sum = image.new_zeros(image.shape)
-    window = blend_window(
-        tile_size,
-        tile_size,
-        device=image.device,
-        dtype=image.dtype,
-    )
-    pattern = vae.decode_probs(torch.zeros(1, 1, tile_size, tile_size))[0, 1]
+        self.assertEqual(candidates[-1].shape, torch.Size([1, 4, 4, 4]))
 
-    for row, col in tile_grid(
-        int(image.shape[0]),
-        int(image.shape[1]),
-        tile_size=tile_size,
-        overlap=2,
-    ):
-        out[row : row + tile_size, col : col + tile_size] += pattern * window
-        weight_sum[row : row + tile_size, col : col + tile_size] += window
+    def test_global_fraction_tracks_categorical_labels_not_soft_mass(self):
+        _, stats = self.optimize(
+            steps=1,
+            fraction_targets=torch.tensor([1.0, 0.0]),
+            global_fraction_weight=1.0,
+        )
 
-    return out / weight_sum
+        self.assertLess(float(stats["history_global_fraction"]), 1e-5)
+
+    def test_global_fraction_updates_the_shared_latent(self):
+        candidates, _ = self.optimize(
+            steps=3,
+            fraction_targets=torch.tensor([0.0, 1.0]),
+            global_fraction_weight=1.0,
+        )
+
+        self.assertGreater(float(candidates[-1].mean()), 0.0)
+
+    def test_sds_samples_all_axes_in_one_balanced_batch(self):
+        model = RecordingNoise()
+        candidates, stats = self.optimize(
+            steps=1,
+            diffusion_model=model,
+            sds_weight=1.0,
+        )
+
+        self.assertEqual(model.batch_sizes, [3])
+        self.assertEqual(candidates[-1].shape, torch.Size([1, 4, 4, 4]))
+        self.assertIn("history_sds", stats)
+
+    def test_rejects_invalid_latent_and_anchor_contracts(self):
+        with self.assertRaisesRegex(ValueError, "floating"):
+            self.optimize(torch.zeros(1, 4, 4, 4, dtype=torch.long))
+        with self.assertRaisesRegex(ValueError, "finite"):
+            self.optimize(torch.full((1, 4, 4, 4), float("nan")))
+        with self.assertRaisesRegex(ValueError, "anchors are required"):
+            self.optimize(anchor_weight=1.0)
+        with self.assertRaisesRegex(ValueError, "decode_batch_size"):
+            self.optimize(decode_batch_size=0)
 
 
 if __name__ == "__main__":

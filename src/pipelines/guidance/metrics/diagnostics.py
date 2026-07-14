@@ -1,7 +1,9 @@
 from collections.abc import Sequence
 
+import numpy as np
 import torch
 import torch.nn.functional as F
+from skimage import measure
 
 from src.pipelines.guidance.conditioning.model import VolumeAnchor
 from src.pipelines.guidance.metrics.runs import compute_run_profile
@@ -29,6 +31,9 @@ def evaluate_phase_volume(
     transition_rates = []
     lag3_change_rates = []
     exact_repeat_rates = []
+    near_repeat_rates = []
+    max_repeat_streaks = []
+    max_adjacent_similarities = []
     global_boundary_jumps = []
     axis_euler_density = []
     for axis in range(3):
@@ -45,7 +50,17 @@ def evaluate_phase_volume(
             else boundary_profile.new_zeros(())
         )
         same_slices = (before == after).movedim(axis, 0).reshape(length - 1, -1)
-        exact_repeat_rates.append(same_slices.all(dim=1).float().mean())
+        similarities = same_slices.float().mean(dim=1)
+        repeated = same_slices.all(dim=1)
+        exact_repeat_rates.append(repeated.float().mean())
+        near_repeat_rates.append((similarities >= 0.99).float().mean())
+        max_adjacent_similarities.append(similarities.max())
+        streak = 0
+        longest = 0
+        for is_repeated in repeated.tolist():
+            streak = streak + 1 if is_repeated else 0
+            longest = max(longest, streak)
+        max_repeat_streaks.append(similarities.new_tensor(float(longest)))
         lag = min(3, length - 1)
         lag3_change_rates.append(
             (
@@ -67,10 +82,14 @@ def evaluate_phase_volume(
         "axis_transition_rate": torch.stack(transition_rates),
         "axis_lag3_change_rate": torch.stack(lag3_change_rates),
         "axis_exact_repeat_rate": torch.stack(exact_repeat_rates),
+        "axis_near_repeat_rate": torch.stack(near_repeat_rates),
+        "axis_max_repeat_streak": torch.stack(max_repeat_streaks),
+        "axis_max_adjacent_similarity": torch.stack(max_adjacent_similarities),
         "axis_global_boundary_jump": torch.stack(global_boundary_jumps),
         "axis_run_profile": compute_run_profile(probabilities, lengths=lengths),
         "axis_euler_density": torch.stack(axis_euler_density),
     }
+    stats.update(_topology_stats(labels, num_phases=num_phases))
 
     if target_fraction is not None:
         target = torch.as_tensor(
@@ -156,6 +175,46 @@ def evaluate_phase_volume(
         )
 
     return stats
+
+
+def _topology_stats(
+    labels: torch.Tensor,
+    *,
+    num_phases: int,
+) -> dict[str, torch.Tensor]:
+    array = labels.detach().cpu().numpy()
+    components = []
+    euler = []
+    percolation = []
+    for phase in range(num_phases):
+        mask = array == phase
+        component_labels = measure.label(mask, connectivity=1)
+        components.append(float(component_labels.max()))
+        euler.append(float(measure.euler_number(mask, connectivity=1)) / mask.size)
+        phase_percolation = []
+        for axis in range(3):
+            first = np.unique(np.take(component_labels, 0, axis=axis))
+            last = np.unique(np.take(component_labels, -1, axis=axis))
+            spanning = np.intersect1d(first[first > 0], last[last > 0])
+            phase_percolation.append(float(bool(spanning.size)))
+        percolation.append(phase_percolation)
+    return {
+        "component_count": torch.tensor(
+            components,
+            device=labels.device,
+            dtype=torch.float32,
+        ),
+        "euler_3d_density": torch.tensor(
+            euler,
+            device=labels.device,
+            dtype=torch.float32,
+        ),
+        "phase_axis_percolation": torch.tensor(
+            percolation,
+            device=labels.device,
+            dtype=torch.float32,
+        ),
+    }
 
 
 def _prepare_volume(

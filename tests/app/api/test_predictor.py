@@ -74,7 +74,7 @@ class PredictOptionsTest(unittest.TestCase):
             ("steps", lambda: JointConfig(steps=1.5)),
             ("progress", lambda: PredictOptions(num_phases=2, progress=1)),
             ("candidate_count", lambda: CriticConfig(candidate_count=0)),
-            ("slice_steps", lambda: ScaleConfig(slice_steps=True)),
+            ("decode_batch_size", lambda: ScaleConfig(decode_batch_size=True)),
             ("calibration_budget", lambda: QualityConfig(calibration_budget=1.1)),
         )
         for message, build in invalid:
@@ -88,9 +88,8 @@ class PredictOptionsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "critic.weight"):
             PredictOptions(num_phases=2, critic=CriticConfig(weight=0.1))
 
-    def test_scale_flags_require_booleans(self):
-        with self.assertRaisesRegex(ValueError, "balanced_slices"):
-            ScaleConfig(balanced_slices=1)
+    def test_scale_can_decode_all_planes_at_once(self):
+        self.assertIsNone(ScaleConfig(decode_batch_size=None).decode_batch_size)
 
     def test_refine_candidates_are_unique_and_ordered(self):
         config = RefineConfig(candidates=(0, 2, 0, 1))
@@ -529,7 +528,7 @@ class PredictorTest(unittest.TestCase):
             scale=ScaleConfig(steps=1),
             refine=RefineConfig(candidates=(0,)),
         )
-        generated = torch.zeros(4, 4, 4)
+        generated = torch.zeros(1, 4, 4, 4)
 
         with (
             patch.object(
@@ -540,7 +539,13 @@ class PredictorTest(unittest.TestCase):
             patch.object(
                 self.predictor,
                 "_refine_large",
-                return_value=(generated, {"history_loss": torch.tensor(0.0)}),
+                return_value=(
+                    (generated,),
+                    {
+                        "history_loss": torch.tensor(0.0),
+                        "scale_candidate_steps": torch.tensor([0]),
+                    },
+                ),
             ) as refine,
             self.assertWarnsRegex(RuntimeWarning, "least-violation"),
         ):
@@ -564,7 +569,9 @@ class PredictorTest(unittest.TestCase):
             index=1,
         )
         target = np.ones((4, 4), dtype=np.uint8)
-        generated = torch.zeros(4, 4, 4)
+        generated = torch.zeros(1, 4, 4, 4)
+        probabilities = torch.full((1, 2, 4, 4, 4), 0.5)
+        selected = torch.zeros(4, 4, 4)
 
         with (
             patch.object(
@@ -575,16 +582,26 @@ class PredictorTest(unittest.TestCase):
             patch.object(
                 self.predictor,
                 "_refine_large",
-                return_value=(generated, {"history_loss": torch.tensor(0.0)}),
+                return_value=(
+                    (generated,),
+                    {
+                        "history_loss": torch.tensor(0.0),
+                        "scale_candidate_steps": torch.tensor([0]),
+                    },
+                ),
             ) as refine,
             patch(
-                "src.app.api.predictor.refine_large_candidates",
-                return_value=(generated,),
+                "src.app.api.predictor.decode_large_volume_probabilities",
+                return_value=probabilities,
             ),
             patch(
-                "src.app.api.predictor.select_label_volume",
+                "src.app.api.predictor.refine_large_probabilities",
+                return_value=(probabilities,),
+            ),
+            patch(
+                "src.app.api.predictor.select_probability_volume",
                 return_value=(
-                    generated,
+                    selected,
                     {"quality_passed": torch.tensor(True)},
                 ),
             ) as select,
@@ -605,7 +622,7 @@ class PredictorTest(unittest.TestCase):
             joint=JointConfig(steps=1),
             refine=RefineConfig(candidates=(0,)),
         )
-        generated = torch.zeros(4, 4, 4)
+        generated = torch.zeros(1, 4, 4, 4)
 
         with (
             patch.object(

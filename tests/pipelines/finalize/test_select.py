@@ -7,8 +7,8 @@ from src.pipelines.guidance.conditioning.model import VolumeAnchor
 from src.pipelines.finalize.select import (
     _morphology_rank,
     _violation_rank,
-    select_label_volume,
     select_latent_volume,
+    select_probability_volume,
 )
 
 
@@ -77,10 +77,20 @@ class FinalSelectionTest(unittest.TestCase):
             _violation_rank(first, stats, zero, None),
         )
 
-    def test_label_selection_evaluates_each_scale_refine_candidate(self):
-        volume, stats = select_label_volume(
-            [torch.zeros(2, 2, 2), torch.ones(2, 2, 2)],
+    def test_probability_selection_evaluates_scale_and_refine_candidates(self):
+        zero = torch.zeros(2, 2, 2, dtype=torch.long)
+        one = torch.ones(2, 2, 2, dtype=torch.long)
+        probabilities = [
+            torch.nn.functional.one_hot(value, num_classes=2)
+            .movedim(-1, 0)
+            .unsqueeze(0)
+            .float()
+            for value in (zero, one)
+        ]
+        volume, stats = select_probability_volume(
+            probabilities,
             candidate_steps=[0, 1],
+            refine_steps=[0, 0],
             num_phases=2,
             target_fraction=torch.tensor([0.0, 1.0]),
             phase_fraction_tolerance=0.0,
@@ -96,7 +106,9 @@ class FinalSelectionTest(unittest.TestCase):
         )
 
         self.assertTrue(torch.all(volume == 1))
-        self.assertEqual(int(stats["selected_refine_steps"]), 1)
+        self.assertEqual(int(stats["selected_scale_step"]), 1)
+        self.assertEqual(int(stats["selected_refine_steps"]), 0)
+        self.assertEqual(stats["candidate_scale_steps"].tolist(), [0, 1])
 
     def test_gate_returns_best_candidate_when_calibration_exceeds_budget(self):
         volume, stats = select_latent_volume(

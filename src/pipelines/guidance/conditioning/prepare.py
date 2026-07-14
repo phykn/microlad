@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from src.pipelines.guidance.conditioning.images import prepare_anchor_image
 from src.pipelines.guidance.conditioning.reconstruction import reconstruct_target
 from src.pipelines.guidance.conditioning.validation import validate_anchors
-from src.pipelines.guidance.conditioning.model import AnchorSlice
+from src.pipelines.guidance.conditioning.model import AnchorSlice, VolumeAnchor
 from src.validation import require_float
 
 
@@ -101,6 +101,32 @@ def build_anchor_constraint_volume(
     mask = (counts > 0).to(dtype)
     target_volume = votes.argmax(dim=0).to(dtype)
     return target_volume, mask
+
+
+def build_volume_anchor_mask(
+    volume_shape: tuple[int, int, int],
+    anchors: Sequence[VolumeAnchor],
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    mask = torch.zeros(
+        1,
+        1,
+        *volume_shape,
+        dtype=torch.bool,
+        device=device,
+    )
+    for anchor in anchors:
+        length = int(anchor.image.shape[-1])
+        start = int(anchor.start)
+        stop = start + length
+        if anchor.axis == 0:
+            mask[:, :, anchor.index, start:stop, start:stop] = True
+        elif anchor.axis == 1:
+            mask[:, :, start:stop, anchor.index, start:stop] = True
+        else:
+            mask[:, :, start:stop, start:stop, anchor.index] = True
+    return mask
 
 
 def _add_constraint_plane(

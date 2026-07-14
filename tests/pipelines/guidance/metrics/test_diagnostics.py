@@ -40,6 +40,22 @@ class GuidanceDiagnosticsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "integer phase values"):
             evaluate_phase_volume(volume, num_phases=2)
 
+    def test_reports_repeat_streak_and_3d_percolation(self):
+        volume = torch.zeros(4, 4, 4)
+        volume[:, 1, 1] = 1
+
+        stats = evaluate_phase_volume(volume, num_phases=2)
+
+        self.assertEqual(float(stats["axis_near_repeat_rate"][0]), 1.0)
+        self.assertEqual(float(stats["axis_max_repeat_streak"][0]), 3.0)
+        self.assertEqual(float(stats["component_count"][1]), 1.0)
+        self.assertTrue(
+            torch.equal(
+                stats["phase_axis_percolation"][1],
+                torch.tensor([1.0, 0.0, 0.0]),
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

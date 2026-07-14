@@ -20,29 +20,25 @@ from src.pipelines.guidance.critic.train import train_critic
 from src.pipelines.guidance.conditioning.images import prepare_volume_anchors
 from src.pipelines.guidance.conditioning.latents import encode_anchors
 from src.pipelines.guidance.conditioning.model import AnchorSlice, VolumeAnchor
+from src.pipelines.guidance.conditioning.prepare import build_volume_anchor_mask
 from src.pipelines.guidance.conditioning.targets import (
     DescriptorTargets,
     build_descriptor_targets,
     prepare_target_images,
 )
 from src.pipelines.finalize.select import (
-    select_label_volume,
     select_latent_volume,
+    select_probability_volume,
 )
 from src.pipelines.guidance.joint.optimize import optimize_latent
-from src.pipelines.scaling.schedule import (
-    build_anchor_schedule,
-    build_balanced_schedule,
-)
 from src.pipelines.reconstruction.volume import sample_latent
 from src.pipelines.scaling.conditioning import (
-    build_scale_targets,
     center_start,
     encode_scale_anchors,
 )
-from src.pipelines.scaling.decoding import decode_large_volume
-from src.pipelines.scaling.optimize import optimize_large_volume
-from src.pipelines.scaling.refine import refine_large_candidates
+from src.pipelines.scaling.decoding import decode_large_volume_probabilities
+from src.pipelines.scaling.optimize import optimize_large_latent
+from src.pipelines.scaling.refine import refine_large_probabilities
 from src.pipelines.scaling.sampling import sample_large_lmpdd
 
 
@@ -100,7 +96,7 @@ class Predictor:
                 segment=options.targets.segment,
             )
         )
-        volume_size, descriptor_tile_size, t_max = prepare_prediction(
+        volume_size, _, t_max = prepare_prediction(
             options,
             anchors,
             target_labels,
@@ -143,7 +139,7 @@ class Predictor:
                 stacklevel=2,
             )
 
-        volume, base_stats = self._generate_large(
+        latent, base_stats = self._generate_large(
             volume_size,
             options=options,
             anchors=anchors,
@@ -152,26 +148,21 @@ class Predictor:
 
         if options.scale.steps > 0:
             assert t_max is not None
-            volume, joint_stats = self._refine_large(
-                volume,
+            latent_candidates, joint_stats = self._refine_large(
+                latent,
                 options=options,
                 anchors=anchors,
                 target_labels=guidance_labels,
-                descriptor_tile_size=descriptor_tile_size,
                 t_max=t_max,
             )
             stats.update(joint_stats)
-        candidates = refine_large_candidates(
-            volume,
-            self.vae,
-            candidates=options.refine.candidates,
-            tile_overlap=_tile_overlap(image_size, options.scale.overlap),
-            tile_batch_size=options.scale.batch_size,
-        )
-        candidates = tuple(
-            quantize_phase(candidate, options.num_phases).float()
-            for candidate in candidates
-        )
+            scale_steps = joint_stats["scale_candidate_steps"].tolist()
+        else:
+            latent_candidates = (latent,)
+            scale_steps = [0]
+            stats["scale_steps"] = torch.tensor(0, device=self.device)
+            stats["scale_candidate_steps"] = torch.tensor([0], device=self.device)
+
         reference_labels = target_labels if target_labels is not None else anchor_labels
         references = (
             None
@@ -184,15 +175,62 @@ class Predictor:
             .float()
         )
         target_fraction = self._resolve_fraction(options, guidance_labels)
-        volume, final_stats = select_label_volume(
-            candidates,
-            candidate_steps=options.refine.candidates,
+        anchor_mask = build_volume_anchor_mask(
+            (volume_size, volume_size, volume_size),
+            volume_anchors,
+            device=self.device,
+        )
+        base_std = latent_candidates[0].std().clamp_min(1e-6)
+        probability_candidates = []
+        candidate_steps = []
+        refine_steps = []
+        candidate_deltas = []
+        for scale_step, candidate in zip(
+            scale_steps,
+            latent_candidates,
+            strict=True,
+        ):
+            probabilities = decode_large_volume_probabilities(
+                self.vae,
+                candidate,
+                tile_overlap=_tile_overlap(
+                    int(self.vae.latent_size),
+                    options.scale.overlap,
+                ),
+                batch_size=options.scale.decode_batch_size,
+            )
+            refined = refine_large_probabilities(
+                probabilities,
+                self.vae,
+                candidates=options.refine.candidates,
+                tile_overlap=_tile_overlap(image_size, options.scale.overlap),
+                tile_batch_size=options.scale.decode_batch_size,
+                strength=options.refine.strength,
+                anchor_strength=options.refine.anchor_strength,
+                anchor_mask=anchor_mask,
+            )
+            delta = (candidate - latent_candidates[0]).square().mean().sqrt() / base_std
+            for steps, values in zip(
+                options.refine.candidates,
+                refined,
+                strict=True,
+            ):
+                probability_candidates.append(values)
+                candidate_steps.append(int(scale_step))
+                refine_steps.append(int(steps))
+                candidate_deltas.append(delta)
+
+        volume, final_stats = select_probability_volume(
+            probability_candidates,
+            candidate_steps=candidate_steps,
+            refine_steps=refine_steps,
             num_phases=options.num_phases,
             target_fraction=target_fraction,
             phase_fraction_tolerance=options.phase_fraction_tolerance,
             anchors=volume_anchors,
             references=references,
             quality=options.quality,
+            candidate_deltas=candidate_deltas,
         )
         stats.update(final_stats)
         if "quality_passed" in final_stats and not bool(final_stats["quality_passed"]):
@@ -472,6 +510,7 @@ class Predictor:
         else:
             anchor_latent, anchor_mask = None, None
 
+        sample_batch = options.scale.decode_batch_size or latent_size * latent_size
         latent = sample_large_lmpdd(
             self.diffusion_model,
             self.ddpm,
@@ -484,16 +523,10 @@ class Predictor:
             tile_size=tile_size,
             tile_overlap=overlap,
             device=self.device,
-            batch_size=options.scale.batch_size,
+            batch_size=sample_batch,
             anchor_latent=anchor_latent,
             anchor_mask=anchor_mask,
             progress=options.progress,
-        )
-        volume = decode_large_volume(
-            self.vae,
-            latent,
-            tile_overlap=overlap,
-            batch_size=options.scale.batch_size,
         )
         stats = {
             "volume_size": int(volume_size),
@@ -505,94 +538,54 @@ class Predictor:
                 base_size=int(self.vae.image_size),
             ),
         }
-        return volume, stats
+        return latent, stats
 
     def _refine_large(
         self,
-        volume: torch.Tensor,
+        latent: torch.Tensor,
         options: PredictOptions,
         anchors: Sequence[AnchorSlice] | None,
         target_labels: torch.Tensor | None,
-        descriptor_tile_size: int | None,
         t_max: int,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        volume_size = int(volume.shape[0])
-        image_size = int(self.vae.image_size)
-        steps = options.scale.steps
-        batch_size = options.scale.batch_size
-        learning_rate = options.scale.learning_rate
+    ) -> tuple[tuple[torch.Tensor, ...], dict[str, torch.Tensor]]:
         targets = self._build_targets(options, target_labels)
         solver = targets.get("diffusivity_solver")
 
-        sds_anchors = anchors
-        anchor_targets = None
-        anchor_masks = None
-        slice_schedule = None
-        if anchors and volume_size > image_size and anchor_size(anchors) == image_size:
-            anchor_targets, anchor_masks = build_scale_targets(
-                self.vae,
-                anchors,
-                volume_size=volume_size,
-                base_size=image_size,
-                num_phases=options.num_phases,
-                segment=options.segment_anchors,
-                device=self.device,
-                dtype=torch.float32,
-                downsample_factor=get_downsample_factor(self.vae),
-            )
-            sds_anchors = None
-            slice_schedule = build_anchor_schedule(
-                anchors,
-                steps=steps,
-                batch_size=batch_size,
-                volume_size=volume_size,
-                base_size=image_size,
-                downsample_factor=get_downsample_factor(self.vae),
-                device=self.device,
-            )
-        elif options.scale.balanced_slices:
-            slice_schedule = build_balanced_schedule(
-                steps=steps,
-                batch_size=batch_size,
-                volume_size=volume_size,
-            )
-
-        kwargs = {
-            "steps": steps,
-            "slice_steps": options.scale.slice_steps,
-            "batch_size": batch_size,
-            "lr": learning_rate,
-            "t_min": options.prior.t_min,
-            "t_max": t_max,
-            "num_phases": options.num_phases,
-            "slice_schedule": slice_schedule,
-            "anchors": sds_anchors,
-            "anchor_targets": anchor_targets,
-            "anchor_masks": anchor_masks,
-            "segment_anchors": options.segment_anchors,
-            "sds_weight": options.prior.weight,
-            "anchor_weight": options.scale.anchor_weight if anchors else 0.0,
-            "fraction_targets": targets.get("fraction_targets"),
-            "slice_fraction_weight": options.targets.slice_fraction_weight,
-            "global_fraction_weight": options.targets.global_fraction_weight,
-            "tpc_targets": targets.get("tpc_targets"),
-            "tpc_weight": options.targets.tpc_weight,
-            "sa_targets": targets.get("sa_targets"),
-            "sa_weight": options.targets.surface_area_weight,
-            "diffusivity_targets": targets.get("diffusivity_targets"),
-            "diffusivity_solver": solver,
-            "diffusivity_weight": options.targets.diffusivity_weight,
-            "descriptor_tile_size": descriptor_tile_size,
-            "progress": options.progress,
-        }
-
-        return optimize_large_volume(
-            volume,
+        return optimize_large_latent(
+            latent,
             self.vae,
             self.diffusion_model,
             self.ddpm,
-            tile_overlap=_tile_overlap(image_size, options.scale.overlap),
-            **kwargs,
+            steps=options.scale.steps,
+            batch_size=options.scale.batch_size,
+            lr=options.scale.learning_rate,
+            t_min=options.prior.t_min,
+            t_max=t_max,
+            num_phases=options.num_phases,
+            anchors=anchors,
+            segment_anchors=options.segment_anchors,
+            sds_weight=options.prior.weight,
+            anchor_weight=options.scale.anchor_weight if anchors else 0.0,
+            fraction_targets=targets.get("fraction_targets"),
+            slice_fraction_weight=options.targets.slice_fraction_weight,
+            global_fraction_weight=options.targets.global_fraction_weight,
+            tpc_targets=targets.get("tpc_targets"),
+            tpc_weight=options.targets.tpc_weight,
+            sa_targets=targets.get("sa_targets"),
+            sa_weight=options.targets.surface_area_weight,
+            diffusivity_targets=targets.get("diffusivity_targets"),
+            diffusivity_solver=solver,
+            diffusivity_weight=options.targets.diffusivity_weight,
+            continuity_weight=options.scale.continuity_weight,
+            preservation_weight=options.scale.preservation_weight,
+            residual_scale=options.scale.residual_scale,
+            checkpoint_every=options.scale.checkpoint_every,
+            decode_batch_size=options.scale.decode_batch_size,
+            tile_overlap=_tile_overlap(
+                int(self.vae.latent_size),
+                options.scale.overlap,
+            ),
+            progress=options.progress,
         )
 
     def _build_targets(

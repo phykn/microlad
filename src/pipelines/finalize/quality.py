@@ -84,6 +84,7 @@ def quality_score(
     values.extend(
         [
             stats["axis_exact_repeat_rate"].max(),
+            stats.get("axis_near_repeat_rate", changed.new_zeros(())).max(),
             stats["axis_global_boundary_jump"].max(),
             transition_error(stats["axis_transition_rate"], target_transition),
         ]

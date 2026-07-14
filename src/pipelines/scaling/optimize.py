@@ -4,48 +4,34 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
+from src.modeling.critic import sample_slices
 from src.modeling.diffusion import DDPMProcess
 from src.modeling.inference import freeze
-from src.pipelines.reconstruction.slices import (
-    extract_slice,
-    extract_slice_batch,
-    replace_slice,
-    replace_slice_batch,
-)
-from src.pipelines.scaling.schedule import select_slice_batch
-from src.pipelines.guidance.conditioning.prepare import build_anchor_targets
-from src.pipelines.guidance.metrics.conductance import ConductanceSolver
-from src.pipelines.guidance.metrics.loss import descriptor_loss, sample_descriptor_loss
+from src.pipelines.guidance.conditioning.images import prepare_anchor_image
 from src.pipelines.guidance.conditioning.model import AnchorSlice
-from src.pipelines.scaling.objective import (
-    batch_objective,
-    decode_slices,
-    global_fraction_loss,
-    slice_objective,
-)
-from src.pipelines.scaling.conditioning import as_anchor_image, move_anchor_map
-from src.pipelines.scaling.validation import (
-    validate_optimization,
-)
+from src.pipelines.guidance.joint.loss import fraction_loss
+from src.pipelines.guidance.metrics.conductance import ConductanceSolver
+from src.pipelines.guidance.metrics.loss import sample_descriptor_loss
+from src.pipelines.guidance.metrics.targets import build_phase_target
+from src.pipelines.guidance.prior import sds_loss
+from src.pipelines.reconstruction.volume import decode_latents
+from src.pipelines.scaling.decoding import decode_anchor_patch
+from src.validation import require_finite, require_finite_number, require_int
 
 
-def optimize_large_volume(
-    volume: torch.Tensor,
+def optimize_large_latent(
+    latent: torch.Tensor,
     vae: torch.nn.Module,
     diffusion_model: torch.nn.Module,
     ddpm: DDPMProcess,
     *,
     steps: int,
-    slice_steps: int,
+    batch_size: int,
     lr: float,
     t_min: int,
     t_max: int,
     num_phases: int,
-    batch_size: int = 1,
-    slice_schedule: Sequence[tuple[int, int]] | None = None,
     anchors: Sequence[AnchorSlice] | None = None,
-    anchor_targets: Mapping[tuple[int, int], torch.Tensor] | None = None,
-    anchor_masks: Mapping[tuple[int, int], torch.Tensor] | None = None,
     segment_anchors: bool = False,
     sds_weight: float = 1.0,
     anchor_weight: float = 0.0,
@@ -59,23 +45,25 @@ def optimize_large_volume(
     diffusivity_targets: Mapping[int, float] | torch.Tensor | None = None,
     diffusivity_solver: ConductanceSolver | None = None,
     diffusivity_weight: float = 0.0,
-    descriptor_tile_size: int | None = None,
-    temperature: float = 0.1,
+    continuity_weight: float = 0.05,
+    preservation_weight: float = 1.0,
+    residual_scale: float = 1.0,
+    checkpoint_every: int = 100,
+    decode_batch_size: int | None = 16,
     tile_overlap: int = 0,
+    temperature: float = 0.1,
     progress: bool = False,
-) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    validate_optimization(
-        volume,
+) -> tuple[tuple[torch.Tensor, ...], dict[str, torch.Tensor]]:
+    _validate(
+        latent,
+        vae,
         steps=steps,
-        slice_steps=slice_steps,
         batch_size=batch_size,
         lr=lr,
-        slice_schedule=slice_schedule,
+        num_phases=num_phases,
         anchors=anchors,
-        anchor_targets=anchor_targets,
-        anchor_masks=anchor_masks,
+        segment_anchors=segment_anchors,
         anchor_weight=anchor_weight,
-        sds_weight=sds_weight,
         fraction_targets=fraction_targets,
         slice_fraction_weight=slice_fraction_weight,
         global_fraction_weight=global_fraction_weight,
@@ -86,40 +74,62 @@ def optimize_large_volume(
         diffusivity_targets=diffusivity_targets,
         diffusivity_solver=diffusivity_solver,
         diffusivity_weight=diffusivity_weight,
+        sds_weight=sds_weight,
+        continuity_weight=continuity_weight,
+        preservation_weight=preservation_weight,
+        residual_scale=residual_scale,
+        checkpoint_every=checkpoint_every,
+        decode_batch_size=decode_batch_size,
         temperature=temperature,
-        num_phases=num_phases,
+        progress=progress,
     )
-    prepared_targets = build_anchor_targets(
-        vae,
-        anchors,
-        volume_shape=volume.shape,
-        num_phases=num_phases,
-        segment=segment_anchors,
-        device=volume.device,
-        dtype=volume.dtype,
-        tile_overlap=tile_overlap,
-    )
-    prepared_targets.update(
-        move_anchor_map(
-            anchor_targets,
-            device=volume.device,
-            dtype=volume.dtype,
-        )
-    )
-    prepared_masks = move_anchor_map(
-        anchor_masks,
-        device=volume.device,
-        dtype=volume.dtype,
-    )
-
     freeze(vae)
     freeze(diffusion_model)
 
-    updated = volume.clone().float()
+    candidates = [latent.detach().clone()]
+    candidate_steps = [0]
+    if steps == 0:
+        return tuple(candidates), {
+            "scale_steps": torch.tensor(0, device=latent.device),
+            "scale_candidate_steps": torch.tensor(
+                candidate_steps,
+                device=latent.device,
+            ),
+        }
+
+    target_fraction = (
+        None
+        if fraction_targets is None
+        else build_phase_target(
+            fraction_targets,
+            num_phases=num_phases,
+            device=latent.device,
+            dtype=latent.dtype,
+            label="fraction",
+            require_sum_one=True,
+        )
+    )
+    prepared_anchors = [
+        (
+            anchor,
+            prepare_anchor_image(
+                anchor.image,
+                num_phases=num_phases,
+                segment=segment_anchors,
+            )[0, 0].to(device=latent.device),
+        )
+        for anchor in anchors or ()
+    ]
+    base = latent.detach().unsqueeze(0)
+    scale = base.std(
+        dim=(2, 3, 4),
+        keepdim=True,
+        unbiased=False,
+    ).clamp_min(1e-3)
+    residual = torch.zeros_like(base, requires_grad=True)
+    optimizer = torch.optim.Adam([residual], lr=lr)
     history: dict[str, list[torch.Tensor]] = {}
 
-    if not isinstance(progress, bool):
-        raise ValueError("progress must be a boolean.")
     step_range = tqdm(
         range(steps),
         total=steps,
@@ -127,255 +137,208 @@ def optimize_large_volume(
         disable=not progress,
     )
     for step in step_range:
-        axis, indices = select_slice_batch(
-            updated,
-            step,
-            slice_schedule,
-            batch_size,
+        optimizer.zero_grad(set_to_none=True)
+        refined = base + residual_scale * scale * torch.tanh(residual)
+        crops = sample_slices(
+            refined,
+            count=batch_size,
+            crop_size=int(vae.latent_size),
+            axis_offset=step % 3,
         )
-        fixed_phase_counts = _fixed_phase_counts(
-            updated,
-            axis=axis,
-            indices=indices,
+        values, probabilities = decode_latents(
+            vae,
+            crops,
             num_phases=num_phases,
         )
+        total = refined.sum() * 0.0
+        stats: dict[str, torch.Tensor] = {}
 
-        if len(indices) == 1:
-            index = indices[0]
-            target = prepared_targets.get((axis, index))
-            mask = prepared_masks.get((axis, index))
-            weight = anchor_weight if target is not None else 0.0
-            image = extract_slice(updated, axis, index)
-
-            refined, stats = _optimize_large_slice(
-                image,
-                vae,
+        if sds_weight > 0.0:
+            prior, _ = sds_loss(
+                crops,
                 diffusion_model,
                 ddpm,
-                steps=slice_steps,
-                lr=lr,
                 t_min=t_min,
                 t_max=t_max,
-                num_phases=num_phases,
-                sds_weight=sds_weight,
-                anchor_target=target,
-                anchor_mask=mask,
-                anchor_weight=weight,
-                fraction_targets=fraction_targets,
-                slice_fraction_weight=slice_fraction_weight,
-                global_fraction_weight=global_fraction_weight,
-                fixed_phase_counts=fixed_phase_counts,
-                volume_voxels=updated.numel(),
-                tpc_targets=tpc_targets,
-                tpc_weight=tpc_weight,
-                sa_targets=sa_targets,
-                sa_weight=sa_weight,
-                diffusivity_targets=diffusivity_targets,
-                diffusivity_solver=diffusivity_solver,
-                diffusivity_weight=diffusivity_weight,
-                descriptor_tile_size=descriptor_tile_size,
-                temperature=temperature,
-                tile_overlap=tile_overlap,
             )
-            replace_slice(updated, axis, index, refined)
-        else:
-            images = extract_slice_batch(updated, axis, indices)
-            targets = [prepared_targets.get((axis, index)) for index in indices]
-            masks = [prepared_masks.get((axis, index)) for index in indices]
+            total = total + sds_weight * prior
+            stats["sds"] = (sds_weight * prior).detach()
 
-            refined, stats = _optimize_batch(
-                images,
+        descriptor, descriptor_stats = sample_descriptor_loss(
+            values,
+            num_phases=num_phases,
+            fraction_targets=fraction_targets,
+            fraction_weight=slice_fraction_weight,
+            tpc_targets=tpc_targets,
+            tpc_weight=tpc_weight,
+            sa_targets=sa_targets,
+            sa_weight=sa_weight,
+            diffusivity_targets=diffusivity_targets,
+            diffusivity_solver=diffusivity_solver,
+            diffusivity_weight=diffusivity_weight,
+            temperature=temperature,
+            phase_probabilities=probabilities,
+        )
+        total = total + descriptor
+        stats.update(descriptor_stats)
+
+        if target_fraction is not None and global_fraction_weight > 0.0:
+            hard = (
+                F.one_hot(
+                    probabilities.argmax(dim=1),
+                    num_classes=num_phases,
+                )
+                .movedim(-1, 1)
+                .to(probabilities.dtype)
+            )
+            categorical = hard + probabilities - probabilities.detach()
+            measured = categorical.mean(dim=(0, 2, 3))
+            error = fraction_loss(measured, target_fraction)
+            total = total + global_fraction_weight * error
+            stats["global_fraction"] = (
+                global_fraction_weight * error
+            ).detach()
+
+        if anchor_weight > 0.0:
+            anchor = _decoded_anchor_loss(
+                refined[0],
                 vae,
-                diffusion_model,
-                ddpm,
-                steps=slice_steps,
-                lr=lr,
-                t_min=t_min,
-                t_max=t_max,
+                prepared_anchors,
+                step=step,
                 num_phases=num_phases,
-                sds_weight=sds_weight,
-                anchor_targets=targets,
-                anchor_masks=masks,
-                anchor_weight=anchor_weight,
-                fraction_targets=fraction_targets,
-                slice_fraction_weight=slice_fraction_weight,
-                global_fraction_weight=global_fraction_weight,
-                fixed_phase_counts=fixed_phase_counts,
-                volume_voxels=updated.numel(),
-                tpc_targets=tpc_targets,
-                tpc_weight=tpc_weight,
-                sa_targets=sa_targets,
-                sa_weight=sa_weight,
-                diffusivity_targets=diffusivity_targets,
-                diffusivity_solver=diffusivity_solver,
-                diffusivity_weight=diffusivity_weight,
-                descriptor_tile_size=descriptor_tile_size,
-                temperature=temperature,
                 tile_overlap=tile_overlap,
+                decode_batch_size=decode_batch_size,
             )
-            replace_slice_batch(updated, axis, indices, refined)
+            total = total + anchor_weight * anchor
+            stats["anchor"] = (anchor_weight * anchor).detach()
 
-        for key, value in stats.items():
-            history.setdefault(key, []).append(value.detach())
+        if continuity_weight > 0.0:
+            continuity = _continuity_loss(refined, base)
+            total = total + continuity_weight * continuity
+            stats["continuity"] = (continuity_weight * continuity).detach()
 
-    stats = {
-        f"history_{key}": torch.stack(values).mean(dim=0)
-        for key, values in history.items()
+        preservation = (refined - base).square().mean()
+        total = total + preservation_weight * preservation
+        stats["preservation"] = (preservation_weight * preservation).detach()
+        stats["loss"] = total.detach()
+
+        total.backward()
+        torch.nn.utils.clip_grad_norm_([residual], max_norm=1.0)
+        optimizer.step()
+        for name, value in stats.items():
+            history.setdefault(name, []).append(value.detach())
+
+        completed = step + 1
+        refresh_every = max(1, steps // 100)
+        if progress and (
+            completed == 1 or completed % refresh_every == 0 or completed == steps
+        ):
+            display = {"loss": f"{float(stats['loss'].item()):.4g}"}
+            for name in ("anchor", "global_fraction", "sds"):
+                if name in stats:
+                    display[name] = f"{float(stats[name].item()):.4g}"
+            step_range.set_postfix(display)
+
+        if completed % checkpoint_every == 0 or completed == steps:
+            with torch.no_grad():
+                candidate = base + residual_scale * scale * torch.tanh(residual)
+                candidates.append(candidate[0].detach().clone())
+            candidate_steps.append(completed)
+
+    summary = {
+        f"history_{name}": torch.stack(values).mean(dim=0)
+        for name, values in history.items()
         if values
     }
-    stats["steps"] = torch.tensor(steps, device=updated.device)
-
-    return updated, stats
-
-
-def _optimize_large_slice(
-    image: torch.Tensor,
-    vae: torch.nn.Module,
-    diffusion_model: torch.nn.Module,
-    ddpm: DDPMProcess,
-    *,
-    steps: int,
-    lr: float,
-    t_min: int,
-    t_max: int,
-    num_phases: int,
-    sds_weight: float,
-    anchor_target: torch.Tensor | None,
-    anchor_mask: torch.Tensor | None,
-    anchor_weight: float,
-    fraction_targets: Mapping[int, float] | torch.Tensor | None,
-    slice_fraction_weight: float,
-    global_fraction_weight: float,
-    fixed_phase_counts: torch.Tensor,
-    volume_voxels: int,
-    tpc_targets: Mapping[int, torch.Tensor] | torch.Tensor | None,
-    tpc_weight: float,
-    sa_targets: Mapping[int, float] | torch.Tensor | None,
-    sa_weight: float,
-    diffusivity_targets: Mapping[int, float] | torch.Tensor | None,
-    diffusivity_solver: ConductanceSolver | None,
-    diffusivity_weight: float,
-    descriptor_tile_size: int | None,
-    temperature: float,
-    tile_overlap: int,
-) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    target_image = (
-        as_anchor_image(anchor_target) if anchor_target is not None else None
+    summary.update(
+        {
+            f"scale_final_{name}": values[-1]
+            for name, values in history.items()
+            if values
+        }
     )
-    target_mask = as_anchor_image(anchor_mask) if anchor_mask is not None else None
-
-    if descriptor_tile_size is not None and descriptor_tile_size != int(vae.image_size):
-        raise ValueError("descriptor_tile_size must match vae.image_size.")
-
-    use_tile_descriptor = descriptor_tile_size is not None
-
-    if steps == 0:
-        return image.float(), {}
-
-    image_param = image.detach().clone().float().requires_grad_(True)
-    optimizer = torch.optim.Adam([image_param], lr=lr)
-    history: dict[str, list[torch.Tensor]] = {}
-
-    for _ in range(steps):
-        optimizer.zero_grad()
-
-        decoded, phase_probabilities, total, stats = slice_objective(
-            image_param,
-            vae,
-            diffusion_model,
-            ddpm,
-            t_min=t_min,
-            t_max=t_max,
-            num_phases=num_phases,
-            sds_weight=sds_weight,
-            anchor_target=target_image,
-            anchor_mask=target_mask,
-            anchor_weight=anchor_weight,
-            temperature=temperature,
-            tile_overlap=tile_overlap,
-            fraction_targets=(
-                fraction_targets if use_tile_descriptor else None
-            ),
-            fraction_weight=(
-                slice_fraction_weight if use_tile_descriptor else 0.0
-            ),
-            tpc_targets=tpc_targets if use_tile_descriptor else None,
-            tpc_weight=tpc_weight if use_tile_descriptor else 0.0,
-            sa_targets=sa_targets if use_tile_descriptor else None,
-            sa_weight=sa_weight if use_tile_descriptor else 0.0,
-            diffusivity_targets=diffusivity_targets if use_tile_descriptor else None,
-            diffusivity_solver=diffusivity_solver if use_tile_descriptor else None,
-            diffusivity_weight=diffusivity_weight if use_tile_descriptor else 0.0,
-        )
-        if not use_tile_descriptor:
-            target_total, target_stats = descriptor_loss(
-                decoded,
-                num_phases=num_phases,
-                fraction_targets=fraction_targets,
-                fraction_weight=slice_fraction_weight,
-                tpc_targets=tpc_targets,
-                tpc_weight=tpc_weight,
-                sa_targets=sa_targets,
-                sa_weight=sa_weight,
-                diffusivity_targets=diffusivity_targets,
-                diffusivity_solver=diffusivity_solver,
-                diffusivity_weight=diffusivity_weight,
-                temperature=temperature,
-                phase_probabilities=phase_probabilities,
-            )
-            total = total + target_total
-            stats.update(target_stats)
-        global_total = global_fraction_loss(
-            phase_probabilities,
-            fixed_phase_counts=fixed_phase_counts,
-            volume_voxels=volume_voxels,
-            targets=fraction_targets,
-            weight=global_fraction_weight,
-        )
-        total = total + global_total
-        if global_fraction_weight > 0.0:
-            stats["global_fraction"] = global_total.detach()
-        stats["loss"] = total.detach()
-        total.backward()
-        optimizer.step()
-        with torch.no_grad():
-            image_param.clamp_(0.0, float(num_phases - 1))
-        for key, value in stats.items():
-            history.setdefault(key, []).append(value.detach())
-
-    with torch.no_grad():
-        decoded = decode_slices(
-            image_param.detach().unsqueeze(0),
-            vae,
-            tile_overlap=tile_overlap,
-        )[0]
-    return decoded, {
-        key: torch.stack(values).mean(dim=0)
-        for key, values in history.items()
-        if values
-    }
+    summary["scale_steps"] = torch.tensor(steps, device=latent.device)
+    summary["scale_candidate_steps"] = torch.tensor(
+        candidate_steps,
+        device=latent.device,
+    )
+    deltas = torch.stack([candidate - latent for candidate in candidates])
+    summary["scale_candidate_delta_rms"] = deltas.square().mean(
+        dim=(1, 2, 3, 4)
+    ).sqrt()
+    summary["scale_candidate_delta_max"] = deltas.abs().amax(
+        dim=(1, 2, 3, 4)
+    )
+    summary["scale_base_std"] = latent.std()
+    return tuple(candidates), summary
 
 
-def _optimize_batch(
-    images: torch.Tensor,
+def _continuity_loss(refined: torch.Tensor, base: torch.Tensor) -> torch.Tensor:
+    return torch.stack(
+        [
+            F.mse_loss(torch.diff(refined, dim=axis), torch.diff(base, dim=axis))
+            for axis in (2, 3, 4)
+        ]
+    ).mean()
+
+
+def _decoded_anchor_loss(
+    latent: torch.Tensor,
     vae: torch.nn.Module,
-    diffusion_model: torch.nn.Module,
-    ddpm: DDPMProcess,
+    anchors: Sequence[tuple[AnchorSlice, torch.Tensor]],
+    *,
+    step: int,
+    num_phases: int,
+    tile_overlap: int,
+    decode_batch_size: int | None,
+) -> torch.Tensor:
+    anchor, target = anchors[step % len(anchors)]
+    target_size = int(target.shape[0])
+    crop_size = min(max(int(vae.image_size) // 2, 1), target_size)
+    last_start = target_size - crop_size
+    starts = tuple(
+        dict.fromkeys(
+            min(start, last_start) for start in range(0, target_size, crop_size)
+        )
+    )
+    crop_grid = tuple((row, col) for row in starts for col in starts)
+    crop_start = crop_grid[(step // len(anchors)) % len(crop_grid)]
+    row, col = crop_start
+    labels = target[row : row + crop_size, col : col + crop_size].reshape(-1).long()
+    probabilities = decode_anchor_patch(
+        vae,
+        latent,
+        anchor,
+        target_size=target_size,
+        num_phases=num_phases,
+        tile_overlap=tile_overlap,
+        batch_size=decode_batch_size,
+        crop_start=crop_start,
+        crop_size=crop_size,
+    )
+    selected = probabilities.movedim(0, -1).reshape(-1, num_phases)
+    pixel_loss = -selected.clamp_min(
+        torch.finfo(selected.dtype).tiny
+    ).log().gather(1, labels.unsqueeze(1))[:, 0]
+    return torch.stack(
+        [pixel_loss[labels == phase].mean() for phase in labels.unique()]
+    ).mean()
+
+
+def _validate(
+    latent: torch.Tensor,
+    vae: torch.nn.Module,
     *,
     steps: int,
+    batch_size: int,
     lr: float,
-    t_min: int,
-    t_max: int,
     num_phases: int,
-    sds_weight: float,
-    anchor_targets: Sequence[torch.Tensor | None],
-    anchor_masks: Sequence[torch.Tensor | None],
+    anchors: Sequence[AnchorSlice] | None,
+    segment_anchors: bool,
     anchor_weight: float,
     fraction_targets: Mapping[int, float] | torch.Tensor | None,
     slice_fraction_weight: float,
     global_fraction_weight: float,
-    fixed_phase_counts: torch.Tensor,
-    volume_voxels: int,
     tpc_targets: Mapping[int, torch.Tensor] | torch.Tensor | None,
     tpc_weight: float,
     sa_targets: Mapping[int, float] | torch.Tensor | None,
@@ -383,126 +346,74 @@ def _optimize_batch(
     diffusivity_targets: Mapping[int, float] | torch.Tensor | None,
     diffusivity_solver: ConductanceSolver | None,
     diffusivity_weight: float,
-    descriptor_tile_size: int | None,
+    sds_weight: float,
+    continuity_weight: float,
+    preservation_weight: float,
+    residual_scale: float,
+    checkpoint_every: int,
+    decode_batch_size: int | None,
     temperature: float,
-    tile_overlap: int,
-) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    if images.ndim != 3:
-        raise ValueError("images must have shape [B, H, W].")
-
-    if len(anchor_targets) != images.shape[0] or len(anchor_masks) != images.shape[0]:
-        raise ValueError("anchor target batch size must match images.")
-
-    if descriptor_tile_size is not None and descriptor_tile_size != int(vae.image_size):
-        raise ValueError("descriptor_tile_size must match vae.image_size.")
-
-    use_tile_descriptor = descriptor_tile_size is not None
-
-    if steps == 0:
-        return images.float(), {}
-
-    image_param = images.detach().clone().float().requires_grad_(True)
-    optimizer = torch.optim.Adam([image_param], lr=lr)
-    history: dict[str, list[torch.Tensor]] = {}
-
-    for _ in range(steps):
-        optimizer.zero_grad()
-
-        decoded, phase_probabilities, total, stats = batch_objective(
-            image_param,
-            vae,
-            diffusion_model,
-            ddpm,
-            t_min=t_min,
-            t_max=t_max,
-            num_phases=num_phases,
-            sds_weight=sds_weight,
-            anchor_targets=anchor_targets,
-            anchor_masks=anchor_masks,
-            anchor_weight=anchor_weight,
-            temperature=temperature,
-            tile_overlap=tile_overlap,
-            fraction_targets=(
-                fraction_targets if use_tile_descriptor else None
-            ),
-            fraction_weight=(
-                slice_fraction_weight if use_tile_descriptor else 0.0
-            ),
-            tpc_targets=tpc_targets if use_tile_descriptor else None,
-            tpc_weight=tpc_weight if use_tile_descriptor else 0.0,
-            sa_targets=sa_targets if use_tile_descriptor else None,
-            sa_weight=sa_weight if use_tile_descriptor else 0.0,
-            diffusivity_targets=diffusivity_targets if use_tile_descriptor else None,
-            diffusivity_solver=diffusivity_solver if use_tile_descriptor else None,
-            diffusivity_weight=diffusivity_weight if use_tile_descriptor else 0.0,
-        )
-
-        if not use_tile_descriptor:
-            target_total, target_stats = sample_descriptor_loss(
-                decoded,
-                num_phases=num_phases,
-                fraction_targets=fraction_targets,
-                fraction_weight=slice_fraction_weight,
-                tpc_targets=tpc_targets,
-                tpc_weight=tpc_weight,
-                sa_targets=sa_targets,
-                sa_weight=sa_weight,
-                diffusivity_targets=diffusivity_targets,
-                diffusivity_solver=diffusivity_solver,
-                diffusivity_weight=diffusivity_weight,
-                temperature=temperature,
-                phase_probabilities=phase_probabilities,
-            )
-            total = total + target_total
-            stats.update(target_stats)
-
-        global_total = global_fraction_loss(
-            phase_probabilities,
-            fixed_phase_counts=fixed_phase_counts,
-            volume_voxels=volume_voxels,
-            targets=fraction_targets,
-            weight=global_fraction_weight,
-        )
-        total = total + global_total
-        if global_fraction_weight > 0.0:
-            stats["global_fraction"] = global_total.detach()
-
-        stats["loss"] = total.detach()
-        total.backward()
-        optimizer.step()
-
-        with torch.no_grad():
-            image_param.clamp_(0.0, float(num_phases - 1))
-
-        for key, value in stats.items():
-            history.setdefault(key, []).append(value.detach())
-
-    with torch.no_grad():
-        decoded = decode_slices(
-            image_param.detach(),
-            vae,
-            tile_overlap=tile_overlap,
-        )
-
-    return decoded, {
-        key: torch.stack(values).mean(dim=0)
-        for key, values in history.items()
-        if values
-    }
-
-
-def _fixed_phase_counts(
-    volume: torch.Tensor,
-    *,
-    axis: int,
-    indices: Sequence[int],
-    num_phases: int,
-) -> torch.Tensor:
-    labels = volume.round().long()
-    counts = F.one_hot(labels, num_classes=num_phases).sum(dim=(0, 1, 2)).float()
-    selected = extract_slice_batch(labels, axis, indices)
-    selected_counts = F.one_hot(
-        selected,
-        num_classes=num_phases,
-    ).sum(dim=(0, 1, 2)).float()
-    return counts - selected_counts
+    progress: bool,
+) -> None:
+    if latent.ndim != 4:
+        raise ValueError("latent must have shape [C, D, H, W].")
+    require_finite("latent", latent)
+    if not latent.is_floating_point():
+        raise ValueError("latent must be floating point.")
+    if latent.shape[0] != int(vae.latent_ch):
+        raise ValueError("latent channel count must match vae.latent_ch.")
+    if len(set(map(int, latent.shape[1:]))) != 1:
+        raise ValueError("scale-up latent must be cubic.")
+    if min(map(int, latent.shape[1:])) < int(vae.latent_size):
+        raise ValueError("scale-up latent must contain a trained-size crop.")
+    require_int("steps", steps)
+    require_int("batch_size", batch_size)
+    require_int("checkpoint_every", checkpoint_every)
+    if steps < 0 or batch_size <= 0 or checkpoint_every <= 0:
+        raise ValueError("scale optimization counts are invalid.")
+    if decode_batch_size is not None:
+        require_int("decode_batch_size", decode_batch_size)
+        if decode_batch_size <= 0:
+            raise ValueError("decode_batch_size must be positive or None.")
+    if num_phases != getattr(vae, "num_phases", None):
+        raise ValueError("num_phases must match vae.num_phases.")
+    for name, value in (
+        ("lr", lr),
+        ("temperature", temperature),
+        ("residual_scale", residual_scale),
+    ):
+        require_finite_number(name, value)
+        if value <= 0.0:
+            raise ValueError(f"{name} must be positive.")
+    for name, value in (
+        ("sds_weight", sds_weight),
+        ("anchor_weight", anchor_weight),
+        ("slice_fraction_weight", slice_fraction_weight),
+        ("global_fraction_weight", global_fraction_weight),
+        ("tpc_weight", tpc_weight),
+        ("sa_weight", sa_weight),
+        ("diffusivity_weight", diffusivity_weight),
+        ("continuity_weight", continuity_weight),
+        ("preservation_weight", preservation_weight),
+    ):
+        require_finite_number(name, value)
+        if value < 0.0:
+            raise ValueError(f"{name} must be non-negative.")
+    if not isinstance(segment_anchors, bool):
+        raise ValueError("segment_anchors must be a boolean.")
+    if anchor_weight > 0.0 and not anchors:
+        raise ValueError("scale anchors are required when anchor_weight is positive.")
+    if (
+        slice_fraction_weight > 0.0 or global_fraction_weight > 0.0
+    ) and fraction_targets is None:
+        raise ValueError("fraction_targets are required for fraction guidance.")
+    if tpc_weight > 0.0 and tpc_targets is None:
+        raise ValueError("tpc_targets are required when tpc_weight is positive.")
+    if sa_weight > 0.0 and sa_targets is None:
+        raise ValueError("sa_targets are required when sa_weight is positive.")
+    if diffusivity_weight > 0.0 and (
+        diffusivity_targets is None or diffusivity_solver is None
+    ):
+        raise ValueError("diffusivity targets and solver are required.")
+    if not isinstance(progress, bool):
+        raise ValueError("progress must be a boolean.")

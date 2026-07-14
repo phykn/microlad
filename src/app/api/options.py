@@ -141,7 +141,7 @@ class JointConfig:
 
     steps: int = 0
     batch_size: int = 8
-    decode_batch_size: int | None = 2
+    decode_batch_size: int | None = 16
     learning_rate: float = 1e-4
 
     axis_weight: float = 1.0
@@ -237,25 +237,33 @@ class CriticConfig:
 
 @dataclass(frozen=True)
 class ScaleConfig:
-    """Configures tiled scale-up operations.
+    """Configures latent scale-up guidance.
 
     Attributes:
         overlap: Fraction of each tile shared with neighboring tiles.
         steps: Number of scale-up guidance updates.
-        batch_size: Maximum number of scale-up planes or tiles processed together.
-        learning_rate: Learning rate for scale-up slice updates.
-        slice_steps: Optimization steps applied to each sampled slice.
-        anchor_weight: Weight of decoded scale-up anchor conditioning.
-        balanced_slices: Whether scale refinement visits axes and indices evenly.
+        batch_size: Number of latent crops guided per update.
+        decode_batch_size: Maximum planes or tiles decoded together. Use None to
+            process each decode stage in one batch on a large-memory GPU.
+        learning_rate: Learning rate for the 3D latent residual.
+        anchor_weight: Weight of decoded categorical anchor conditioning.
+        continuity_weight: Weight preserving three-axis latent continuity.
+        preservation_weight: Weight keeping the result near the initial L-MPDD.
+        residual_scale: Maximum residual in latent channel standard deviations.
+        checkpoint_every: Interval between scale-up candidate checkpoints.
     """
 
     overlap: float = 0.25
     steps: int = 0
-    batch_size: int = 16
-    learning_rate: float = 1e-2
-    slice_steps: int = 1
-    anchor_weight: float = 1.0
-    balanced_slices: bool = True
+    batch_size: int = 8
+    decode_batch_size: int | None = 16
+    learning_rate: float = 3e-3
+
+    anchor_weight: float = 2.0
+    continuity_weight: float = 0.05
+    preservation_weight: float = 1.0
+    residual_scale: float = 2.0
+    checkpoint_every: int = 100
 
     def __post_init__(self) -> None:
         require_finite_number("overlap", self.overlap)
@@ -265,11 +273,21 @@ class ScaleConfig:
         _require_non_negative_int("batch_size", self.batch_size)
         if self.batch_size == 0:
             raise ValueError("batch_size must be positive.")
-        _require_non_negative_int("slice_steps", self.slice_steps)
+        if self.decode_batch_size is not None:
+            _require_non_negative_int("decode_batch_size", self.decode_batch_size)
+            if self.decode_batch_size == 0:
+                raise ValueError("decode_batch_size must be positive or None.")
         _require_positive("learning_rate", self.learning_rate)
-        _require_non_negative("anchor_weight", self.anchor_weight)
-        if not isinstance(self.balanced_slices, bool):
-            raise ValueError("balanced_slices must be a boolean.")
+        for name in (
+            "anchor_weight",
+            "continuity_weight",
+            "preservation_weight",
+        ):
+            _require_non_negative(name, getattr(self, name))
+        _require_positive("residual_scale", self.residual_scale)
+        _require_non_negative_int("checkpoint_every", self.checkpoint_every)
+        if self.checkpoint_every == 0:
+            raise ValueError("checkpoint_every must be positive.")
 
 
 @dataclass(frozen=True)

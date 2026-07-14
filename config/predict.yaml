@@ -23,7 +23,7 @@ joint:
   steps: 700
   batch_size: 1
   # Use null to decode each axis in one batch on a large-memory GPU.
-  decode_batch_size: 2
+  decode_batch_size: 16
   learning_rate: 0.0003
   axis_weight: 1.0
   continuity_weight: 0.05
@@ -48,11 +48,15 @@ critic:
 scale:
   overlap: 0.25
   steps: 500
-  batch_size: 16
-  learning_rate: 0.01
-  slice_steps: 1
-  anchor_weight: 1.0
-  balanced_slices: true
+  batch_size: 8
+  # Use null to decode each stage in one batch on a large-memory GPU.
+  decode_batch_size: 16
+  learning_rate: 0.003
+  anchor_weight: 2.0
+  continuity_weight: 0.05
+  preservation_weight: 1.0
+  residual_scale: 2.0
+  checkpoint_every: 100
 
 refine:
   candidates: [0, 1, 2]

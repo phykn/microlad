@@ -1,37 +1,14 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
 import numpy as np
 import torch
 
 from src.modeling.vae import get_downsample_factor
 from src.pipelines.guidance.conditioning.images import prepare_anchor_image
-from src.pipelines.guidance.conditioning.reconstruction import reconstruct_target
 from src.pipelines.guidance.conditioning.validation import validate_anchor_positions
 from src.pipelines.scaling.tiles import tile_grid
 from src.pipelines.guidance.conditioning.model import AnchorSlice
 from src.validation import require_finite, require_int
-
-
-def as_anchor_image(target: torch.Tensor) -> torch.Tensor:
-    if target.ndim == 4 and target.shape[:2] == (1, 1):
-        return target[0, 0]
-    if target.ndim == 2:
-        return target
-    raise ValueError("anchor target must have shape [H, W] or [1, 1, H, W].")
-
-
-def move_anchor_map(
-    values: Mapping[tuple[int, int], torch.Tensor] | None,
-    *,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> dict[tuple[int, int], torch.Tensor]:
-    if not values:
-        return {}
-    return {
-        (int(axis), int(index)): value.to(device=device, dtype=dtype)
-        for (axis, index), value in values.items()
-    }
 
 
 def center_start(*, volume_size: int, base_size: int) -> int:
@@ -64,31 +41,6 @@ def _aligned_center_start(
         raise ValueError("anchor center must align to the VAE latent grid.")
 
     return start
-
-
-def anchor_positions(
-    anchors: Sequence[AnchorSlice] | None,
-    *,
-    volume_size: int,
-    base_size: int,
-    downsample_factor: int | None = None,
-) -> list[tuple[int, int]]:
-    if downsample_factor is None:
-        center_start(volume_size=volume_size, base_size=base_size)
-    else:
-        _aligned_center_start(
-            volume_size=volume_size,
-            base_size=base_size,
-            downsample_factor=downsample_factor,
-        )
-
-    _validate_base_anchors(
-        anchors or [],
-        base_size=base_size,
-        volume_size=volume_size,
-    )
-
-    return [(int(anchor.axis), int(anchor.index)) for anchor in anchors or []]
 
 
 def encode_scale_anchors(
@@ -189,60 +141,6 @@ def encode_scale_anchors(
     return latent, mask
 
 
-def build_scale_targets(
-    vae: torch.nn.Module,
-    anchors: Sequence[AnchorSlice] | None,
-    *,
-    volume_size: int,
-    base_size: int,
-    num_phases: int,
-    segment: bool,
-    device: torch.device,
-    dtype: torch.dtype,
-    downsample_factor: int | None = None,
-) -> tuple[dict[tuple[int, int], torch.Tensor], dict[tuple[int, int], torch.Tensor]]:
-    if not anchors:
-        return {}, {}
-
-    require_int("volume_size", volume_size)
-    require_int("base_size", base_size)
-    _validate_base_anchors(
-        anchors,
-        base_size=base_size,
-        volume_size=volume_size,
-    )
-
-    if downsample_factor is None:
-        start = center_start(volume_size=volume_size, base_size=base_size)
-    else:
-        start = _aligned_center_start(
-            volume_size=volume_size,
-            base_size=base_size,
-            downsample_factor=downsample_factor,
-        )
-
-    targets: dict[tuple[int, int], torch.Tensor] = {}
-    masks: dict[tuple[int, int], torch.Tensor] = {}
-
-    for anchor in anchors:
-        image = prepare_anchor_image(
-            anchor.image,
-            num_phases=num_phases,
-            segment=segment,
-        ).to(device=device, dtype=dtype)
-        image = reconstruct_target(vae, image)[0, 0]
-
-        target = torch.zeros((volume_size, volume_size), device=device, dtype=dtype)
-        mask = torch.zeros_like(target)
-        target[start : start + base_size, start : start + base_size] = image
-        mask[start : start + base_size, start : start + base_size] = 1
-
-        targets[(int(anchor.axis), int(anchor.index))] = target
-        masks[(int(anchor.axis), int(anchor.index))] = mask
-
-    return targets, masks
-
-
 def _scale_anchor_scope(
     anchor: AnchorSlice,
     *,
@@ -273,24 +171,6 @@ def _scale_anchor_scope(
         (volume_size, volume_size, volume_size),
     )
     raise ValueError("anchor image size must match vae.image_size or volume_size.")
-
-
-def _validate_base_anchors(
-    anchors: Sequence[AnchorSlice],
-    *,
-    base_size: int,
-    volume_size: int,
-) -> None:
-    validate_anchor_positions(
-        anchors,
-        (volume_size, volume_size, volume_size),
-    )
-    expected = (base_size, base_size)
-    for anchor in anchors:
-        if not isinstance(anchor.image, np.ndarray):
-            raise TypeError("anchor image must be a numpy array.")
-        if anchor.image.shape != expected:
-            raise ValueError(f"anchor image shape must be {expected}.")
 
 
 def _encode_anchor(

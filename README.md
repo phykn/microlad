@@ -164,8 +164,16 @@ Anchors are full 2D slices assigned to a volume axis and index. They are soft
 decoded constraints, so target labels are not forcibly copied into the result.
 Multiple-axis anchor intersections must request compatible categorical labels.
 
-For scale-up, pass a larger `volume_size`; the `scale` section controls its tiled
-L-MPDD guidance. Reference descriptor targets live under `TargetConfig`, for
+For scale-up, pass a larger `volume_size`; the `scale` section controls tiled
+L-MPDD sampling and one shared 3D latent residual. Guidance samples balanced
+latent crops from all three axes, so it never optimizes or overwrites scalar phase
+label slices. The initial L-MPDD latent and periodic scale checkpoints are all kept
+as final candidates. Scale anchors use the same tiled tri-axis probability consensus
+as final decoding, sampled over anchors and image regions during optimization without
+copying target labels. `scale.decode_batch_size` limits tiled sampling, anchor loss,
+decoding, and refinement memory; set it to `null` to process each stage in one batch
+on a large-memory GPU. Both modes use the same decoder meaning. Reference descriptor
+targets live under `TargetConfig`, for
 example `targets=TargetConfig(slice_fraction_weight=1.0, tpc_weight=1.0)`.
 Explicit `phase_fractions` use `global_fraction_weight` and do not constrain
 every slice unless `slice_fraction_weight` is also enabled.

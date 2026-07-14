@@ -151,16 +151,25 @@ Calibration은 마지막에 후보당 한 번만 수행한다. 앵커 target이 
 ## Scale-up 경계
 
 Scale-up도 L-MPDD latent에서 시작하고 공통 categorical decoder와 최종 evaluator를
-사용한다. 다만 large tiled decoder는 현재 gradient를 보존하지 않으므로, 첫 통합
-버전의 exact latent Joint는 VAE 기본 크기에서 완성한다. 큰 volume은 기존 tiled
-SDS/anchor optimizer를 같은 상위 파이프라인의 scale 단계로 유지한다. Base 전용
-Joint/critic 설정이 함께 활성화되면 경고하고 scale 설정을 사용한다. Scale Refine도
-설정된 sweep 후보를 모두 평가해 최종 hard-volume evaluator로 선택한다.
+사용한다. 큰 volume의 guidance는 단일 3D latent residual을 최적화하고, SDS와 2D
+descriptor만 학습 크기의 latent crop으로 계산한다. 따라서 과거처럼 float phase ID
+단면을 수정한 뒤 한 축씩 volume에 덮어쓰지 않는다. anchor는 large L-MPDD 주입과
+최종 tiled tri-axis consensus의 categorical NLL로 사용하며 target label을 직접
+복사하지 않는다. 매 step에는 앵커 하나의 부분 영역을 순환해 미분하므로 전체 exact
+loss와 같은 목적을 유지하면서 GPU 메모리를 제한한다.
 
-Large latent Joint는 다음 두 조건을 충족한 뒤 확장한다.
+초기 large L-MPDD latent는 후보 0이고 `scale.checkpoint_every`마다 중간 latent를
+후보로 보존한다. 각 후보는 동일한 tiled decoder와 tri-axis geometric consensus로
+soft probability가 된 뒤, base와 같은 strength/anchor-strength Refine 및 anchor 보호
+calibration을 거쳐 비교된다. anchor와 fraction gate를 통과한 후보 사이에서는 반복,
+boundary, run-profile, transition 순의 morphology가 먼저 선택된다.
 
-- tiled tri-axis decoder와 exact anchor region decode가 gradient를 보존한다.
-- base와 large decoder가 같은 좌표와 probability 의미를 갖는 회귀 테스트를 통과한다.
+`scale.decode_batch_size`가 숫자이면 L-MPDD tile, anchor plane, final plane,
+VAE Refine을 나눠 peak memory를 제한한다. `null`이면 각 단계의 작업을 한 batch로
+처리한다. 배치 방식은 메모리만 바꾸며 decoder interpolation과 후보 평가 의미는 같다.
+3D component,
+percolation, Euler density는 최종 진단으로 기록하지만 단일 2D reference에서 정답을
+추론할 수 없으므로 아직 gate로 사용하지 않는다.
 
 ## 제거한 레거시
 
@@ -175,7 +184,7 @@ Large latent Joint는 다음 두 조건을 충족한 뒤 확장한다.
 
 WGAN-GP objective, latent slice sampling, 2D latent critic은 critic guidance로
 이동했다. 독립 SDS 모드에서 실제로 쓰던 diffusion prior는 공통 guidance로,
-scale slice schedule은 scaling으로 옮기고 나머지 slice optimizer도 삭제했다.
+scale slice schedule, scalar phase optimizer, 순차 slice overwrite도 삭제했다.
 
 ## 검증
 

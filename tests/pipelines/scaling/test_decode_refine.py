@@ -3,15 +3,14 @@ import unittest
 import torch
 import torch.nn.functional as F
 
-from src.modeling.phases.calibration import probabilities_to_calibrated_labels
 from src.pipelines.reconstruction.refine import refine_probabilities
 from src.pipelines.reconstruction.volume import decode_volume, decode_volume_probs
 from src.pipelines.scaling.decoding import (
-    _decode_tiled_plane_probabilities,
+    decode_tiled_planes,
     decode_large_volume,
     decode_large_volume_probabilities,
 )
-from src.pipelines.scaling.refine import refine_large_candidates
+from src.pipelines.scaling.refine import refine_large_probabilities
 from src.pipelines.scaling.tiles import blend_window, tile_grid
 
 
@@ -140,19 +139,17 @@ class ScaleDecodeRefineTest(unittest.TestCase):
             steps=1,
             batch_size=1,
         )
-        base = probabilities_to_calibrated_labels(
-            base_probabilities,
-            num_phases=2,
-        )[0, 0].float()
-        large = refine_large_candidates(
-            volume,
+        large = refine_large_probabilities(
+            probabilities,
             CategoricalVAE(),
             candidates=(1,),
             tile_overlap=0,
             tile_batch_size=1,
+            strength=1.0,
+            anchor_strength=1.0,
         )[0]
 
-        self.assertTrue(torch.equal(large, base))
+        self.assertTrue(torch.allclose(large, base_probabilities))
 
     def test_large_refinement_returns_each_requested_candidate(self):
         volume = torch.tensor(
@@ -162,19 +159,23 @@ class ScaleDecodeRefineTest(unittest.TestCase):
             ]
         )
 
-        zero, one = refine_large_candidates(
-            volume,
+        probabilities = F.one_hot(
+            volume.long(),
+            num_classes=2,
+        ).movedim(-1, 0).unsqueeze(0).float()
+        zero, one = refine_large_probabilities(
+            probabilities,
             CategoricalVAE(),
             candidates=(0, 1),
             tile_overlap=0,
             tile_batch_size=1,
         )
 
-        self.assertTrue(torch.equal(zero, volume))
-        self.assertTrue(torch.equal(
+        self.assertTrue(torch.equal(zero, probabilities))
+        self.assertTrue(torch.allclose(
             one,
-            refine_large_candidates(
-                volume,
+            refine_large_probabilities(
+                probabilities,
                 CategoricalVAE(),
                 candidates=(1,),
             )[0],
@@ -195,11 +196,28 @@ class ScaleDecodeRefineTest(unittest.TestCase):
             torch.allclose(probabilities.sum(dim=1), torch.ones(1, 4, 4, 4))
         )
 
+    def test_full_and_batched_decode_have_identical_meaning(self):
+        latent = torch.linspace(-1.0, 1.0, steps=64).view(1, 4, 4, 4)
+        batched = decode_large_volume_probabilities(
+            CategoricalVAE(),
+            latent,
+            tile_overlap=1,
+            batch_size=1,
+        )
+        full = decode_large_volume_probabilities(
+            CategoricalVAE(),
+            latent,
+            tile_overlap=1,
+            batch_size=None,
+        )
+
+        self.assertTrue(torch.allclose(full, batched, atol=1e-6, rtol=1e-6))
+
     def test_tiled_probability_decode_uses_weighted_blending(self):
         vae = MeanCategoricalVAE()
         latent = torch.arange(16, dtype=torch.float32).view(1, 1, 4, 4)
 
-        decoded = _decode_tiled_plane_probabilities(
+        decoded = decode_tiled_planes(
             vae,
             latent,
             tile_overlap=1,
@@ -217,25 +235,50 @@ class ScaleDecodeRefineTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(decoded[0, 1], expected / weights))
 
+    def test_tiled_probability_decode_limits_vae_batch_size(self):
+        vae = CategoricalVAE()
+        latent = torch.zeros(5, 1, 4, 4)
+
+        batched = decode_tiled_planes(
+            vae,
+            latent,
+            tile_overlap=1,
+            num_phases=2,
+            batch_size=2,
+        )
+        full = decode_tiled_planes(
+            CategoricalVAE(),
+            latent,
+            tile_overlap=1,
+            num_phases=2,
+        )
+
+        self.assertLessEqual(max(vae.decode_batch_sizes), 2)
+        self.assertTrue(torch.equal(batched, full))
+
     def test_large_refinement_batches_tiles_without_changing_result(self):
         volume = torch.linspace(-0.5, 0.5, steps=64).view(4, 4, 4)
-        single = refine_large_candidates(
-            volume,
+        probabilities = F.one_hot(
+            (volume > 0).long(),
+            num_classes=2,
+        ).movedim(-1, 0).unsqueeze(0).float()
+        single = refine_large_probabilities(
+            probabilities,
             CategoricalVAE(),
             candidates=(1,),
             tile_overlap=1,
             tile_batch_size=1,
         )[0]
         batched_vae = CategoricalVAE()
-        batched = refine_large_candidates(
-            volume,
+        batched = refine_large_probabilities(
+            probabilities,
             batched_vae,
             candidates=(1,),
             tile_overlap=1,
             tile_batch_size=3,
         )[0]
 
-        self.assertTrue(torch.equal(single, batched))
+        self.assertTrue(torch.allclose(single, batched))
         self.assertLessEqual(max(batched_vae.encode_batch_sizes), 3)
         self.assertEqual(
             batched_vae.encode_batch_sizes,
@@ -270,17 +313,17 @@ class ScaleDecodeRefineTest(unittest.TestCase):
 
     def test_refinement_rejects_invalid_inputs(self):
         cases = (
-            (torch.zeros(2, 2, 2, dtype=torch.long), CategoricalVAE(), "floating"),
-            (torch.full((2, 2, 2), float("nan")), CategoricalVAE(), "finite"),
-            (torch.zeros(2, 2, 2), ScalarVAE(), "decode_probs"),
-            (torch.zeros(2, 2, 2), NonFiniteEncodeVAE(), "encoded latent"),
-            (torch.zeros(2, 2, 2), NonFiniteDecodeVAE(), "decoded probabilities"),
+            (torch.zeros(1, 2, 2, 2, 2, dtype=torch.long), CategoricalVAE(), "floating"),
+            (torch.full((1, 2, 2, 2, 2), float("nan")), CategoricalVAE(), "finite"),
+            (torch.full((1, 2, 2, 2, 2), 0.5), ScalarVAE(), "decode_probs"),
+            (torch.full((1, 2, 2, 2, 2), 0.5), NonFiniteEncodeVAE(), "encoded latent"),
+            (torch.full((1, 2, 2, 2, 2), 0.5), NonFiniteDecodeVAE(), "decoded probabilities"),
         )
-        for volume, vae, message in cases:
+        for probabilities, vae, message in cases:
             with self.subTest(message=message):
                 with self.assertRaisesRegex(ValueError, message):
-                    refine_large_candidates(
-                        volume,
+                    refine_large_probabilities(
+                        probabilities,
                         vae,
                         candidates=(1,),
                         tile_overlap=0,
@@ -288,8 +331,8 @@ class ScaleDecodeRefineTest(unittest.TestCase):
                     )
 
         with self.assertRaisesRegex(ValueError, "tile_batch_size"):
-            refine_large_candidates(
-                torch.zeros(2, 2, 2),
+            refine_large_probabilities(
+                torch.full((1, 2, 2, 2, 2), 0.5),
                 CategoricalVAE(),
                 candidates=(1,),
                 tile_batch_size=0,

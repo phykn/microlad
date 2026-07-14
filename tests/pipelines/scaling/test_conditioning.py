@@ -5,9 +5,7 @@ import torch
 
 from src.pipelines.scaling.conditioning import (
     center_start,
-    anchor_positions,
     encode_scale_anchors,
-    build_scale_targets,
 )
 from src.pipelines.guidance.conditioning.model import AnchorSlice
 
@@ -180,68 +178,6 @@ class ScaleConditionTest(unittest.TestCase):
                 segment=False,
                 device=torch.device("cpu"),
             )
-
-    def test_anchor_positions_preserve_absolute_index(self):
-        anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=4)
-
-        positions = anchor_positions([anchor], volume_size=6, base_size=2)
-
-        self.assertEqual(positions, [(0, 4)])
-
-    def test_scale_anchor_targets_reject_center_that_cannot_align_to_latent_grid(self):
-        anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=0)
-
-        with self.assertRaisesRegex(ValueError, "align"):
-            build_scale_targets(
-                DownsamplingVAE(),
-                [anchor],
-                volume_size=4,
-                base_size=2,
-                num_phases=2,
-                segment=False,
-                device=torch.device("cpu"),
-                dtype=torch.float32,
-                downsample_factor=2,
-            )
-
-    def test_scale_anchor_targets_use_reconstructed_center_patch(self):
-        anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=1)
-
-        targets, masks = build_scale_targets(
-            ShiftDecodeVAE(),
-            [anchor],
-            volume_size=6,
-            base_size=2,
-            num_phases=2,
-            segment=False,
-            device=torch.device("cpu"),
-            dtype=torch.float32,
-        )
-
-        target = targets[(0, 1)]
-        mask = masks[(0, 1)]
-
-        self.assertTrue(torch.equal(target[2:4, 2:4], torch.ones(2, 2)))
-        self.assertTrue(torch.equal(mask[2:4, 2:4], torch.ones(2, 2)))
-        self.assertTrue(torch.equal(mask[:2, :], torch.zeros(2, 6)))
-
-    def test_anchor_positions_reject_center_that_cannot_align_to_latent_grid(self):
-        anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=0)
-
-        with self.assertRaisesRegex(ValueError, "align"):
-            anchor_positions(
-                [anchor],
-                volume_size=4,
-                base_size=2,
-                downsample_factor=2,
-            )
-
-    def test_anchor_positions_reject_index_outside_output_volume(self):
-        anchor = AnchorSlice(image=np.zeros((2, 2), dtype=np.uint8), axis=0, index=6)
-
-        with self.assertRaisesRegex(ValueError, "index"):
-            anchor_positions([anchor], volume_size=6, base_size=2)
-
 
 if __name__ == "__main__":
     unittest.main()
