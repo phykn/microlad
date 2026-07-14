@@ -47,7 +47,7 @@ class PredictOptionsTest(unittest.TestCase):
         self.assertIsInstance(options.critic, CriticConfig)
         self.assertIsInstance(options.quality, QualityConfig)
         self.assertEqual(options.joint.steps, 0)
-        self.assertEqual(options.critic.steps, 0)
+        self.assertEqual(options.critic.weight, 0.0)
 
     def test_loss_weights_accept_values_above_one(self):
         self.assertEqual(PriorConfig(weight=2.0).weight, 2.0)
@@ -73,7 +73,7 @@ class PredictOptionsTest(unittest.TestCase):
             ("decode_batch_size", lambda: JointConfig(decode_batch_size=0)),
             ("steps", lambda: JointConfig(steps=1.5)),
             ("progress", lambda: PredictOptions(num_phases=2, progress=1)),
-            ("candidate_count", lambda: CriticConfig(candidate_count=0)),
+            ("weight", lambda: CriticConfig(weight=-0.1)),
             ("decode_batch_size", lambda: ScaleConfig(decode_batch_size=True)),
             ("calibration_budget", lambda: QualityConfig(calibration_budget=1.1)),
         )
@@ -81,12 +81,6 @@ class PredictOptionsTest(unittest.TestCase):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(ValueError, message):
                     build()
-
-    def test_critic_requires_joint_optimization(self):
-        with self.assertRaisesRegex(ValueError, "critic.steps"):
-            PredictOptions(num_phases=2, critic=CriticConfig(steps=1))
-        with self.assertRaisesRegex(ValueError, "critic.weight"):
-            PredictOptions(num_phases=2, critic=CriticConfig(weight=0.1))
 
     def test_scale_can_decode_all_planes_at_once(self):
         self.assertIsNone(ScaleConfig(decode_batch_size=None).decode_batch_size)
@@ -178,6 +172,7 @@ class PredictorTest(unittest.TestCase):
                 anchors=None,
                 target_labels=None,
                 critic=None,
+                critic_fraction=None,
                 t_max=3,
             )
 
@@ -322,6 +317,7 @@ class PredictorTest(unittest.TestCase):
                 anchors=None,
                 target_labels=torch.zeros(1, 2, 2, dtype=torch.long),
                 critic=None,
+                critic_fraction=None,
                 t_max=3,
             )
 
@@ -424,11 +420,11 @@ class PredictorTest(unittest.TestCase):
         self.assertIs(sample.call_args.kwargs["anchor_latent"], anchor_latent)
         self.assertIs(sample.call_args.kwargs["anchor_mask"], anchor_mask)
 
-    def test_critic_uses_anchor_or_target_references(self):
+    def test_critic_requires_a_pretrained_gan_run(self):
         options = PredictOptions(
             num_phases=2,
             joint=JointConfig(steps=1),
-            critic=CriticConfig(steps=1, weight=0.1),
+            critic=CriticConfig(weight=0.1),
             refine=RefineConfig(candidates=(0,)),
         )
         anchor = AnchorSlice(
@@ -436,16 +432,24 @@ class PredictorTest(unittest.TestCase):
             axis=0,
             index=1,
         )
+        with self.assertRaisesRegex(ValueError, "models.gan_run_dir"):
+            self.predictor.predict(options, anchors=[anchor])
+
+    def test_pretrained_critic_and_fraction_reach_joint_guidance(self):
+        options = PredictOptions(
+            num_phases=2,
+            phase_fractions=(0.25, 0.75),
+            joint=JointConfig(steps=1),
+            critic=CriticConfig(weight=0.1),
+            refine=RefineConfig(candidates=(0,)),
+        )
         latent = torch.zeros(1, 2, 2, 2)
         volume = torch.zeros(2, 2, 2)
+        critic = object()
+        self.predictor.critic = critic
 
         with (
             patch("src.app.api.predictor.sample_latent", return_value=latent),
-            patch.object(
-                self.predictor,
-                "_fit_critic",
-                return_value=(None, {"critic_steps": torch.tensor(1)}),
-            ) as train,
             patch.object(
                 self.predictor,
                 "_run_joint",
@@ -456,79 +460,32 @@ class PredictorTest(unittest.TestCase):
                         "joint_candidate_steps": torch.tensor([0]),
                     },
                 ),
-            ),
+            ) as joint,
             patch(
                 "src.app.api.predictor.select_latent_volume",
                 return_value=(volume, {}),
             ),
         ):
-            self.predictor.predict(options, anchors=[anchor])
+            self.predictor.predict(options)
 
-        train.assert_called_once()
-        references = train.call_args.args[1]
-        self.assertEqual(references.shape, torch.Size([1, 2, 2]))
-
-    def test_failed_critic_validation_disables_only_critic_guidance(self):
-        options = PredictOptions(
-            num_phases=2,
-            joint=JointConfig(steps=1),
-            critic=CriticConfig(steps=1, weight=0.1),
-            refine=RefineConfig(candidates=(0,)),
+        self.assertIs(joint.call_args.kwargs["critic"], critic)
+        self.assertTrue(
+            torch.allclose(
+                joint.call_args.kwargs["critic_fraction"],
+                torch.tensor([0.25, 0.75]),
+            )
         )
-        latent = torch.zeros(1, 2, 2, 2)
-        failed = {
-            "critic_validation_accuracy": torch.tensor(0.8),
-            "critic_damage_accuracy": torch.tensor(0.8),
-            "critic_shuffle_accuracy": torch.tensor(0.8),
-            "critic_validation_margin": torch.tensor(0.0),
-            "critic_input_gradient_finite": torch.tensor(True),
-        }
-
-        with (
-            patch(
-                "src.app.api.predictor.encode_refs",
-                return_value=torch.zeros(1, 8, 1, 2, 2),
-            ),
-            patch("src.app.api.predictor.sample_latent", return_value=latent),
-            patch("src.app.api.predictor.train_critic", return_value=failed),
-        ):
-            critic, stats = self.predictor._fit_critic(
-                latent,
-                torch.zeros(1, 2, 2),
-                options=options,
-            )
-
-        self.assertIsNone(critic)
-        self.assertFalse(bool(stats["critic_enabled"]))
-
-        with patch(
-            "src.app.api.predictor.optimize_latent",
-            return_value=(
-                (latent,),
-                {
-                    "joint_steps": torch.tensor(1),
-                    "joint_candidate_steps": torch.tensor([0]),
-                },
-            ),
-        ) as optimize:
-            self.predictor._run_joint(
-                latent,
-                options=options,
-                anchors=None,
-                target_labels=None,
-                critic=None,
-                t_max=3,
-            )
-
-        self.assertEqual(optimize.call_args.kwargs["critic_weight"], 0.0)
 
     def test_large_prediction_uses_scale_refinement_not_base_joint(self):
         options = PredictOptions(
             num_phases=2,
+            phase_fractions=(0.25, 0.75),
+            critic=CriticConfig(weight=0.1),
             scale=ScaleConfig(steps=1),
             refine=RefineConfig(candidates=(0,)),
         )
         generated = torch.zeros(1, 4, 4, 4)
+        self.predictor.critic = object()
 
         with (
             patch.object(
@@ -553,6 +510,12 @@ class PredictorTest(unittest.TestCase):
 
         generate.assert_called_once()
         refine.assert_called_once()
+        self.assertTrue(
+            torch.allclose(
+                refine.call_args.kwargs["critic_fraction"],
+                torch.tensor([0.25, 0.75]),
+            )
+        )
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
         self.assertIn("final_phase_fraction", stats)
 

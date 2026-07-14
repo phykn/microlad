@@ -125,6 +125,10 @@ class BuildTest(unittest.TestCase):
             path.write_text(
                 "\n".join(
                     [
+                        "models:",
+                        "  vae_run_dir: run/vae",
+                        "  diffusion_run_dir: run/diffusion",
+                        "  gan_run_dir: run/gan",
                         "progress: false",
                         "phase_fractions: [0.25, 0.15, 0.60]",
                         "phase_fraction_tolerance: 0.02",
@@ -134,7 +138,6 @@ class BuildTest(unittest.TestCase):
                         "  batch_size: 3",
                         "  decode_batch_size: null",
                         "critic:",
-                        "  steps: 7",
                         "  weight: 0.05",
                         "refine:",
                         "  candidates: [0, 1, 2]",
@@ -145,8 +148,11 @@ class BuildTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            config = load_predict_config(path)
+            model_runs, config = load_predict_config(path)
 
+        self.assertEqual(model_runs["vae_run_dir"], "run/vae")
+        self.assertEqual(model_runs["diffusion_run_dir"], "run/diffusion")
+        self.assertEqual(model_runs["gan_run_dir"], "run/gan")
         self.assertEqual(config["joint"].steps, 12)
         self.assertEqual(config["joint"].batch_size, 3)
         self.assertIsNone(config["joint"].decode_batch_size)
@@ -154,7 +160,6 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(config["phase_fractions"], (0.25, 0.15, 0.60))
         self.assertEqual(config["phase_fraction_tolerance"], 0.02)
         self.assertTrue(config["segment_anchors"])
-        self.assertEqual(config["critic"].steps, 7)
         self.assertEqual(config["critic"].weight, 0.05)
         self.assertEqual(config["refine"].candidates, (0, 1, 2))
         self.assertEqual(config["quality"].anchor_tolerance, 0.12)
@@ -316,7 +321,7 @@ class BuildTest(unittest.TestCase):
             run_dir = Path(tmp) / "run"
             write_predictor_run(run_dir)
 
-            predictor = load_predictor(run_dir, device="cpu")
+            predictor = load_predictor(run_dir, run_dir, device="cpu")
             with self.assertWarnsRegex(RuntimeWarning, "least-violation"):
                 volume, stats = predictor.predict(PredictOptions(num_phases=2))
 
@@ -333,7 +338,7 @@ class BuildTest(unittest.TestCase):
             run_dir.mkdir()
 
             with self.assertRaisesRegex(FileNotFoundError, "diffusion config"):
-                load_predictor(run_dir, device="cpu")
+                load_predictor(run_dir, run_dir, device="cpu")
 
     def test_load_predictor_reports_missing_diffusion_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -341,7 +346,7 @@ class BuildTest(unittest.TestCase):
             write_predictor_run(run_dir, write_diffusion_checkpoint=False)
 
             with self.assertRaisesRegex(FileNotFoundError, "diffusion checkpoint"):
-                load_predictor(run_dir, device="cpu")
+                load_predictor(run_dir, run_dir, device="cpu")
 
     def test_load_predictor_reports_incompatible_vae_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -349,7 +354,7 @@ class BuildTest(unittest.TestCase):
             write_predictor_run(run_dir, checkpoint_vae_latent_ch=3)
 
             with self.assertRaisesRegex(ValueError, "vae checkpoint"):
-                load_predictor(run_dir, device="cpu")
+                load_predictor(run_dir, run_dir, device="cpu")
 
     def test_load_predictor_reports_incomplete_vae_config(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -371,7 +376,7 @@ class BuildTest(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "vae config.*num_phases"):
-                load_predictor(run_dir, device="cpu")
+                load_predictor(run_dir, run_dir, device="cpu")
 
     def test_load_predictor_reports_incomplete_diffusion_config(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -390,7 +395,7 @@ class BuildTest(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "diffusion config.*beta_start"):
-                load_predictor(run_dir, device="cpu")
+                load_predictor(run_dir, run_dir, device="cpu")
 
     def test_load_predictor_reports_malformed_vae_config(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -399,7 +404,7 @@ class BuildTest(unittest.TestCase):
             (run_dir / "vae.yaml").write_text("vae: [\n", encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "vae config.*malformed"):
-                load_predictor(run_dir, device="cpu")
+                load_predictor(run_dir, run_dir, device="cpu")
 
     def test_load_predictor_reports_malformed_diffusion_config(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -411,7 +416,7 @@ class BuildTest(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "diffusion config.*malformed"):
-                load_predictor(run_dir, device="cpu")
+                load_predictor(run_dir, run_dir, device="cpu")
 
     def test_load_predictor_reports_corrupt_diffusion_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -423,7 +428,7 @@ class BuildTest(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "diffusion checkpoint"):
-                load_predictor(run_dir, device="cpu")
+                load_predictor(run_dir, run_dir, device="cpu")
 
     def test_apply_vae_defaults_uses_vae_config(self):
         with tempfile.TemporaryDirectory() as tmp:

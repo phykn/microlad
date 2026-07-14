@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from src.modeling.critic import sample_slices
+from src.modeling.critic import LatentCritic, guidance_loss, sample_slices
 from src.modeling.diffusion import DDPMProcess
 from src.modeling.inference import freeze
 from src.pipelines.guidance.conditioning.images import prepare_anchor_image
@@ -34,6 +34,9 @@ def optimize_large_latent(
     anchors: Sequence[AnchorSlice] | None = None,
     segment_anchors: bool = False,
     sds_weight: float = 1.0,
+    critic: LatentCritic | None = None,
+    critic_fraction: torch.Tensor | None = None,
+    critic_weight: float = 0.0,
     anchor_weight: float = 0.0,
     fraction_targets: Mapping[int, float] | torch.Tensor | None = None,
     slice_fraction_weight: float = 0.0,
@@ -75,6 +78,9 @@ def optimize_large_latent(
         diffusivity_solver=diffusivity_solver,
         diffusivity_weight=diffusivity_weight,
         sds_weight=sds_weight,
+        critic=critic,
+        critic_fraction=critic_fraction,
+        critic_weight=critic_weight,
         continuity_weight=continuity_weight,
         preservation_weight=preservation_weight,
         residual_scale=residual_scale,
@@ -85,6 +91,8 @@ def optimize_large_latent(
     )
     freeze(vae)
     freeze(diffusion_model)
+    if critic is not None:
+        freeze(critic)
 
     candidates = [latent.detach().clone()]
     candidate_steps = [0]
@@ -164,6 +172,12 @@ def optimize_large_latent(
             total = total + sds_weight * prior
             stats["sds"] = (sds_weight * prior).detach()
 
+        if critic is not None and critic_weight > 0.0:
+            conditions = critic_fraction.unsqueeze(0).expand(batch_size, -1)
+            critic_term = guidance_loss(critic(crops, conditions))
+            total = total + critic_weight * critic_term
+            stats["critic"] = (critic_weight * critic_term).detach()
+
         descriptor, descriptor_stats = sample_descriptor_loss(
             values,
             num_phases=num_phases,
@@ -234,7 +248,7 @@ def optimize_large_latent(
             completed == 1 or completed % refresh_every == 0 or completed == steps
         ):
             display = {"loss": f"{float(stats['loss'].item()):.4g}"}
-            for name in ("anchor", "global_fraction", "sds"):
+            for name in ("anchor", "global_fraction", "sds", "critic"):
                 if name in stats:
                     display[name] = f"{float(stats[name].item()):.4g}"
             step_range.set_postfix(display)
@@ -347,6 +361,9 @@ def _validate(
     diffusivity_solver: ConductanceSolver | None,
     diffusivity_weight: float,
     sds_weight: float,
+    critic: LatentCritic | None,
+    critic_fraction: torch.Tensor | None,
+    critic_weight: float,
     continuity_weight: float,
     preservation_weight: float,
     residual_scale: float,
@@ -387,6 +404,7 @@ def _validate(
             raise ValueError(f"{name} must be positive.")
     for name, value in (
         ("sds_weight", sds_weight),
+        ("critic_weight", critic_weight),
         ("anchor_weight", anchor_weight),
         ("slice_fraction_weight", slice_fraction_weight),
         ("global_fraction_weight", global_fraction_weight),
@@ -401,6 +419,13 @@ def _validate(
             raise ValueError(f"{name} must be non-negative.")
     if not isinstance(segment_anchors, bool):
         raise ValueError("segment_anchors must be a boolean.")
+    if critic_weight > 0.0:
+        if critic is None:
+            raise ValueError("critic is required when critic_weight is positive.")
+        if critic_fraction is None or critic_fraction.shape != (num_phases,):
+            raise ValueError(
+                "critic_fraction must contain one value per phase when critic is active."
+            )
     if anchor_weight > 0.0 and not anchors:
         raise ValueError("scale anchors are required when anchor_weight is positive.")
     if (

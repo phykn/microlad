@@ -46,6 +46,7 @@ def optimize_latent(
     segment_anchors: bool = False,
     sds_weight: float = 1.0,
     critic: LatentCritic | None = None,
+    critic_fraction: torch.Tensor | None = None,
     critic_weight: float = 0.0,
     anchor_weight: float = 0.0,
     fraction_targets: Mapping[int, float] | torch.Tensor | None = None,
@@ -77,12 +78,15 @@ def optimize_latent(
         lr=lr,
         num_phases=num_phases,
         critic=critic,
+        critic_fraction=critic_fraction,
         critic_weight=critic_weight,
         checkpoint_every=checkpoint_every,
         progress=progress,
     )
     freeze(vae)
     freeze(diffusion_model)
+    if critic is not None:
+        freeze(critic)
 
     candidates = [latent.detach().clone()]
     candidate_steps = [0]
@@ -156,7 +160,8 @@ def optimize_latent(
             stats["sds"] = (sds_weight * prior).detach()
 
         if critic is not None and critic_weight > 0.0:
-            critic_term = guidance_loss(critic(latent_slices))
+            conditions = critic_fraction.unsqueeze(0).expand(batch_size, -1)
+            critic_term = guidance_loss(critic(latent_slices, conditions))
             total = total + critic_weight * critic_term
             stats["critic"] = (critic_weight * critic_term).detach()
             display["critic"] = critic_term.detach()
@@ -310,6 +315,7 @@ def _validate_inputs(
     lr: float,
     num_phases: int,
     critic: LatentCritic | None,
+    critic_fraction: torch.Tensor | None,
     critic_weight: float,
     checkpoint_every: int,
     progress: bool,
@@ -338,3 +344,10 @@ def _validate_inputs(
         raise ValueError("progress must be a boolean.")
     if critic_weight > 0.0 and critic is None:
         raise ValueError("critic is required when critic_weight is positive.")
+    if critic_weight > 0.0:
+        if critic_fraction is None or critic_fraction.shape != (num_phases,):
+            raise ValueError(
+                "critic_fraction must contain one value per phase when critic is active."
+            )
+        if not torch.isfinite(critic_fraction).all():
+            raise ValueError("critic_fraction must be finite.")

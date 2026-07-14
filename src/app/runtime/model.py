@@ -2,6 +2,7 @@ import argparse
 
 import torch
 
+from src.modeling.critic import LatentCritic, LatentGenerator
 from src.modeling.diffusion import DDPMProcess, TimeUNet
 from src.modeling.vae import PatchVAE
 
@@ -22,6 +23,24 @@ def build_denoiser(args: argparse.Namespace) -> TimeUNet:
         latent_ch=args.latent_ch,
         base_ch=args.base_ch,
         time_dim=args.time_dim,
+    )
+
+
+def build_generator(args: argparse.Namespace) -> LatentGenerator:
+    return LatentGenerator(
+        latent_ch=args.latent_ch,
+        latent_size=args.latent_size,
+        num_phases=args.num_phases,
+        noise_ch=args.noise_ch,
+        base_ch=args.generator_ch,
+    )
+
+
+def build_critic(args: argparse.Namespace) -> LatentCritic:
+    return LatentCritic(
+        latent_ch=args.latent_ch,
+        num_phases=args.num_phases,
+        base_ch=args.critic_ch,
     )
 
 

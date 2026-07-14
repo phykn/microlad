@@ -30,6 +30,7 @@ def gradient_penalty(
     critic: torch.nn.Module,
     real: torch.Tensor,
     fake: torch.Tensor,
+    fractions: torch.Tensor,
 ) -> torch.Tensor:
     """Penalizes critic gradients along real/fake interpolations."""
     if real.shape != fake.shape:
@@ -40,6 +41,8 @@ def gradient_penalty(
         raise ValueError("real and fake batches must be floating point.")
     if real.device != fake.device:
         raise ValueError("real and fake batches must be on the same device.")
+    if fractions.ndim != 2 or fractions.shape[0] != real.shape[0]:
+        raise ValueError("fractions must contain one condition per sample.")
 
     epsilon = torch.rand(
         real.shape[0],
@@ -51,7 +54,7 @@ def gradient_penalty(
     )
     mixed = (epsilon * real + (1.0 - epsilon) * fake).requires_grad_(True)
     gradients = torch.autograd.grad(
-        outputs=critic(mixed).sum(),
+        outputs=critic(mixed, fractions).sum(),
         inputs=mixed,
         create_graph=True,
         only_inputs=True,

@@ -38,6 +38,20 @@ class ZeroNoiseModel(torch.nn.Module):
         return torch.zeros_like(latent)
 
 
+class ConditionalCritic(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.conditions = []
+
+    def forward(
+        self,
+        latent: torch.Tensor,
+        fractions: torch.Tensor,
+    ) -> torch.Tensor:
+        self.conditions.append(fractions.detach().clone())
+        return latent.mean(dim=(1, 2, 3), keepdim=True) + fractions[:, :1]
+
+
 class FakeProgress:
     instances = []
 
@@ -161,6 +175,36 @@ class JointOptimizationTest(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         self.assertTrue(torch.equal(candidates[0], latent))
         self.assertEqual(stats["joint_candidate_steps"].tolist(), [0])
+
+    def test_pretrained_critic_guides_shared_latent_with_fraction_condition(self):
+        critic = ConditionalCritic()
+        _, stats = optimize_latent(
+            torch.zeros(1, 2, 2, 2),
+            IdentityCategoricalVAE(),
+            ZeroNoiseModel(),
+            DDPMProcess(timesteps=4),
+            steps=1,
+            batch_size=2,
+            lr=0.1,
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            sds_weight=0.0,
+            critic=critic,
+            critic_fraction=torch.tensor([0.25, 0.75]),
+            critic_weight=0.1,
+            axis_weight=0.0,
+            continuity_weight=0.0,
+            preservation_weight=0.0,
+        )
+
+        self.assertIn("history_critic", stats)
+        self.assertTrue(
+            torch.equal(
+                critic.conditions[0],
+                torch.tensor([[0.25, 0.75], [0.25, 0.75]]),
+            )
+        )
 
     def test_unlimited_decode_batch_disables_checkpointing(self):
         latent = torch.randn(1, 2, 2, 2)

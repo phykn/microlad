@@ -31,10 +31,13 @@ such as `from src.app.runtime import load_predictor` resolve.
 
 - VAE config: `config/vae.yaml`
 - Diffusion config: `config/diffusion.yaml`
+- GAN config: `config/gan.yaml`
 - The default `data.data_dir` points at the checked-in sample image.
 - For real training, put images outside the repo or in a folder ignored by your local git exclude, then set `data.data_dir` in the config.
-- Train VAE first, then train diffusion.
+- Train the VAE first. Diffusion and the 2D latent WGAN can then be trained independently.
 - For local diffusion training, set `output.vae_run_dir` in `config/diffusion.yaml` to the VAE run folder before launching `run_train_diffusion.py`.
+- Before GAN training, set `output.vae_run_dir` in `config/gan.yaml` to the VAE run folder.
+- Set the VAE, diffusion, and GAN run folders under `models` in `config/predict.yaml` before prediction.
 - VAE reconstruction is categorical: the decoder emits `[B, num_phases, H, W]`
   logits and the VAE loss is phase-balanced `CE(logits, phase_index) + beta * KL`.
   `loss.phase_balance=0` restores ordinary CE; the default `0.35` moderately
@@ -54,7 +57,7 @@ python -m pytest -q
 For a bounded training-entrypoint check:
 
 ```sh
-python -m pytest tests/app/runtime/test_run_train_vae.py tests/app/runtime/test_run_train_diffusion.py -q
+python -m pytest tests/app/runtime/test_run_train_vae.py tests/app/runtime/test_run_train_diffusion.py tests/app/runtime/test_run_train_gan.py -q
 ```
 
 ## Train
@@ -64,6 +67,7 @@ The default training configs are full-length examples.
 ```sh
 python run_train_vae.py
 python run_train_diffusion.py
+python run_train_gan.py
 ```
 
 DDP:
@@ -71,6 +75,7 @@ DDP:
 ```sh
 torchrun --nproc_per_node 4 run_train_vae.py
 torchrun --nproc_per_node 4 run_train_diffusion.py
+torchrun --nproc_per_node 4 run_train_gan.py
 ```
 
 Training writes to `run/<timestamp>` by default.
@@ -95,6 +100,17 @@ run/<timestamp>/
     diffusion/last/model.pt
 ```
 
+A GAN run copies the frozen VAE and adds the 2D generator and critic state:
+
+```text
+run/<timestamp>/
+  vae.yaml
+  gan.yaml
+  weight/
+    vae/last/model.pt
+    gan/last/model.pt
+```
+
 ## Data Shape
 
 - 2D images: `H x W`
@@ -117,10 +133,11 @@ The notebooks follow the maintained workflow in order:
 - `00_dataset.ipynb`: load and inspect phase-index batches
 - `01_vae.ipynb`: compare VAE inputs and reconstructions
 - `02_diffusion.ipynb`: sample and decode diffusion latents
-- `03_predict.ipynb`: run anchored prediction and inspect descriptor targets
-- `04_scale_up.ipynb`: generate and inspect a larger volume
+- `03_gan.ipynb`: sample the latent WGAN and inspect critic scores
+- `04_predict.ipynb`: run anchored prediction and inspect descriptor targets
+- `05_scale_up.ipynb`: generate and inspect a larger volume
 
-`RUN_DIR = None` selects the latest compatible run. Set it to a run path when a specific checkpoint is required. Dataset tensors, decoded VAE values, and descriptor inputs use phase indices from `0` to `num_phases - 1`.
+The prediction notebooks read all model folders from `config/predict.yaml`. Dataset tensors, decoded VAE values, and descriptor inputs use phase indices from `0` to `num_phases - 1`.
 
 ## Predict
 
@@ -130,11 +147,12 @@ Load a trained run folder and call `predict`:
 from src.app.api import AnchorSlice, PredictOptions
 from src.app.runtime import load_predict_config, load_predictor
 
-predictor = load_predictor("run/20260628-xxxxxx", device="cuda")
+model_runs, predict_config = load_predict_config("config/predict.yaml")
+predictor = load_predictor(**model_runs, device="cuda")
 
 options = PredictOptions(
     num_phases=3,
-    **load_predict_config("config/predict.yaml"),
+    **predict_config,
 )
 
 anchor = AnchorSlice(image=anchor_image, axis=0, index=32)
@@ -144,21 +162,22 @@ volume, stats = predictor.predict(
 )
 ```
 
-`config/predict.yaml` groups the L-MPDD prior, base-size latent refinement,
-optional online critic, final quality gates, and scale-up settings. Prediction always
-starts from an L-MPDD latent. The critic is off by default until composition-matched
-training is available; enabling it improves the same candidate rather than replacing
-it with a separate generator.
+Train the phase-conditioned 2D latent WGAN with `run_train_gan.py` after VAE
+training. Its run copies the VAE checkpoint and adds the GAN checkpoint. Prediction
+loads VAE, diffusion, and GAN runs independently from `config/predict.yaml` and uses
+only the frozen critic; the WGAN generator is retained for `03_gan.ipynb` evaluation.
+`config/predict.yaml` controls the critic guidance weight along with the L-MPDD prior,
+latent refinement, final quality gates, and scale-up settings.
 
 `joint.decode_batch_size` controls decoder memory use. Keep a positive batch size
 for chunked decoding with gradient checkpointing, or set it to `null` to decode
 each axis in one batch on a large-memory GPU.
 
-Prediction progress is shown by default for L-MPDD sampling, enabled critic warm-up,
-Joint guidance, and scale-up guidance. Set `progress: false` in the prediction
-config to hide every progress bar. The plain-text critic bar reports loss,
-margin, and gradient penalty; Joint reports total loss and active anchor,
-critic, and global fraction losses.
+Prediction progress is shown by default for L-MPDD sampling, Joint guidance, and
+scale-up guidance. Set `progress: false` in the prediction config to hide every
+progress bar. GAN training reports generator loss, critic loss, margin, gradient
+penalty, and fraction error. Joint reports total loss and active anchor, critic,
+and global fraction losses.
 
 Anchors are full 2D slices assigned to a volume axis and index. They are soft
 decoded constraints, so target labels are not forcibly copied into the result.

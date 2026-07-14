@@ -1,3 +1,9 @@
+models:
+  vae_run_dir: run/20260714-032419-015034
+  diffusion_run_dir: run/20260714-050533-017623
+  # Set this to the run created by run_train_gan.py.
+  gan_run_dir: null
+
 progress: true
 phase_fractions: null
 phase_fraction_tolerance: 0.01
@@ -33,17 +39,7 @@ joint:
   checkpoint_every: 100
 
 critic:
-  steps: 0
-  batch_size: 8
-  learning_rate: 0.0001
-  betas: [0.0, 0.9]
-  gradient_weight: 10.0
-  weight: 0.0
-  candidate_count: 3
-  validate_every: 25
-  min_accuracy: 0.6
-  min_damage_accuracy: 0.6
-  min_margin: 0.05
+  weight: 0.1
 
 scale:
   overlap: 0.25

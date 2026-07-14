@@ -65,10 +65,37 @@ def load_defaults(
     return _flatten_config(_load_mapping(config_path, label=label))
 
 
-def load_predict_config(config_path: str | Path) -> dict:
-    """Loads grouped prediction settings from YAML."""
+def load_predict_config(
+    config_path: str | Path,
+) -> tuple[dict[str, str | None], dict]:
+    """Loads model run paths and grouped prediction settings from YAML."""
 
     values = _load_mapping(config_path, label="prediction config")
+    models = values.pop("models", None)
+    if not isinstance(models, dict):
+        raise ValueError("prediction config models must contain a mapping.")
+    model_names = ("vae_run_dir", "diffusion_run_dir", "gan_run_dir")
+    unknown_models = sorted(set(models) - set(model_names))
+    if unknown_models:
+        raise ValueError(
+            f"prediction config models contains unknown settings: {unknown_models}"
+        )
+    missing_models = sorted(set(model_names) - set(models))
+    if missing_models:
+        raise ValueError(
+            f"prediction config models is missing settings: {missing_models}"
+        )
+    for name in ("vae_run_dir", "diffusion_run_dir"):
+        if not isinstance(models[name], str) or not models[name].strip():
+            raise ValueError(f"prediction config models.{name} is required.")
+    if models["gan_run_dir"] is not None and (
+        not isinstance(models["gan_run_dir"], str)
+        or not models["gan_run_dir"].strip()
+    ):
+        raise ValueError(
+            "prediction config models.gan_run_dir must be a path or null."
+        )
+
     classes = {
         "prior": PriorConfig,
         "targets": TargetConfig,
@@ -106,8 +133,6 @@ def load_predict_config(config_path: str | Path) -> dict:
         if not isinstance(section, dict):
             raise ValueError(f"prediction config {name} must contain a mapping.")
         section = dict(section)
-        if name == "critic" and "betas" in section:
-            section["betas"] = tuple(section["betas"])
         if name == "refine" and "candidates" in section:
             section["candidates"] = tuple(section["candidates"])
         try:
@@ -116,7 +141,7 @@ def load_predict_config(config_path: str | Path) -> dict:
             raise ValueError(
                 f"prediction config {name} contains an unknown setting: {exc}"
             ) from exc
-    return config
+    return {name: models[name] for name in model_names}, config
 
 
 def save_run_config(run_dir: str | Path, args: argparse.Namespace, name: str) -> None:

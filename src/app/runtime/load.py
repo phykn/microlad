@@ -4,7 +4,12 @@ from typing import TypeVar
 
 import torch
 
-from src.app.runtime.model import build_denoiser, build_vae
+from src.app.runtime.model import (
+    build_critic,
+    build_denoiser,
+    build_generator,
+    build_vae,
+)
 from src.app.runtime.run import (
     checkpoint_path,
     load_run_config,
@@ -12,6 +17,7 @@ from src.app.runtime.run import (
     require_values,
 )
 from src.modeling.diffusion import TimeUNet
+from src.modeling.critic import LatentCritic, LatentGenerator
 from src.modeling.vae import PatchVAE
 
 
@@ -86,4 +92,50 @@ def load_denoiser(
         "diffusion",
         "unet",
         label="diffusion checkpoint",
+    )
+
+
+def load_run_generator(
+    run_dir: str | Path,
+    device: torch.device,
+) -> LatentGenerator:
+    config = load_run_config(run_dir, "gan")
+    require_values(
+        config,
+        "gan config",
+        "latent_ch",
+        "latent_size",
+        "num_phases",
+        "noise_ch",
+        "generator_ch",
+    )
+    model = build_generator(argparse.Namespace(**config)).to(device)
+    return _load_frozen(
+        model,
+        checkpoint_path(run_dir, "gan"),
+        device,
+        "generator",
+        label="GAN generator checkpoint",
+    )
+
+
+def load_run_critic(
+    run_dir: str | Path,
+    device: torch.device,
+) -> LatentCritic:
+    config = load_run_config(run_dir, "gan")
+    require_values(
+        config,
+        "gan config",
+        "latent_ch",
+        "num_phases",
+        "critic_ch",
+    )
+    model = build_critic(argparse.Namespace(**config)).to(device)
+    return _load_frozen(
+        model,
+        checkpoint_path(run_dir, "gan"),
+        device,
+        "critic",
+        label="GAN critic checkpoint",
     )

@@ -15,8 +15,6 @@ from src.modeling.diffusion import DDPMProcess, DiffusionSampler, TimeUNet
 from src.modeling.critic import LatentCritic
 from src.modeling.phases.quantization import quantize_phase
 from src.modeling.vae import PatchVAE, get_downsample_factor
-from src.pipelines.guidance.critic.data import encode_refs, merge_refs
-from src.pipelines.guidance.critic.train import train_critic
 from src.pipelines.guidance.conditioning.images import prepare_volume_anchors
 from src.pipelines.guidance.conditioning.latents import encode_anchors
 from src.pipelines.guidance.conditioning.model import AnchorSlice, VolumeAnchor
@@ -58,11 +56,16 @@ class Predictor:
         diffusion_model: TimeUNet,
         ddpm: DDPMProcess,
         *,
+        critic: LatentCritic | None = None,
         device: str | torch.device,
     ) -> None:
         self.device = torch.device(device)
         self.vae = vae.to(self.device)
         self.diffusion_model = diffusion_model.to(self.device)
+        self.critic = None if critic is None else critic.to(self.device).eval()
+        if self.critic is not None:
+            for parameter in self.critic.parameters():
+                parameter.requires_grad_(False)
         self.ddpm = ddpm
         self.sampler = DiffusionSampler(self.diffusion_model, self.ddpm, self.device)
 
@@ -87,6 +90,10 @@ class Predictor:
         """
 
         image_size = int(self.vae.image_size)
+        if options.critic.weight > 0.0 and self.critic is None:
+            raise ValueError(
+                "critic guidance requires models.gan_run_dir in predict.yaml."
+            )
         target_labels = (
             None
             if target_images is None
@@ -118,8 +125,11 @@ class Predictor:
             else None
         )
         guidance_labels = target_labels
-        if guidance_labels is None and uses_descriptor_targets(options):
+        if guidance_labels is None and (
+            uses_descriptor_targets(options) or options.critic.weight > 0.0
+        ):
             guidance_labels = anchor_labels
+        critic_fraction = self._resolve_fraction(options, guidance_labels)
 
         if volume_size == image_size:
             assert t_max is not None or options.joint.steps == 0
@@ -131,10 +141,10 @@ class Predictor:
                 t_max=t_max,
             )
 
-        if options.joint.steps > 0 or options.critic.steps > 0:
+        if options.joint.steps > 0:
             warnings.warn(
-                "joint and critic settings are base-size only; "
-                "scale settings will guide this large prediction.",
+                "joint settings are base-size only; scale settings will guide "
+                "this large prediction.",
                 RuntimeWarning,
                 stacklevel=2,
             )
@@ -145,6 +155,10 @@ class Predictor:
             anchors=anchors,
         )
         stats: dict[str, torch.Tensor | int] = dict(base_stats)
+        stats["critic_enabled"] = torch.tensor(
+            self.critic is not None and options.critic.weight > 0.0,
+            device=self.device,
+        )
 
         if options.scale.steps > 0:
             assert t_max is not None
@@ -153,6 +167,7 @@ class Predictor:
                 options=options,
                 anchors=anchors,
                 target_labels=guidance_labels,
+                critic_fraction=critic_fraction,
                 t_max=t_max,
             )
             stats.update(joint_stats)
@@ -275,28 +290,26 @@ class Predictor:
             anchor_mask=anchor_mask,
             progress=options.progress,
         ).to(self.device)
-        critic_references = self._merge_references(volume_anchors, target_labels)
         guidance_labels = target_labels
-        if guidance_labels is None and uses_descriptor_targets(options):
+        if guidance_labels is None and (
+            uses_descriptor_targets(options) or options.critic.weight > 0.0
+        ):
             guidance_labels = anchor_labels
-        critic = None
-        stats: dict[str, torch.Tensor | int] = {}
-        if options.critic.steps > 0:
-            if critic_references is None:
-                raise ValueError("critic training requires target images or anchors.")
-            critic, critic_stats = self._fit_critic(
-                latent,
-                critic_references,
-                options=options,
+        critic_fraction = self._resolve_fraction(options, guidance_labels)
+        stats: dict[str, torch.Tensor | int] = {
+            "critic_enabled": torch.tensor(
+                self.critic is not None and options.critic.weight > 0.0,
+                device=self.device,
             )
-            stats.update(critic_stats)
+        }
 
         candidates, joint_stats = self._run_joint(
             latent,
             options=options,
             anchors=anchors,
             target_labels=guidance_labels,
-            critic=critic,
+            critic=self.critic,
+            critic_fraction=critic_fraction,
             t_max=(int(self.ddpm.num_timesteps) if t_max is None else t_max),
         )
         stats.update(joint_stats)
@@ -334,78 +347,6 @@ class Predictor:
             )
         return quantize_phase(volume, options.num_phases), stats
 
-    def _fit_critic(
-        self,
-        latent: torch.Tensor,
-        references: torch.Tensor,
-        *,
-        options: PredictOptions,
-    ) -> tuple[LatentCritic | None, dict[str, torch.Tensor]]:
-        real_bank = encode_refs(
-            self.vae,
-            references,
-            batch_size=options.critic.batch_size,
-        )
-        fake = [latent]
-        for _ in range(options.critic.candidate_count - 1):
-            fake.append(
-                sample_latent(
-                    self.sampler,
-                    self.vae,
-                    progress=options.progress,
-                ).to(self.device)
-            )
-        fake_volumes = torch.stack(fake)
-        critic = LatentCritic(int(self.vae.latent_ch)).to(self.device)
-        try:
-            stats = train_critic(
-                critic,
-                real_bank,
-                fake_volumes,
-                config=options.critic,
-                progress=options.progress,
-            )
-        except RuntimeError as error:
-            if "non-finite" not in str(error):
-                raise
-            return None, {
-                "critic_enabled": torch.tensor(False, device=self.device),
-                "critic_failure_code": torch.tensor(1, device=self.device),
-            }
-        accuracy = float(stats["critic_validation_accuracy"].item())
-        damage_accuracy = float(stats["critic_damage_accuracy"].item())
-        shuffle_accuracy = float(stats["critic_shuffle_accuracy"].item())
-        validation_margin = float(stats["critic_validation_margin"].item())
-        finite_gradient = bool(stats["critic_input_gradient_finite"].item())
-        enabled = (
-            np.isfinite(accuracy)
-            and np.isfinite(damage_accuracy)
-            and np.isfinite(shuffle_accuracy)
-            and np.isfinite(validation_margin)
-            and accuracy >= options.critic.min_accuracy
-            and damage_accuracy >= options.critic.min_damage_accuracy
-            and shuffle_accuracy >= options.critic.min_damage_accuracy
-            and validation_margin >= options.critic.min_margin
-            and finite_gradient
-        )
-        stats["critic_enabled"] = torch.tensor(enabled, device=self.device)
-        if not enabled:
-            return None, stats
-        return critic, stats
-
-    def _merge_references(
-        self,
-        anchors: Sequence[VolumeAnchor],
-        target_labels: torch.Tensor | None,
-    ) -> torch.Tensor | None:
-        anchor_labels = (
-            torch.stack([anchor.image for anchor in anchors]) if anchors else None
-        )
-        return merge_refs(
-            None if anchor_labels is None else anchor_labels.to(self.device),
-            None if target_labels is None else target_labels.to(self.device),
-        )
-
     def _resolve_fraction(
         self,
         options: PredictOptions,
@@ -417,11 +358,11 @@ class Predictor:
                 device=self.device,
                 dtype=torch.float32,
             )
-        uses_fraction = (
+        needs_fraction = options.critic.weight > 0.0 or (
             options.targets.slice_fraction_weight > 0.0
             or options.targets.global_fraction_weight > 0.0
         )
-        if not uses_fraction or target_labels is None:
+        if not needs_fraction or target_labels is None:
             return None
         labels = target_labels.to(self.device).long()
         return (
@@ -440,6 +381,7 @@ class Predictor:
         anchors: Sequence[AnchorSlice] | None,
         target_labels: torch.Tensor | None,
         critic: LatentCritic | None,
+        critic_fraction: torch.Tensor | None,
         t_max: int,
     ) -> tuple[tuple[torch.Tensor, ...], dict[str, torch.Tensor]]:
         targets = self._build_targets(options, target_labels)
@@ -461,6 +403,7 @@ class Predictor:
             segment_anchors=options.segment_anchors,
             sds_weight=options.prior.weight,
             critic=critic,
+            critic_fraction=critic_fraction,
             critic_weight=options.critic.weight if critic is not None else 0.0,
             anchor_weight=options.joint.anchor_weight if anchors else 0.0,
             fraction_targets=targets.get("fraction_targets"),
@@ -546,6 +489,7 @@ class Predictor:
         options: PredictOptions,
         anchors: Sequence[AnchorSlice] | None,
         target_labels: torch.Tensor | None,
+        critic_fraction: torch.Tensor | None,
         t_max: int,
     ) -> tuple[tuple[torch.Tensor, ...], dict[str, torch.Tensor]]:
         targets = self._build_targets(options, target_labels)
@@ -565,6 +509,11 @@ class Predictor:
             anchors=anchors,
             segment_anchors=options.segment_anchors,
             sds_weight=options.prior.weight,
+            critic=self.critic,
+            critic_fraction=critic_fraction,
+            critic_weight=(
+                options.critic.weight if self.critic is not None else 0.0
+            ),
             anchor_weight=options.scale.anchor_weight if anchors else 0.0,
             fraction_targets=targets.get("fraction_targets"),
             slice_fraction_weight=options.targets.slice_fraction_weight,

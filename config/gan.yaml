@@ -1,0 +1,28 @@
+data:
+  data_dir: data
+  augment: true
+  batch_size: 8
+
+model:
+  noise_ch: 128
+  generator_ch: 64
+  critic_ch: 64
+
+loss:
+  gradient_weight: 10.0
+  fraction_weight: 5.0
+
+optimization:
+  generator_lr: 1.0e-4
+  critic_lr: 1.0e-4
+  betas: [0.0, 0.9]
+  clip_grad_norm: 1.0
+
+training:
+  steps: 50000
+  critic_steps: 5
+  save_every: 5000
+
+output:
+  vae_run_dir: run/20260714-032419-015034
+  run_root: run

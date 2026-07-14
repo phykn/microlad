@@ -67,6 +67,20 @@ class RecordingNoise(ZeroNoise):
         return super().forward(values, timesteps)
 
 
+class ConditionalCritic(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.conditions = []
+
+    def forward(
+        self,
+        latent: torch.Tensor,
+        fractions: torch.Tensor,
+    ) -> torch.Tensor:
+        self.conditions.append(fractions.detach().clone())
+        return latent.mean(dim=(1, 2, 3), keepdim=True) + fractions[:, :1]
+
+
 class ScaleOptimizeTest(unittest.TestCase):
     def optimize(self, latent: torch.Tensor | None = None, **overrides):
         kwargs = {
@@ -105,6 +119,24 @@ class ScaleOptimizeTest(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         self.assertTrue(torch.equal(candidates[0], latent))
         self.assertEqual(stats["scale_candidate_steps"].tolist(), [0])
+
+    def test_pretrained_critic_guides_scale_crops_with_fraction_condition(self):
+        critic = ConditionalCritic()
+        _, stats = self.optimize(
+            steps=1,
+            batch_size=2,
+            critic=critic,
+            critic_fraction=torch.tensor([0.25, 0.75]),
+            critic_weight=0.1,
+        )
+
+        self.assertIn("history_critic", stats)
+        self.assertTrue(
+            torch.equal(
+                critic.conditions[0],
+                torch.tensor([[0.25, 0.75], [0.25, 0.75]]),
+            )
+        )
 
     def test_anchor_is_soft_and_updates_shared_3d_latent(self):
         anchor = AnchorSlice(

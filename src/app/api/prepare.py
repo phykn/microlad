@@ -98,8 +98,17 @@ def prepare_prediction(
         raise ValueError(
             "target_images or anchors are required for descriptor target losses."
         )
-    if base_size and options.critic.steps > 0 and target_labels is None and not anchors:
-        raise ValueError("critic training requires target_images or anchors.")
+    if options.critic.weight > 0.0 and active_steps <= 0:
+        raise ValueError("critic guidance requires active guidance steps.")
+    if (
+        options.critic.weight > 0.0
+        and options.phase_fractions is None
+        and target_labels is None
+        and not anchors
+    ):
+        raise ValueError(
+            "critic guidance requires phase_fractions, target_images, or anchors."
+        )
     t_max: int | None = None
     if active_steps > 0:
         t_max = resolve_t_max(options, num_timesteps)

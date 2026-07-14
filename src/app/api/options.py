@@ -181,58 +181,16 @@ class JointConfig:
 
 @dataclass(frozen=True)
 class CriticConfig:
-    """Configures online latent critic warm-up.
+    """Configures pretrained latent critic guidance.
 
     Attributes:
-        steps: Number of critic warm-up steps. Zero disables the critic.
-        batch_size: Number of real and fake latent slices per update.
-        learning_rate: Critic learning rate.
-        betas: Adam momentum coefficients.
-        gradient_weight: Weight of the WGAN gradient penalty.
         weight: Critic guidance weight during latent refinement.
-        candidate_count: Number of L-MPDD candidates including one holdout.
-        validate_every: Critic updates between validation checks.
-        min_accuracy: Required held-out real/fake ranking accuracy.
-        min_damage_accuracy: Required clean/damaged ranking accuracy.
-        min_margin: Required held-out real/fake score margin.
     """
 
-    steps: int = 0
-    batch_size: int = 8
-    learning_rate: float = 1e-4
-    betas: tuple[float, float] = (0.0, 0.9)
-    gradient_weight: float = 10.0
     weight: float = 0.0
-    candidate_count: int = 2
-    validate_every: int = 25
-    min_accuracy: float = 0.6
-    min_damage_accuracy: float = 0.6
-    min_margin: float = 0.05
 
     def __post_init__(self) -> None:
-        _require_non_negative_int("steps", self.steps)
-        _require_non_negative_int("batch_size", self.batch_size)
-        if self.batch_size == 0:
-            raise ValueError("batch_size must be positive.")
-        _require_positive("learning_rate", self.learning_rate)
-        if len(self.betas) != 2:
-            raise ValueError("betas must contain two values.")
-        for index, beta in enumerate(self.betas):
-            require_finite_number(f"betas[{index}]", beta)
-            if beta < 0.0 or beta >= 1.0:
-                raise ValueError("betas must be between 0 inclusive and 1 exclusive.")
-        object.__setattr__(self, "betas", tuple(map(float, self.betas)))
-        _require_non_negative("gradient_weight", self.gradient_weight)
         _require_non_negative("weight", self.weight)
-        _require_non_negative_int("candidate_count", self.candidate_count)
-        if self.candidate_count < 2:
-            raise ValueError("candidate_count must be at least two.")
-        _require_non_negative_int("validate_every", self.validate_every)
-        if self.validate_every == 0:
-            raise ValueError("validate_every must be positive.")
-        for name in ("min_accuracy", "min_damage_accuracy"):
-            _require_unit_interval(name, getattr(self, name))
-        _require_non_negative("min_margin", self.min_margin)
 
 
 @dataclass(frozen=True)
@@ -363,7 +321,7 @@ class PredictOptions:
         prior: Diffusion prior used during latent refinement.
         targets: Losses derived from reference images.
         joint: Full-volume joint optimization settings.
-        critic: Online latent critic settings used by Joint.
+        critic: Pretrained latent critic guidance used by Joint and scale-up.
         quality: Final candidate feasibility settings.
         scale: Tiled scale-up settings.
         refine: Optional VAE refinement settings.
@@ -425,7 +383,3 @@ class PredictOptions:
         ):
             if not isinstance(value, expected):
                 raise TypeError(f"{name} must be {expected.__name__}.")
-        if self.critic.steps > 0 and self.joint.steps == 0:
-            raise ValueError("critic.steps requires joint.steps to be positive.")
-        if self.critic.weight > 0.0 and self.critic.steps == 0:
-            raise ValueError("critic.weight requires critic.steps to be positive.")

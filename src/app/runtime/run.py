@@ -56,3 +56,23 @@ def apply_vae_defaults(args: argparse.Namespace) -> argparse.Namespace:
     if latent_size is not None and int(latent_size) % 4 != 0:
         raise ValueError("latent_size must be divisible by 4 for diffusion.")
     return args
+
+
+def apply_gan_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    vae_config = load_run_config(args.vae_run_dir, "vae")
+    names = (
+        "crop_size",
+        "size",
+        "segment",
+        "num_phases",
+        "latent_size",
+        "latent_ch",
+    )
+    require_values(vae_config, "vae config", *names)
+    for name in names:
+        existing = getattr(args, name, None)
+        value = vae_config[name]
+        if existing is not None and existing != value:
+            raise ValueError(f"{name} must match VAE run config.")
+        setattr(args, name, value)
+    return args

@@ -7,11 +7,17 @@ from src.app.runtime.distributed import cleanup_distributed as cleanup_distribut
 from src.app.runtime.distributed import setup_device as setup_device
 from src.app.runtime.distributed import wrap_distributed as wrap_distributed
 from src.app.runtime.load import load_run_vae as load_run_vae
+from src.app.runtime.load import load_run_critic as load_run_critic
+from src.app.runtime.load import load_run_generator as load_run_generator
+from src.app.runtime.model import build_critic as build_critic
 from src.app.runtime.model import build_denoiser as build_denoiser
+from src.app.runtime.model import build_generator as build_generator
 from src.app.runtime.model import build_vae as build_vae
 from src.app.runtime.predict import load_predictor as load_predictor
 from src.app.runtime.run import apply_vae_defaults as apply_vae_defaults
+from src.app.runtime.run import apply_gan_defaults as apply_gan_defaults
 from src.app.runtime.run import copy_vae_run as copy_vae_run
 from src.app.runtime.train import build_diffusion_trainer as build_diffusion_trainer
+from src.app.runtime.train import build_gan_trainer as build_gan_trainer
 from src.app.runtime.train import build_optimizer as build_optimizer
 from src.app.runtime.train import build_vae_trainer as build_vae_trainer
