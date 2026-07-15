@@ -1,5 +1,5 @@
 model:
-  run_dir: run/20260715-185426-491588
+  run_dir: run/20260716-065602-122839
 
 generation:
   num_phases: 3

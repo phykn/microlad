@@ -48,7 +48,7 @@ class ImageMPDDSampler:
         batch_size: int = 8,
         ddim_steps: int | None = None,
         guidance_scale: float = 1.0,
-        progress: bool = False,
+        progress: bool = True,
     ) -> torch.Tensor:
         require_int("volume_size", volume_size)
         require_int("harmonization_steps", harmonization_steps)

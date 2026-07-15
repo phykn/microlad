@@ -6,16 +6,11 @@ import numpy as np
 from PIL import Image
 import tifffile
 
-from simul.gen_data import (
-    generate_sphere_dataset,
-    generate_sphere_datasets,
-    generate_sphere_geometry,
-    generate_sphere_volume,
-)
 from src.data import PatchDataset
+from src.simul import make_geometry, make_volume, save_data
 
 
-class SphereDataGeneratorTest(unittest.TestCase):
+class SphereDataTest(unittest.TestCase):
     def test_volume_is_reproducible_and_spheres_do_not_overlap(self):
         settings = {
             "size": 32,
@@ -24,8 +19,8 @@ class SphereDataGeneratorTest(unittest.TestCase):
             "small_fraction": 0.1,
             "seed": 7,
         }
-        first, spheres = generate_sphere_geometry(**settings)
-        second = generate_sphere_volume(**settings)
+        first, spheres = make_geometry(**settings)
+        second = make_volume(**settings)
 
         self.assertEqual(first.shape, (32, 32, 32))
         self.assertEqual(first.dtype, np.uint8)
@@ -80,14 +75,16 @@ class SphereDataGeneratorTest(unittest.TestCase):
     def test_saves_gt_tiff_and_train_pngs_that_the_dataset_can_read(self):
         with tempfile.TemporaryDirectory() as tmp:
             data = Path(tmp) / "data"
-            volume_path, slice_paths = generate_sphere_dataset(
+            volume_paths, slice_paths = save_data(
                 data,
+                count=1,
                 size=32,
                 big_radius=4,
                 big_fraction=0.25,
                 small_fraction=0.1,
                 seed=7,
             )
+            volume_path = volume_paths[0]
             volume = tifffile.imread(volume_path)
             with Image.open(data / "train" / "slice_z_016.png") as image:
                 labels = np.asarray(image)
@@ -120,8 +117,9 @@ class SphereDataGeneratorTest(unittest.TestCase):
             (train / "keep.txt").write_text("keep")
 
             with self.assertRaisesRegex(FileExistsError, "not empty"):
-                generate_sphere_dataset(
+                save_data(
                     data,
+                    count=1,
                     size=32,
                     big_radius=4,
                     big_fraction=0.25,
@@ -132,9 +130,9 @@ class SphereDataGeneratorTest(unittest.TestCase):
     def test_saves_multiple_volumes_with_independent_seeds(self):
         with tempfile.TemporaryDirectory() as tmp:
             data = Path(tmp) / "data"
-            volume_paths, slice_paths = generate_sphere_datasets(
+            volume_paths, slice_paths = save_data(
                 data,
-                num_volumes=2,
+                count=2,
                 size=32,
                 big_radius=4,
                 big_fraction=0.25,
