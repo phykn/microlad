@@ -26,14 +26,16 @@ segmented by enabling `segment`. Checkpoints are written to
 `run/<timestamp>/weight/mpdd/`.
 
 Generation is configured in `config/predict.yaml`.
+The `generation` section is shared. With `scale.enabled: false`, prediction
+uses the model's training resolution without tiling. Enabling it applies
+`scale.volume_size` and `scale.tile_overlap`.
 
 ```python
-from src.misc import load_config
-from src.predict import MPDDOptions, load_predictor
+from src.predict import load_predict_config, load_predictor
 
-config = load_config("config/predict.yaml")
-predictor = load_predictor(config.pop("run_dir"))
-options = MPDDOptions(**config)
+config = load_predict_config("config/predict.yaml")
+predictor = load_predictor(config.run_dir)
+options = config.make_options(predictor)
 volume, stats = predictor.predict(options)
 ```
 

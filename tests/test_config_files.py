@@ -1,8 +1,9 @@
-import unittest
 from pathlib import Path
+from types import SimpleNamespace
+import unittest
 
 from src.misc import load_config
-from src.predict import MPDDOptions
+from src.predict import MPDDOptions, load_predict_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,13 +30,11 @@ class ConfigFileTest(unittest.TestCase):
         self.assertFalse(required - config.keys())
 
     def test_prediction_config_builds_public_options(self):
-        config = load_config(ROOT / "config" / "predict.yaml")
-        run_dir = config.pop("run_dir", None)
+        config = load_predict_config(ROOT / "config" / "predict.yaml")
+        predictor = SimpleNamespace(image_size=64, num_phases=3)
+        options = config.make_options(predictor)
 
-        options = MPDDOptions(**config)
-
-        self.assertIsInstance(run_dir, str)
-        self.assertTrue(run_dir.strip())
+        self.assertTrue(str(config.run_dir))
         self.assertIsInstance(options, MPDDOptions)
 
 

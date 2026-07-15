@@ -12,7 +12,15 @@ def load_config(
     *,
     label: str = "config file",
 ) -> dict:
-    return _flatten_config(_load_mapping(config_path, label=label))
+    return _flatten_config(load_mapping(config_path, label=label))
+
+
+def load_mapping(
+    config_path: str | Path,
+    *,
+    label: str = "config file",
+) -> dict:
+    return _load_mapping(config_path, label=label)
 
 
 def save_config(run_dir: str | Path, args: argparse.Namespace, name: str) -> None:
