@@ -8,6 +8,7 @@ from src.modeling.latent_gan import (
     critic_loss,
     gradient_penalty,
     guidance_loss,
+    morphology_feature_loss,
 )
 
 
@@ -39,6 +40,82 @@ class ImageCriticTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(original, shifted, atol=1e-5, rtol=1e-5))
 
+    def test_phase_normalization_removes_each_phase_offset_and_scale(self):
+        critic = ImageCritic(
+            3,
+            image_size=16,
+            base_ch=4,
+            normalization="phase",
+        )
+        probabilities = torch.randn(2, 3, 16, 16)
+        scale = torch.tensor([0.5, 1.5, 3.0]).view(1, 3, 1, 1)
+        offset = torch.tensor([-2.0, 0.25, 4.0]).view(1, 3, 1, 1)
+
+        original = critic(probabilities)
+        transformed = critic(probabilities * scale + offset)
+
+        self.assertTrue(
+            torch.allclose(original, transformed, atol=1e-5, rtol=1e-5)
+        )
+
+    def test_boundary_normalization_removes_uniform_phase_mass(self):
+        critic = ImageCritic(
+            3,
+            image_size=16,
+            base_ch=4,
+            normalization="boundary",
+        )
+        low_mass = torch.tensor([0.75, 0.20, 0.05]).view(1, 3, 1, 1).expand(
+            1, 3, 16, 16
+        )
+        high_mass = torch.tensor([0.20, 0.30, 0.50]).view(1, 3, 1, 1).expand(
+            1, 3, 16, 16
+        )
+
+        low = critic.normalize_morphology(low_mass)
+        high = critic.normalize_morphology(high_mass)
+
+        self.assertTrue(
+            torch.allclose(low, torch.zeros_like(low), atol=1e-7, rtol=0.0)
+        )
+        self.assertTrue(
+            torch.allclose(high, torch.zeros_like(high), atol=1e-7, rtol=0.0)
+        )
+
+    def test_boundary_normalization_keeps_only_local_interfaces(self):
+        critic = ImageCritic(
+            2,
+            image_size=16,
+            base_ch=4,
+            normalization="boundary",
+        )
+        labels = torch.zeros(1, 16, 16, dtype=torch.long)
+        labels[:, :, 8:] = 1
+        probabilities = torch.nn.functional.one_hot(
+            labels,
+            num_classes=2,
+        ).movedim(-1, 1).float()
+
+        boundary = critic.normalize_morphology(probabilities)
+
+        self.assertTrue(
+            torch.equal(
+                boundary[:, :, :, :7],
+                torch.zeros_like(boundary[:, :, :, :7]),
+            )
+        )
+        self.assertTrue(
+            torch.equal(
+                boundary[:, :, :, 9:],
+                torch.zeros_like(boundary[:, :, :, 9:]),
+            )
+        )
+        self.assertGreater(float(boundary[:, :, :, 7:9].abs().sum()), 0.0)
+
+    def test_critic_rejects_unknown_normalization(self):
+        with self.assertRaisesRegex(ValueError, "normalization"):
+            ImageCritic(2, image_size=16, normalization="unknown")
+
     def test_critic_does_not_amplify_nearly_constant_phases(self):
         torch.manual_seed(0)
         critic = ImageCritic(3, image_size=16, base_ch=4)
@@ -62,6 +139,23 @@ class ImageCriticTest(unittest.TestCase):
 
         self.assertEqual(float(critic), -2.0)
         self.assertEqual(float(guidance), 1.0)
+
+    def test_morphology_feature_loss_matches_unpaired_feature_statistics(self):
+        critic = ImageCritic(
+            3,
+            image_size=16,
+            base_ch=4,
+            normalization="boundary",
+        )
+        references = torch.randn(3, 3, 16, 16)
+        generated = references.flip(0).clone().requires_grad_()
+
+        loss = morphology_feature_loss(critic, generated, references)
+        loss.backward()
+
+        self.assertLess(float(loss.detach()), 1e-10)
+        self.assertIsNotNone(generated.grad)
+        self.assertTrue(torch.isfinite(generated.grad).all())
 
     def test_gradient_penalty_is_finite_and_differentiable(self):
         critic = ImageCritic(3, image_size=16, base_ch=4)

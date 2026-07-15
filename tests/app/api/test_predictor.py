@@ -52,6 +52,7 @@ class PredictOptionsTest(unittest.TestCase):
         self.assertIsInstance(options.refine, RefineConfig)
         self.assertEqual(options.joint.steps, 0)
         self.assertEqual(options.critic.weight, 0.0)
+        self.assertEqual(options.critic.mode, "score")
         self.assertTrue(options.refine.enabled)
 
     def test_loss_weights_accept_values_above_one(self):
@@ -81,8 +82,17 @@ class PredictOptionsTest(unittest.TestCase):
             ("axis_mass_weight", lambda: JointConfig(axis_mass_weight=-0.1)),
             ("progress", lambda: PredictOptions(num_phases=2, progress=1)),
             ("weight", lambda: CriticConfig(weight=-0.1)),
+            ("mode", lambda: CriticConfig(mode="unknown")),
             ("enabled", lambda: RefineConfig(enabled=1)),
             ("decode_batch_size", lambda: ScaleConfig(decode_batch_size=True)),
+            (
+                "low_phase_conductivity",
+                lambda: TargetConfig(
+                    diffusivity_weight=1.0,
+                    diffusivity_grid_size=2,
+                    low_phase_conductivity=0.0,
+                ),
+            ),
         )
         for message, build in invalid:
             with self.subTest(message=message):
@@ -194,9 +204,21 @@ class PredictorTest(unittest.TestCase):
         )
         labels = torch.tensor([[[0, 0], [0, 1]]])
 
-        target = self.predictor._resolve_fraction(options, labels)
+        condition = self.predictor._resolve_fraction(options)
+        diagnostic_target = self.predictor._resolve_target_fraction(options, labels)
+        descriptor_targets = self.predictor._build_targets(options, labels)
 
-        self.assertTrue(torch.equal(target, torch.tensor([0.75, 0.25])))
+        self.assertIsNone(condition)
+        self.assertTrue(
+            torch.equal(diagnostic_target, torch.tensor([0.75, 0.25]))
+        )
+        self.assertTrue(
+            torch.allclose(
+                descriptor_targets["fraction_targets"],
+                torch.tensor([0.75, 0.25]),
+                atol=1e-3,
+            )
+        )
 
     def test_anchor_supplies_global_fraction_without_duplicate_target_image(self):
         options = PredictOptions(
@@ -213,7 +235,10 @@ class PredictorTest(unittest.TestCase):
         latent = torch.zeros(1, 2, 2, 2)
 
         with (
-            patch("src.app.api.predictor.sample_latent", return_value=latent),
+            patch(
+                "src.app.api.predictor.sample_latent",
+                return_value=latent,
+            ) as sample,
             patch.object(
                 self.predictor,
                 "_run_joint",
@@ -227,6 +252,36 @@ class PredictorTest(unittest.TestCase):
 
         labels = run_joint.call_args.kwargs["target_labels"]
         self.assertTrue(torch.equal(labels[0].cpu(), torch.from_numpy(anchor.image)))
+        self.assertIsNone(sample.call_args.kwargs["phase_fractions"])
+        self.assertIsNone(run_joint.call_args.kwargs["phase_fractions"])
+
+    def test_tpc_reference_does_not_enable_fraction_conditioning(self):
+        options = PredictOptions(
+            num_phases=2,
+            joint=JointConfig(steps=1),
+            targets=TargetConfig(tpc_weight=1.0),
+            refine=RefineConfig(enabled=False),
+        )
+        latent = torch.zeros(1, 2, 2, 2)
+
+        with (
+            patch(
+                "src.app.api.predictor.sample_latent",
+                return_value=latent,
+            ) as sample,
+            patch.object(
+                self.predictor,
+                "_run_joint",
+                return_value=(latent, {"step": torch.tensor([1])}),
+            ) as run_joint,
+        ):
+            self.predictor.predict(
+                options,
+                target_images=[np.array([[0, 0], [0, 1]], dtype=np.uint8)],
+            )
+
+        self.assertIsNone(sample.call_args.kwargs["phase_fractions"])
+        self.assertIsNone(run_joint.call_args.kwargs["phase_fractions"])
 
     def test_target_images_are_the_morphology_reference_when_anchor_is_present(self):
         options = PredictOptions(
@@ -278,6 +333,7 @@ class PredictorTest(unittest.TestCase):
                 surface_area_weight=0.3,
                 diffusivity_weight=0.4,
                 diffusivity_grid_size=2,
+                low_phase_conductivity=0.001,
             ),
         )
         latent = torch.zeros(1, 2, 2, 2)
@@ -431,6 +487,76 @@ class PredictorTest(unittest.TestCase):
         self.assertIs(joint.call_args.kwargs["critic"], critic)
         self.assertNotIn("critic_fraction", joint.call_args.kwargs)
 
+    def test_post_refine_is_skipped_after_base_critic_guidance(self):
+        options = PredictOptions(
+            num_phases=2,
+            joint=JointConfig(steps=1),
+            critic=CriticConfig(weight=0.1),
+            refine=RefineConfig(enabled=True),
+        )
+        latent = torch.zeros(1, 2, 2, 2)
+        self.predictor.critic = object()
+
+        with (
+            patch("src.app.api.predictor.sample_latent", return_value=latent),
+            patch.object(
+                self.predictor,
+                "_run_joint",
+                return_value=(latent, {"step": torch.tensor([1])}),
+            ),
+            patch("src.app.api.predictor.refine_probabilities") as refine,
+            self.assertWarnsRegex(RuntimeWarning, "post-refine is skipped"),
+        ):
+            _, stats = self.predictor.predict(options)
+
+        refine.assert_not_called()
+        self.assertTrue(bool(stats["critic_enabled"]))
+        self.assertFalse(bool(stats["refine_applied"]))
+
+    def test_feature_critic_reaches_joint_with_categorical_references(self):
+        options = PredictOptions(
+            num_phases=2,
+            critic=CriticConfig(weight=0.1, mode="feature"),
+            joint=JointConfig(steps=1),
+        )
+        latent = torch.zeros(1, 2, 2, 2)
+        labels = torch.tensor([[[0, 1], [1, 1]]])
+
+        with patch(
+            "src.app.api.predictor.optimize_latent",
+            return_value=(latent, {"step": torch.tensor([1])}),
+        ) as optimize:
+            self.predictor._run_joint(
+                latent,
+                options=options,
+                anchors=None,
+                target_labels=labels,
+                critic=object(),
+                t_max=3,
+            )
+
+        kwargs = optimize.call_args.kwargs
+        self.assertEqual(kwargs["critic_mode"], "feature")
+        self.assertEqual(kwargs["critic_references"].shape, (1, 2, 2, 2))
+        self.assertTrue(
+            torch.equal(
+                kwargs["critic_references"].argmax(dim=1),
+                labels,
+            )
+        )
+
+    def test_feature_critic_requires_target_or_anchor_reference(self):
+        options = PredictOptions(
+            num_phases=2,
+            critic=CriticConfig(weight=0.1, mode="feature"),
+            joint=JointConfig(steps=1),
+            refine=RefineConfig(enabled=False),
+        )
+        self.predictor.critic = object()
+
+        with self.assertRaisesRegex(ValueError, "target_images or anchors"):
+            self.predictor.predict(options)
+
     def test_large_prediction_uses_scale_refinement_not_base_joint(self):
         options = PredictOptions(
             num_phases=2,
@@ -463,6 +589,73 @@ class PredictorTest(unittest.TestCase):
         self.assertNotIn("critic_fraction", refine.call_args.kwargs)
         self.assertEqual(volume.shape, torch.Size([4, 4, 4]))
         self.assertIn("final_phase_fraction", stats)
+
+    def test_post_refine_is_skipped_after_scale_critic_guidance(self):
+        options = PredictOptions(
+            num_phases=2,
+            critic=CriticConfig(weight=0.1),
+            scale=ScaleConfig(steps=1),
+            refine=RefineConfig(enabled=True),
+        )
+        latent = torch.zeros(1, 4, 4, 4)
+        self.predictor.critic = object()
+
+        with (
+            patch.object(
+                self.predictor,
+                "_generate_large",
+                return_value=(latent, {"volume_size": 4}),
+            ),
+            patch.object(
+                self.predictor,
+                "_refine_large",
+                return_value=(latent, {"step": torch.tensor([1])}),
+            ),
+            patch(
+                "src.app.api.predictor.refine_large_probabilities"
+            ) as refine,
+            self.assertWarnsRegex(RuntimeWarning, "post-refine is skipped"),
+        ):
+            _, stats = self.predictor.predict(options, volume_size=4)
+
+        refine.assert_not_called()
+        self.assertTrue(bool(stats["critic_enabled"]))
+        self.assertFalse(bool(stats["refine_applied"]))
+
+    def test_feature_critic_references_are_tiled_for_scale_guidance(self):
+        options = PredictOptions(
+            num_phases=2,
+            critic=CriticConfig(weight=0.1, mode="feature"),
+            scale=ScaleConfig(steps=1),
+        )
+        latent = torch.zeros(1, 4, 4, 4)
+        labels = torch.tensor(
+            [[[0, 0, 1, 1], [0, 0, 1, 1], [1, 1, 0, 0], [1, 1, 0, 0]]]
+        )
+        self.predictor.critic = object()
+
+        with patch(
+            "src.app.api.predictor.optimize_large_latent",
+            return_value=(latent, {"step": torch.tensor([1])}),
+        ) as optimize:
+            self.predictor._refine_large(
+                latent,
+                options=options,
+                anchors=None,
+                target_labels=labels,
+                descriptor_tile_size=2,
+                t_max=3,
+            )
+
+        kwargs = optimize.call_args.kwargs
+        self.assertEqual(kwargs["critic_mode"], "feature")
+        self.assertEqual(kwargs["critic_references"].shape, (4, 2, 2, 2))
+        self.assertTrue(
+            torch.equal(
+                kwargs["critic_references"].sum(dim=1),
+                torch.ones(4, 2, 2),
+            )
+        )
 
     def test_large_full_size_tpc_target_is_tiled_to_vae_size(self):
         options = PredictOptions(

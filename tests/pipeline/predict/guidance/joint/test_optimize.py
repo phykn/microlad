@@ -44,11 +44,23 @@ class RecordingCritic(torch.nn.Module):
         super().__init__()
         self.batch_sizes = []
         self.channel_sizes = []
+        self.inputs = []
 
     def forward(self, probabilities: torch.Tensor) -> torch.Tensor:
         self.batch_sizes.append(int(probabilities.shape[0]))
         self.channel_sizes.append(int(probabilities.shape[1]))
+        self.inputs.append(probabilities.detach().clone())
         return probabilities[:, -1].mean(dim=(1, 2)).unsqueeze(1)
+
+
+class RecordingFeatureCritic(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.inputs = []
+
+    def morphology_features(self, probabilities: torch.Tensor):
+        self.inputs.append(probabilities.detach().clone())
+        return (probabilities,)
 
 
 class FakeProgress:
@@ -235,6 +247,97 @@ class JointOptimizationTest(unittest.TestCase):
         self.assertEqual(critic.batch_sizes, [2])
         self.assertEqual(critic.channel_sizes, [2])
         self.assertFalse(torch.equal(refined, latent))
+
+    def test_critic_scores_final_axis_consensus_slices(self):
+        critic = RecordingCritic()
+        consensus = torch.empty(2, 2, 2, 2)
+        consensus[0].fill_(0.2)
+        consensus[1].fill_(0.8)
+
+        with patch(
+            "src.pipeline.predict.guidance.joint.optimize."
+            "geometric_probability_consensus",
+            return_value=consensus,
+        ):
+            optimize_latent(
+                torch.zeros(1, 2, 2, 2),
+                IdentityCategoricalVAE(),
+                ZeroNoiseModel(),
+                DDPMProcess(timesteps=4),
+                steps=1,
+                batch_size=2,
+                lr=0.1,
+                t_min=1,
+                t_max=3,
+                num_phases=2,
+                sds_weight=0.0,
+                critic=critic,
+                critic_weight=0.1,
+                axis_weight=0.0,
+                continuity_weight=0.0,
+                preservation_weight=0.0,
+            )
+
+        self.assertTrue(
+            torch.allclose(
+                critic.inputs[0],
+                torch.tensor([0.0, 1.0])
+                .view(1, 2, 1, 1)
+                .expand(2, 2, 2, 2),
+                atol=1e-6,
+                rtol=0.0,
+            )
+        )
+
+    def test_feature_critic_matches_reference_morphology(self):
+        critic = RecordingFeatureCritic()
+        references = torch.zeros(1, 2, 2, 2)
+        references[:, 1] = 1.0
+        latent = torch.zeros(1, 2, 2, 2)
+
+        refined, stats = optimize_latent(
+            latent,
+            IdentityCategoricalVAE(),
+            ZeroNoiseModel(),
+            DDPMProcess(timesteps=4),
+            steps=1,
+            batch_size=2,
+            lr=0.1,
+            t_min=1,
+            t_max=3,
+            num_phases=2,
+            sds_weight=0.0,
+            critic=critic,
+            critic_weight=0.1,
+            critic_mode="feature",
+            critic_references=references,
+            axis_weight=0.0,
+            continuity_weight=0.0,
+            preservation_weight=0.0,
+        )
+
+        self.assertIn("critic", stats)
+        self.assertEqual(len(critic.inputs), 2)
+        self.assertTrue(torch.equal(critic.inputs[1], references))
+        self.assertFalse(torch.equal(refined, latent))
+
+    def test_feature_critic_requires_reference_images(self):
+        with self.assertRaisesRegex(ValueError, "critic_references"):
+            optimize_latent(
+                torch.zeros(1, 2, 2, 2),
+                IdentityCategoricalVAE(),
+                ZeroNoiseModel(),
+                DDPMProcess(timesteps=4),
+                steps=1,
+                batch_size=1,
+                lr=0.1,
+                t_min=1,
+                t_max=3,
+                num_phases=2,
+                critic=RecordingFeatureCritic(),
+                critic_weight=0.1,
+                critic_mode="feature",
+            )
 
     def test_unlimited_decode_batch_disables_checkpointing(self):
         latent = torch.randn(1, 2, 2, 2)

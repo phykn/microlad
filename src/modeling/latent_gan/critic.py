@@ -5,6 +5,7 @@ import torch.nn.functional as F
 
 MIN_IMAGE_SIZE = 16
 GLOBAL_FEATURE_SIZE = 4
+NORMALIZATION_MODES = ("global", "phase", "boundary")
 
 
 class ImageCritic(nn.Module):
@@ -16,6 +17,7 @@ class ImageCritic(nn.Module):
         image_size: int,
         *,
         base_ch: int = 64,
+        normalization: str = "global",
     ) -> None:
         super().__init__()
         if num_phases <= 0:
@@ -24,9 +26,14 @@ class ImageCritic(nn.Module):
             raise ValueError(f"image_size must be at least {MIN_IMAGE_SIZE}.")
         if base_ch <= 0:
             raise ValueError("base_ch must be positive.")
+        if normalization not in NORMALIZATION_MODES:
+            raise ValueError(
+                f"normalization must be one of {NORMALIZATION_MODES}."
+            )
 
         self.num_phases = num_phases
         self.image_size = image_size
+        self.normalization = normalization
         channels = (num_phases, base_ch, base_ch * 2, base_ch * 4)
         layers = []
         for source, target in zip(channels, channels[1:]):
@@ -55,6 +62,20 @@ class ImageCritic(nn.Module):
         )
 
     def forward(self, probabilities: torch.Tensor) -> torch.Tensor:
+        features = self.morphology_features(probabilities)[-1]
+        local_score = self.local_score(features).mean(dim=(-2, -1))
+        global_features = F.adaptive_avg_pool2d(
+            features,
+            output_size=(GLOBAL_FEATURE_SIZE, GLOBAL_FEATURE_SIZE),
+        )
+        global_score = self.global_score(global_features.flatten(start_dim=1))
+        return 0.5 * (local_score + global_score)
+
+    def morphology_features(
+        self,
+        probabilities: torch.Tensor,
+    ) -> tuple[torch.Tensor, ...]:
+        """Return multi-scale morphology features without spatial pairing."""
         if probabilities.ndim != 4 or probabilities.shape[1] != self.num_phases:
             raise ValueError(
                 "phase probabilities must have shape "
@@ -71,20 +92,37 @@ class ImageCritic(nn.Module):
                 f"image size {self.image_size}x{self.image_size}."
             )
 
+        values = self.normalize_morphology(probabilities)
+        features = []
+        for layer in self.features:
+            values = layer(values)
+            if isinstance(layer, nn.LeakyReLU):
+                features.append(values)
+        return tuple(features)
+
+    def normalize_morphology(self, probabilities: torch.Tensor) -> torch.Tensor:
+        """Remove phase mass and contrast before morphology discrimination."""
+        if self.normalization == "boundary":
+            local_mean = F.avg_pool2d(
+                probabilities,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+                count_include_pad=False,
+            )
+            return probabilities - local_mean
+
         centered = probabilities - probabilities.mean(
             dim=(-2, -1),
             keepdim=True,
         )
+        scale_dims = (
+            (1, 2, 3)
+            if self.normalization == "global"
+            else (-2, -1)
+        )
         scale = centered.square().mean(
-            dim=(1, 2, 3),
+            dim=scale_dims,
             keepdim=True,
         )
-        normalized = centered * torch.rsqrt(scale + 1e-6)
-        features = self.features(normalized)
-        local_score = self.local_score(features).mean(dim=(-2, -1))
-        global_features = F.adaptive_avg_pool2d(
-            features,
-            output_size=(GLOBAL_FEATURE_SIZE, GLOBAL_FEATURE_SIZE),
-        )
-        global_score = self.global_score(global_features.flatten(start_dim=1))
-        return 0.5 * (local_score + global_score)
+        return centered * torch.rsqrt(scale + 1e-6)

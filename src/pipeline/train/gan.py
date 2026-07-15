@@ -2,10 +2,12 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 
 from src.modeling.latent_gan import critic_loss, gradient_penalty, guidance_loss
-from src.pipeline.predict.guidance.latent_slices import sample_slices
+from src.modeling.phases.representation import phase_target_indices
+from src.pipeline.predict.reconstruction.volume import decode_volume_probs
 from src.pipeline.train.misc.distributed import is_main_process, unwrap_model
 from src.pipeline.train.misc.run import log_stats, setup_run_dirs, write_checkpoint
 
@@ -17,7 +19,7 @@ class GANTrainer:
         critic: torch.nn.Module,
         vae: torch.nn.Module,
         dataloader: Iterable,
-        fake_dataloader: Iterable,
+        fake_dataset: torch.utils.data.Dataset,
         generator_optimizer: torch.optim.Optimizer,
         critic_optimizer: torch.optim.Optimizer,
         *,
@@ -46,8 +48,10 @@ class GANTrainer:
 
         self.dataloader = dataloader
         self.iterator = iter(dataloader)
-        self.fake_dataloader = fake_dataloader
-        self.fake_iterator = iter(fake_dataloader)
+        if len(fake_dataset) <= 0:
+            raise ValueError("fake_dataset must not be empty.")
+        self.fake_dataset = fake_dataset
+        self.fake_volume_cache: dict[int, torch.Tensor] = {}
         self.generator_optimizer = generator_optimizer
         self.critic_optimizer = critic_optimizer
         self.steps = steps
@@ -83,51 +87,23 @@ class GANTrainer:
         for _ in range(self.critic_steps):
             images = self._next_images()
             with torch.no_grad():
-                real_latent, _ = self.vae.encode(images)
-                real_probabilities = self.vae.decode_probs(real_latent)
-                batch_size = int(real_latent.shape[0])
-                latent_dtype = real_latent.dtype
-                noise = torch.randn(
-                    batch_size,
-                    int(unwrap_model(self.generator).noise_ch),
-                    device=self.device,
-                    dtype=latent_dtype,
+                real_probabilities = _categorical_probabilities(
+                    images,
+                    num_phases=int(self.vae.num_phases),
                 )
-                generator_latent = self.generator(noise)
-                generator_probabilities = self.vae.decode_probs(generator_latent)
-                volumes = self._next_fake_volumes().to(
-                    device=self.device,
-                    dtype=real_latent.dtype,
-                )
-                lmpdd_latent = sample_slices(
-                    volumes,
+                batch_size = int(images.shape[0])
+                latent_dtype = next(self.critic.parameters()).dtype
+                lmpdd_probabilities = self._next_fake_consensus_slices(
                     count=batch_size,
-                    crop_size=int(real_latent.shape[-1]),
-                    axis_offset=self.axis_offset,
                 )
-                lmpdd_probabilities = self.vae.decode_probs(lmpdd_latent)
-                self.axis_offset = (self.axis_offset + batch_size) % 3
 
             self.critic_optimizer.zero_grad(set_to_none=True)
             real_scores = self.critic(real_probabilities)
-            fake_scores = torch.cat(
-                (
-                    self.critic(generator_probabilities),
-                    self.critic(lmpdd_probabilities),
-                ),
-                dim=0,
-            )
-            penalty = 0.5 * (
-                gradient_penalty(
-                    self.critic,
-                    real_probabilities,
-                    generator_probabilities,
-                )
-                + gradient_penalty(
-                    self.critic,
-                    real_probabilities,
-                    lmpdd_probabilities,
-                )
+            fake_scores = self.critic(lmpdd_probabilities)
+            penalty = gradient_penalty(
+                self.critic,
+                real_probabilities,
+                lmpdd_probabilities,
             )
             loss = critic_loss(
                 real_scores,
@@ -160,7 +136,10 @@ class GANTrainer:
         )
         generator_latent = self.generator(noise)
         generator_probabilities = self.vae.decode_probs(generator_latent)
-        adversarial = guidance_loss(self.critic(generator_probabilities))
+        generator_categorical = _straight_through_categorical(
+            generator_probabilities
+        )
+        adversarial = guidance_loss(self.critic(generator_categorical))
         if not torch.isfinite(adversarial):
             raise RuntimeError("GAN generator produced a non-finite loss.")
         adversarial.backward()
@@ -222,18 +201,45 @@ class GANTrainer:
             )
         return images.to(self.device)
 
-    def _next_fake_volumes(self) -> torch.Tensor:
-        try:
-            batch = next(self.fake_iterator)
-        except StopIteration:
-            self.fake_iterator = iter(self.fake_dataloader)
-            try:
-                batch = next(self.fake_iterator)
-            except StopIteration as exc:
-                raise ValueError("fake dataloader cannot provide latent volumes.") from exc
-        if not isinstance(batch, torch.Tensor) or batch.ndim != 5:
-            raise TypeError("fake batch must have shape [B, C, D, H, W].")
-        return batch
+    @torch.no_grad()
+    def _next_fake_consensus_slices(self, *, count: int) -> torch.Tensor:
+        dataset_index = int(torch.randint(len(self.fake_dataset), (1,)).item())
+        labels = self._fake_consensus_labels(dataset_index)
+        slices = []
+        for sample in range(count):
+            axis = (self.axis_offset + sample) % 3
+            index = int(torch.randint(labels.shape[axis], (1,)).item())
+            slices.append(labels.select(axis, index))
+        self.axis_offset = (self.axis_offset + count) % 3
+        indices = torch.stack(slices).to(device=self.device, dtype=torch.long)
+        return F.one_hot(
+            indices,
+            num_classes=int(self.vae.num_phases),
+        ).movedim(-1, 1).to(dtype=next(self.critic.parameters()).dtype)
+
+    @torch.no_grad()
+    def _fake_consensus_labels(self, dataset_index: int) -> torch.Tensor:
+        cached = self.fake_volume_cache.get(dataset_index)
+        if cached is not None:
+            return cached
+        latent = self.fake_dataset[dataset_index]
+        if not isinstance(latent, torch.Tensor) or latent.ndim != 4:
+            raise TypeError("fake dataset samples must have shape [C, D, H, W].")
+        latent = latent.to(
+            device=self.device,
+            dtype=next(self.critic.parameters()).dtype,
+        )
+        probabilities = decode_volume_probs(
+            self.vae,
+            latent,
+            num_phases=int(self.vae.num_phases),
+        )
+        labels = probabilities.argmax(dim=1)[0].to(
+            device="cpu",
+            dtype=torch.uint8,
+        )
+        self.fake_volume_cache[dataset_index] = labels
+        return labels
 
     def _save(self) -> None:
         if not self.is_main_process or self.step % self.save_every != 0:
@@ -248,3 +254,22 @@ class GANTrainer:
         step_dir = self.weight_dir / str(self.step)
         write_checkpoint(checkpoint, step_dir / "model.pt")
         write_checkpoint(checkpoint, self.last_weight_dir / "model.pt")
+
+
+def _categorical_probabilities(
+    images: torch.Tensor,
+    *,
+    num_phases: int,
+) -> torch.Tensor:
+    indices = phase_target_indices(images, num_phases)
+    return F.one_hot(indices, num_classes=num_phases).movedim(-1, 1).to(
+        dtype=images.dtype
+    )
+
+
+def _straight_through_categorical(probabilities: torch.Tensor) -> torch.Tensor:
+    hard = F.one_hot(
+        probabilities.argmax(dim=1),
+        num_classes=int(probabilities.shape[1]),
+    ).movedim(-1, 1).to(probabilities.dtype)
+    return hard + probabilities - probabilities.detach()

@@ -143,6 +143,7 @@ class BuildTest(unittest.TestCase):
                         "  decode_batch_size: null",
                         "critic:",
                         "  weight: 0.05",
+                        "  mode: feature",
                         "refine:",
                         "  enabled: false",
                     ]
@@ -162,6 +163,7 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(config["phase_fractions"], (0.25, 0.15, 0.60))
         self.assertTrue(config["segment_anchors"])
         self.assertEqual(config["critic"].weight, 0.05)
+        self.assertEqual(config["critic"].mode, "feature")
         self.assertFalse(config["refine"].enabled)
 
     def test_build_dataset_expands_image_files_from_data_dir(self):

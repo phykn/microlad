@@ -1,5 +1,5 @@
 data:
-  data_dir: data
+  data_dir: data/train
   augment: true
   batch_size: 8
 
@@ -13,16 +13,16 @@ diffusion:
   beta_end: 2.0e-2
 
 optimization:
-  lr: 1.0e-4
-  weight_decay: 0.0
+  lr: 0.0001
+  weight_decay: 0.01
   clip_grad_norm: 1.0
 
 training:
   steps: 10000
   save_every: 1000
-  ema_decay: 0.9999
+  ema_decay: 0.999
   condition_dropout: 0.1
 
 output:
-  vae_run_dir: run/20260714-202424-225286
+  vae_run_dir: run/20260715-114554-625954
   run_root: run

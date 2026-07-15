@@ -127,6 +127,36 @@ def decode_anchor_patch(
     )
 
 
+def decode_consensus_patch(
+    vae: torch.nn.Module,
+    latent: torch.Tensor,
+    *,
+    axis: int,
+    index: int,
+    num_phases: int,
+    tile_overlap: int,
+    batch_size: int | None = None,
+    crop_start: tuple[int, int] = (0, 0),
+    crop_size: int | None = None,
+) -> torch.Tensor:
+    """Decode one patch exactly as the final tri-axis consensus volume."""
+    _validate_latent_volume(vae, latent)
+    output_size = int(latent.shape[1]) * get_downsample_factor(vae)
+    return _decode_probability_patch(
+        vae,
+        latent,
+        axis=axis,
+        index=index,
+        start=0,
+        target_size=output_size,
+        num_phases=num_phases,
+        tile_overlap=tile_overlap,
+        batch_size=batch_size,
+        crop_start=crop_start,
+        crop_size=crop_size,
+    )
+
+
 def _decode_probability_patch(
     vae: torch.nn.Module,
     latent: torch.Tensor,

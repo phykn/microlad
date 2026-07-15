@@ -4,7 +4,11 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from src.modeling.latent_gan import ImageCritic, guidance_loss
+from src.modeling.latent_gan import (
+    ImageCritic,
+    guidance_loss,
+    morphology_feature_loss,
+)
 from src.pipeline.predict.guidance.latent_slices import sample_slices
 from src.modeling.diffusion import DDPMProcess
 from src.modeling.inference import freeze
@@ -23,6 +27,7 @@ from src.pipeline.predict.guidance.joint.slices import (
     extract_slices,
     phase_values,
     select_slices,
+    straight_through_one_hot,
 )
 from src.pipeline.predict.guidance.metrics.conductance import ConductanceSolver
 from src.pipeline.predict.guidance.metrics.loss import sample_descriptor_loss
@@ -49,6 +54,8 @@ def optimize_latent(
     sds_weight: float = 1.0,
     critic: ImageCritic | None = None,
     critic_weight: float = 0.0,
+    critic_mode: str = "score",
+    critic_references: torch.Tensor | None = None,
     anchor_weight: float = 0.0,
     fraction_targets: Mapping[int, float] | torch.Tensor | None = None,
     phase_fractions: torch.Tensor | None = None,
@@ -81,6 +88,8 @@ def optimize_latent(
         num_phases=num_phases,
         critic=critic,
         critic_weight=critic_weight,
+        critic_mode=critic_mode,
+        critic_references=critic_references,
         progress=progress,
     )
     freeze(vae)
@@ -155,13 +164,6 @@ def optimize_latent(
             total = total + sds_weight * prior
             stats["sds"] = (sds_weight * prior).detach()
 
-        if critic is not None and critic_weight > 0.0:
-            image_slices = vae.decode_probs(latent_slices)
-            critic_term = guidance_loss(critic(image_slices))
-            total = total + critic_weight * critic_term
-            stats["critic"] = (critic_weight * critic_term).detach()
-            display["critic"] = critic_term.detach()
-
         axis_probabilities = decode_axis_probs(
             vae,
             refined[0],
@@ -185,6 +187,21 @@ def optimize_latent(
             indices=indices,
         )
         slice_values = phase_values(slice_probabilities, num_phases=num_phases)
+
+        if critic is not None and critic_weight > 0.0:
+            critic_probabilities = straight_through_one_hot(slice_probabilities)
+            critic_term = (
+                guidance_loss(critic(critic_probabilities))
+                if critic_mode == "score"
+                else morphology_feature_loss(
+                    critic,
+                    critic_probabilities,
+                    critic_references,
+                )
+            )
+            total = total + critic_weight * critic_term
+            stats["critic"] = (critic_weight * critic_term).detach()
+            display["critic"] = critic_term.detach()
 
         descriptor_total, descriptor_stats = sample_descriptor_loss(
             slice_values[:, 0],
@@ -307,6 +324,8 @@ def _validate_inputs(
     num_phases: int,
     critic: ImageCritic | None,
     critic_weight: float,
+    critic_mode: str,
+    critic_references: torch.Tensor | None,
     progress: bool,
 ) -> None:
     expected = (
@@ -332,3 +351,22 @@ def _validate_inputs(
         raise ValueError("progress must be a boolean.")
     if critic_weight > 0.0 and critic is None:
         raise ValueError("critic is required when critic_weight is positive.")
+    if critic_mode not in ("score", "feature"):
+        raise ValueError("critic_mode must be 'score' or 'feature'.")
+    if critic_weight > 0.0 and critic_mode == "feature":
+        if critic_references is None:
+            raise ValueError(
+                "critic_references are required for feature critic guidance."
+            )
+        if (
+            critic_references.ndim != 4
+            or critic_references.shape[0] <= 0
+            or critic_references.shape[1] != num_phases
+            or not critic_references.is_floating_point()
+            or not torch.isfinite(critic_references).all()
+            or critic_references.device != latent.device
+        ):
+            raise ValueError(
+                "critic_references must contain finite floating-point "
+                "[N, num_phases, H, W] probabilities."
+            )

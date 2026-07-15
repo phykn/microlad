@@ -13,9 +13,6 @@ from src.pipeline.predict.guidance.metrics.targets import build_phase_target
 from src.validation import require_finite, require_finite_number, require_int
 
 
-LOW_COND_FLOOR = 0.001
-
-
 class ConductanceSolver(nn.Module):
     def __init__(
         self,
@@ -34,11 +31,8 @@ class ConductanceSolver(nn.Module):
             raise ValueError("width must be at least 2.")
 
         require_finite_number("low_cond", low_cond)
-        if low_cond < 0.0 or low_cond > 1.0:
-            raise ValueError("low_cond must be between 0 and 1.")
-
-        if low_cond == 0.0:
-            low_cond = LOW_COND_FLOOR
+        if low_cond <= 0.0 or low_cond > 1.0:
+            raise ValueError("low_cond must be greater than 0 and at most 1.")
 
         self.height = int(height)
         self.width = int(width)

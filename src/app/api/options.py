@@ -69,7 +69,8 @@ class TargetConfig:
         surface_area_weight: Weight of the surface-area loss.
         diffusivity_weight: Weight of the effective-diffusivity loss.
         diffusivity_grid_size: Grid size used by the diffusivity solver.
-        low_phase_conductivity: Conductivity assigned to the low phase.
+        low_phase_conductivity: Conductivity assigned to the low phase. It must
+            be positive when diffusivity guidance is enabled.
     """
 
     segment: bool = False
@@ -119,6 +120,11 @@ class TargetConfig:
             "low_phase_conductivity",
             self.low_phase_conductivity,
         )
+        if self.diffusivity_weight > 0.0 and self.low_phase_conductivity == 0.0:
+            raise ValueError(
+                "low_phase_conductivity must be positive when diffusivity_weight "
+                "is positive."
+            )
 
 
 @dataclass(frozen=True)
@@ -183,12 +189,18 @@ class CriticConfig:
 
     Attributes:
         weight: Image critic guidance weight during latent refinement.
+        mode: ``score`` maximizes the learned real-image score. ``feature``
+            matches unpaired multi-scale morphology statistics from reference
+            images while phase mass is normalized out by the critic.
     """
 
     weight: float = 0.0
+    mode: str = "score"
 
     def __post_init__(self) -> None:
         _require_non_negative("weight", self.weight)
+        if self.mode not in ("score", "feature"):
+            raise ValueError("mode must be 'score' or 'feature'.")
 
 
 @dataclass(frozen=True)

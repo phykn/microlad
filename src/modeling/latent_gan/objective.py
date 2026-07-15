@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 
 
 def critic_loss(
@@ -24,6 +25,44 @@ def guidance_loss(fake_scores: torch.Tensor) -> torch.Tensor:
     if fake_scores.numel() == 0:
         raise ValueError("critic scores must not be empty.")
     return -fake_scores.mean()
+
+
+def morphology_feature_loss(
+    critic: torch.nn.Module,
+    generated: torch.Tensor,
+    references: torch.Tensor,
+) -> torch.Tensor:
+    """Matches unpaired multi-scale morphology feature distributions."""
+    feature_fn = getattr(critic, "morphology_features", None)
+    if not callable(feature_fn):
+        raise ValueError("critic must provide morphology_features.")
+    generated_features = feature_fn(generated)
+    with torch.no_grad():
+        reference_features = feature_fn(references)
+    if not generated_features or len(generated_features) != len(reference_features):
+        raise ValueError("critic morphology feature levels must match.")
+
+    losses = []
+    for generated_level, reference_level in zip(
+        generated_features,
+        reference_features,
+    ):
+        dimensions = (0, 2, 3)
+        generated_mean = generated_level.mean(dim=dimensions)
+        reference_mean = reference_level.mean(dim=dimensions)
+        generated_std = generated_level.var(
+            dim=dimensions,
+            unbiased=False,
+        ).add(1e-6).sqrt()
+        reference_std = reference_level.var(
+            dim=dimensions,
+            unbiased=False,
+        ).add(1e-6).sqrt()
+        losses.append(
+            F.mse_loss(generated_mean, reference_mean)
+            + F.mse_loss(generated_std, reference_std)
+        )
+    return torch.stack(losses).mean()
 
 
 def gradient_penalty(

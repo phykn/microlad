@@ -1,9 +1,9 @@
 data:
-  data_dir: data
+  data_dir: data/train
   crop_size: 128
   size: 64
   num_phases: 3
-  segment: true
+  segment: false
   augment: true
   batch_size: 8
 
@@ -16,11 +16,11 @@ model:
 
 loss:
   beta: 0.5
-  phase_balance: 0.35
+  phase_balance: 0.5
 
 optimization:
-  lr: 1.0e-4
-  weight_decay: 0.0
+  lr: 0.0001
+  weight_decay: 0.01
   clip_grad_norm: 1.0
 
 training:

@@ -20,10 +20,9 @@ class ConductanceLossTest(unittest.TestCase):
         self.assertTrue(torch.allclose(low, torch.tensor(0.1), atol=1e-4))
         self.assertTrue(low < middle < high)
 
-    def test_solver_clips_zero_low_cond_to_internal_floor(self):
-        solver = ConductanceSolver(height=2, width=2, low_cond=0.0)
-
-        self.assertEqual(solver.low_cond, 0.001)
+    def test_solver_rejects_zero_low_cond_instead_of_changing_the_model(self):
+        with self.assertRaisesRegex(ValueError, "greater than 0"):
+            ConductanceSolver(height=2, width=2, low_cond=0.0)
 
     def test_conductance_loss_matches_phase_targets_with_real_solver(self):
         solver = ConductanceSolver(height=4, width=4, low_cond=0.1)

@@ -42,6 +42,7 @@ def build_critic(args: argparse.Namespace) -> ImageCritic:
         num_phases=args.num_phases,
         image_size=args.size,
         base_ch=args.critic_ch,
+        normalization=getattr(args, "critic_normalization", "global"),
     )
 
 

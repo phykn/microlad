@@ -4,10 +4,15 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from src.modeling.latent_gan import ImageCritic, guidance_loss
+from src.modeling.latent_gan import (
+    ImageCritic,
+    guidance_loss,
+    morphology_feature_loss,
+)
 from src.pipeline.predict.guidance.latent_slices import sample_slices
 from src.modeling.diffusion import DDPMProcess
 from src.modeling.inference import freeze
+from src.modeling.vae import get_downsample_factor
 from src.pipeline.predict.guidance.conditioning.images import prepare_anchor_image
 from src.pipeline.predict.guidance.conditioning.model import AnchorSlice
 from src.pipeline.predict.guidance.joint.loss import fraction_loss
@@ -16,7 +21,11 @@ from src.pipeline.predict.guidance.metrics.loss import sample_descriptor_loss
 from src.pipeline.predict.guidance.metrics.targets import build_phase_target
 from src.pipeline.predict.guidance.prior import sds_loss
 from src.pipeline.predict.reconstruction.volume import decode_latents
-from src.pipeline.predict.scaling.decoding import decode_anchor_patch
+from src.pipeline.predict.scaling.decoding import (
+    decode_anchor_patch,
+    decode_consensus_patch,
+    decode_tiled_planes,
+)
 from src.validation import require_finite, require_finite_number, require_int
 
 
@@ -37,6 +46,8 @@ def optimize_large_latent(
     sds_weight: float = 1.0,
     critic: ImageCritic | None = None,
     critic_weight: float = 0.0,
+    critic_mode: str = "score",
+    critic_references: torch.Tensor | None = None,
     anchor_weight: float = 0.0,
     fraction_targets: Mapping[int, float] | torch.Tensor | None = None,
     phase_fractions: torch.Tensor | None = None,
@@ -80,6 +91,8 @@ def optimize_large_latent(
         sds_weight=sds_weight,
         critic=critic,
         critic_weight=critic_weight,
+        critic_mode=critic_mode,
+        critic_references=critic_references,
         continuity_weight=continuity_weight,
         preservation_weight=preservation_weight,
         residual_scale=residual_scale,
@@ -166,7 +179,24 @@ def optimize_large_latent(
             stats["sds"] = (sds_weight * prior).detach()
 
         if critic is not None and critic_weight > 0.0:
-            critic_term = guidance_loss(critic(probabilities))
+            critic_probabilities = _decode_critic_consensus_slices(
+                refined[0],
+                vae,
+                step=step,
+                count=1,
+                num_phases=num_phases,
+                tile_overlap=tile_overlap,
+                decode_batch_size=decode_batch_size,
+            )
+            critic_term = (
+                guidance_loss(critic(critic_probabilities))
+                if critic_mode == "score"
+                else morphology_feature_loss(
+                    critic,
+                    critic_probabilities,
+                    critic_references,
+                )
+            )
             total = total + critic_weight * critic_term
             stats["critic"] = (critic_weight * critic_term).detach()
 
@@ -189,15 +219,27 @@ def optimize_large_latent(
         stats.update(descriptor_stats)
 
         if target_fraction is not None and global_fraction_weight > 0.0:
+            global_probabilities = _decode_global_fraction_plane(
+                refined,
+                vae,
+                step=step,
+                num_phases=num_phases,
+                tile_overlap=tile_overlap,
+                decode_batch_size=decode_batch_size,
+            )
             hard = (
                 F.one_hot(
-                    probabilities.argmax(dim=1),
+                    global_probabilities.argmax(dim=1),
                     num_classes=num_phases,
                 )
                 .movedim(-1, 1)
-                .to(probabilities.dtype)
+                .to(global_probabilities.dtype)
             )
-            categorical = hard + probabilities - probabilities.detach()
+            categorical = (
+                hard
+                + global_probabilities
+                - global_probabilities.detach()
+            )
             measured = categorical.mean(dim=(0, 2, 3))
             error = fraction_loss(measured, target_fraction)
             total = total + global_fraction_weight * error
@@ -260,6 +302,75 @@ def optimize_large_latent(
         device=latent.device,
     )
     return final_latent, history_tensors
+
+
+def _decode_global_fraction_plane(
+    latent: torch.Tensor,
+    vae: torch.nn.Module,
+    *,
+    step: int,
+    num_phases: int,
+    tile_overlap: int,
+    decode_batch_size: int | None,
+) -> torch.Tensor:
+    """Decode one uniformly sampled full plane as a global-fraction estimator."""
+    axis = step % 3
+    plane_count = int(latent.shape[axis + 2])
+    index = int(torch.randint(plane_count, (), device=latent.device).item())
+    volume = latent[0]
+    if axis == 0:
+        plane = volume[:, index, :, :]
+    elif axis == 1:
+        plane = volume[:, :, index, :]
+    else:
+        plane = volume[:, :, :, index]
+    return decode_tiled_planes(
+        vae,
+        plane.unsqueeze(0),
+        tile_overlap=tile_overlap,
+        num_phases=num_phases,
+        batch_size=decode_batch_size,
+    )
+
+
+def _decode_critic_consensus_slices(
+    latent: torch.Tensor,
+    vae: torch.nn.Module,
+    *,
+    step: int,
+    count: int,
+    num_phases: int,
+    tile_overlap: int,
+    decode_batch_size: int | None,
+) -> torch.Tensor:
+    """Sample categorical patches from the exact final tri-axis decoder."""
+    output_size = int(latent.shape[1]) * get_downsample_factor(vae)
+    crop_size = int(vae.image_size)
+    last_start = output_size - crop_size
+    patches = []
+    for sample in range(count):
+        axis = (step + sample) % 3
+        index = int(torch.randint(output_size, (), device=latent.device).item())
+        row = int(torch.randint(last_start + 1, (), device=latent.device).item())
+        col = int(torch.randint(last_start + 1, (), device=latent.device).item())
+        probabilities = decode_consensus_patch(
+            vae,
+            latent,
+            axis=axis,
+            index=index,
+            num_phases=num_phases,
+            tile_overlap=tile_overlap,
+            batch_size=decode_batch_size,
+            crop_start=(row, col),
+            crop_size=crop_size,
+        )
+        patches.append(probabilities)
+    soft = torch.stack(patches)
+    hard = F.one_hot(
+        soft.argmax(dim=1),
+        num_classes=num_phases,
+    ).movedim(-1, 1).to(soft.dtype)
+    return hard + soft - soft.detach()
 
 
 def _continuity_loss(refined: torch.Tensor, base: torch.Tensor) -> torch.Tensor:
@@ -338,6 +449,8 @@ def _validate(
     sds_weight: float,
     critic: ImageCritic | None,
     critic_weight: float,
+    critic_mode: str,
+    critic_references: torch.Tensor | None,
     continuity_weight: float,
     preservation_weight: float,
     residual_scale: float,
@@ -394,6 +507,25 @@ def _validate(
     if critic_weight > 0.0:
         if critic is None:
             raise ValueError("critic is required when critic_weight is positive.")
+    if critic_mode not in ("score", "feature"):
+        raise ValueError("critic_mode must be 'score' or 'feature'.")
+    if critic_weight > 0.0 and critic_mode == "feature":
+        if critic_references is None:
+            raise ValueError(
+                "critic_references are required for feature critic guidance."
+            )
+        if (
+            critic_references.ndim != 4
+            or critic_references.shape[0] <= 0
+            or critic_references.shape[1] != num_phases
+            or not critic_references.is_floating_point()
+            or not torch.isfinite(critic_references).all()
+            or critic_references.device != latent.device
+        ):
+            raise ValueError(
+                "critic_references must contain finite floating-point "
+                "[N, num_phases, H, W] probabilities."
+            )
     if anchor_weight > 0.0 and not anchors:
         raise ValueError("scale anchors are required when anchor_weight is positive.")
     if (

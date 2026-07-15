@@ -13,7 +13,7 @@ class GenerateCriticFakesEntrypointTest(unittest.TestCase):
         config = load_config(args.config)
 
         self.assertEqual(config["num_volumes"], 500)
-        self.assertEqual(config["data_dir"], "data")
+        self.assertEqual(config["data_dir"], "data/train")
         self.assertEqual(config["unconditional_ratio"], 0.1)
 
     def test_rejects_invalid_count_before_model_loading(self):

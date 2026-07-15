@@ -74,7 +74,7 @@ def build_gan_trainer(
     critic: torch.nn.Module,
     vae: torch.nn.Module,
     loader: Iterator,
-    fake_loader: Iterator,
+    fake_dataset: torch.utils.data.Dataset,
     args: argparse.Namespace,
     device: torch.device,
 ) -> GANTrainer:
@@ -94,7 +94,7 @@ def build_gan_trainer(
         critic=critic,
         vae=vae,
         dataloader=loader,
-        fake_dataloader=fake_loader,
+        fake_dataset=fake_dataset,
         generator_optimizer=generator_optimizer,
         critic_optimizer=critic_optimizer,
         steps=args.steps,

@@ -5,15 +5,18 @@ from pathlib import Path
 import torch
 
 from src.modeling.latent_gan import ImageCritic, LatentGenerator
+from src.pipeline.predict.reconstruction.volume import decode_volume_probs
 from src.pipeline.train import GANTrainer
 
 
 class TinyVAE(torch.nn.Module):
+    image_size = 16
+    latent_size = 16
+    latent_ch = 3
     num_phases = 2
 
     def encode(self, images: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        latent = torch.cat((images, -images, torch.zeros_like(images)), dim=1)
-        return latent, torch.zeros_like(latent)
+        raise AssertionError("real critic inputs must not be VAE reconstructions")
 
     def decode_probs(self, latent: torch.Tensor) -> torch.Tensor:
         return torch.softmax(latent[:, :2], dim=1)
@@ -40,7 +43,7 @@ class GANTrainerTest(unittest.TestCase):
                 critic,
                 TinyVAE(),
                 [images],
-                [fake_volumes],
+                list(fake_volumes),
                 generator_optimizer,
                 critic_optimizer,
                 steps=1,
@@ -56,6 +59,14 @@ class GANTrainerTest(unittest.TestCase):
                 Path(trainer.run_dir) / "weight" / "gan" / "last" / "model.pt",
                 map_location="cpu",
             )
+            cached_index, cached_labels = next(iter(trainer.fake_volume_cache.items()))
+            expected_labels = (
+                decode_volume_probs(
+                    TinyVAE(), fake_volumes[cached_index], num_phases=2
+                )
+                .argmax(dim=1)[0]
+                .to(torch.uint8)
+            )
             trainer.close()
 
         self.assertEqual(trainer.step, 1)
@@ -64,6 +75,8 @@ class GANTrainerTest(unittest.TestCase):
         self.assertIn("critic", checkpoint)
         self.assertNotIn("fraction_error", stats)
         self.assertEqual(checkpoint["step"], 1)
+        self.assertEqual(len(trainer.fake_volume_cache), 1)
+        self.assertTrue(torch.equal(cached_labels, expected_labels))
 
 
 if __name__ == "__main__":

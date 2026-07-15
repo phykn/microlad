@@ -73,6 +73,7 @@ class DescriptorTargetsTest(unittest.TestCase):
             use_sa=True,
             use_diffusivity=True,
             diffusivity_grid_size=2,
+            low_phase_conductivity=0.001,
         )
 
         self.assertEqual(
@@ -136,6 +137,14 @@ class DescriptorTargetsTest(unittest.TestCase):
                 torch.zeros(1, 2, 2, dtype=torch.long),
                 num_phases=2,
                 use_diffusivity=True,
+            )
+        with self.assertRaisesRegex(ValueError, "low_phase_conductivity"):
+            build_descriptor_targets(
+                torch.zeros(1, 2, 2, dtype=torch.long),
+                num_phases=2,
+                use_diffusivity=True,
+                diffusivity_grid_size=2,
+                low_phase_conductivity=0.0,
             )
         with self.assertRaisesRegex(ValueError, "temperature"):
             build_descriptor_targets(

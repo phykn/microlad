@@ -52,7 +52,6 @@ def main() -> None:
         dataset = build_dataset(args)
         loader = build_loader(dataset, args, device=device)
         fake_dataset = FakeLatentDataset(args.fake_dir)
-        fake_loader = build_loader(fake_dataset, args, device=device)
         vae = load_run_vae(args.vae_run_dir, device)
         generator = wrap_distributed(
             build_generator(args).to(device),
@@ -69,7 +68,7 @@ def main() -> None:
             critic,
             vae,
             loader,
-            fake_loader,
+            fake_dataset,
             args,
             device,
         )

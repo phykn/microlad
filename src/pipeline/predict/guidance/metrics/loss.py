@@ -127,61 +127,20 @@ def sample_descriptor_loss(
     sa_sigma: float = 1.0,
     phase_probabilities: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    if decoded.ndim < 3:
-        return descriptor_loss(
-            decoded,
-            num_phases=num_phases,
-            fraction_targets=fraction_targets,
-            fraction_weight=fraction_weight,
-            tpc_targets=tpc_targets,
-            tpc_weight=tpc_weight,
-            sa_targets=sa_targets,
-            sa_weight=sa_weight,
-            diffusivity_targets=diffusivity_targets,
-            diffusivity_solver=diffusivity_solver,
-            diffusivity_weight=diffusivity_weight,
-            temperature=temperature,
-            sa_kernel_size=sa_kernel_size,
-            sa_sigma=sa_sigma,
-            phase_probabilities=phase_probabilities,
-        )
-
-    losses = []
-    history: dict[str, list[torch.Tensor]] = {}
-
-    for sample_index, sample in enumerate(decoded):
-        sample_probabilities = (
-            None
-            if phase_probabilities is None
-            else phase_probabilities[sample_index]
-        )
-        loss, stats = descriptor_loss(
-            sample,
-            num_phases=num_phases,
-            fraction_targets=fraction_targets,
-            fraction_weight=fraction_weight,
-            tpc_targets=tpc_targets,
-            tpc_weight=tpc_weight,
-            sa_targets=sa_targets,
-            sa_weight=sa_weight,
-            diffusivity_targets=diffusivity_targets,
-            diffusivity_solver=diffusivity_solver,
-            diffusivity_weight=diffusivity_weight,
-            temperature=temperature,
-            sa_kernel_size=sa_kernel_size,
-            sa_sigma=sa_sigma,
-            phase_probabilities=sample_probabilities,
-        )
-        losses.append(loss)
-
-        for key, value in stats.items():
-            history.setdefault(key, []).append(value)
-
-    total = torch.stack(losses).mean()
-    mean_stats = {
-        key: torch.stack(values).mean(dim=0)
-        for key, values in history.items()
-        if values
-    }
-
-    return total, mean_stats
+    return descriptor_loss(
+        decoded,
+        num_phases=num_phases,
+        fraction_targets=fraction_targets,
+        fraction_weight=fraction_weight,
+        tpc_targets=tpc_targets,
+        tpc_weight=tpc_weight,
+        sa_targets=sa_targets,
+        sa_weight=sa_weight,
+        diffusivity_targets=diffusivity_targets,
+        diffusivity_solver=diffusivity_solver,
+        diffusivity_weight=diffusivity_weight,
+        temperature=temperature,
+        sa_kernel_size=sa_kernel_size,
+        sa_sigma=sa_sigma,
+        phase_probabilities=phase_probabilities,
+    )

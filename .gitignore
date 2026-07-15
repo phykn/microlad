@@ -9,5 +9,7 @@ bat/
 docs/
 run/
 fake/
+data/
 script/
+scripts/
 tests/script/

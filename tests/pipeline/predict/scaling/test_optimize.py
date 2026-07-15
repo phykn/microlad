@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -7,9 +8,13 @@ from src.app.api import AnchorSlice
 from src.modeling.diffusion import DDPMProcess
 from src.pipeline.predict.scaling.decoding import (
     decode_anchor_patch,
+    decode_consensus_patch,
     decode_large_volume_probabilities,
 )
-from src.pipeline.predict.scaling.optimize import optimize_large_latent
+from src.pipeline.predict.scaling.optimize import (
+    _decode_global_fraction_plane,
+    optimize_large_latent,
+)
 
 
 class TinyVAE(torch.nn.Module):
@@ -72,11 +77,23 @@ class RecordingCritic(torch.nn.Module):
         super().__init__()
         self.batch_sizes = []
         self.channel_sizes = []
+        self.inputs = []
 
     def forward(self, probabilities: torch.Tensor) -> torch.Tensor:
         self.batch_sizes.append(int(probabilities.shape[0]))
         self.channel_sizes.append(int(probabilities.shape[1]))
+        self.inputs.append(probabilities.detach().clone())
         return probabilities[:, -1].mean(dim=(1, 2)).unsqueeze(1)
+
+
+class RecordingFeatureCritic(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.inputs = []
+
+    def morphology_features(self, probabilities: torch.Tensor):
+        self.inputs.append(probabilities.detach().clone())
+        return (probabilities,)
 
 
 class ScaleOptimizeTest(unittest.TestCase):
@@ -127,8 +144,44 @@ class ScaleOptimizeTest(unittest.TestCase):
         )
 
         self.assertIn("critic", stats)
-        self.assertEqual(critic.batch_sizes, [2])
+        self.assertEqual(critic.batch_sizes, [1])
         self.assertEqual(critic.channel_sizes, [2])
+        self.assertTrue(
+            torch.allclose(
+                critic.inputs[0].sum(dim=1),
+                torch.ones_like(critic.inputs[0][:, 0]),
+                atol=1e-6,
+                rtol=0.0,
+            )
+        )
+        self.assertTrue(
+            torch.allclose(
+                critic.inputs[0],
+                critic.inputs[0].round(),
+                atol=1e-6,
+                rtol=0.0,
+            )
+        )
+        self.assertFalse(torch.equal(refined, latent))
+
+    def test_feature_critic_matches_consensus_to_reference_morphology(self):
+        critic = RecordingFeatureCritic()
+        references = torch.zeros(1, 2, 2, 2)
+        references[:, 1] = 1.0
+        latent = torch.zeros(1, 4, 4, 4)
+
+        refined, stats = self.optimize(
+            latent,
+            steps=1,
+            critic=critic,
+            critic_weight=0.1,
+            critic_mode="feature",
+            critic_references=references,
+        )
+
+        self.assertIn("critic", stats)
+        self.assertEqual(len(critic.inputs), 2)
+        self.assertTrue(torch.equal(critic.inputs[1], references))
         self.assertFalse(torch.equal(refined, latent))
 
     def test_anchor_is_soft_and_updates_shared_3d_latent(self):
@@ -190,6 +243,31 @@ class ScaleOptimizeTest(unittest.TestCase):
                     self.assertTrue(
                         torch.allclose(patch, expected, atol=1e-6, rtol=1e-6)
                     )
+
+    def test_consensus_patch_matches_final_decoder_region(self):
+        latent = torch.linspace(-2.0, 2.0, steps=64).view(1, 4, 4, 4)
+        vae = UpsampleContextVAE()
+        full = decode_large_volume_probabilities(
+            vae,
+            latent,
+            tile_overlap=1,
+            batch_size=None,
+        )[0]
+
+        patch = decode_consensus_patch(
+            vae,
+            latent,
+            axis=1,
+            index=3,
+            num_phases=2,
+            tile_overlap=1,
+            crop_start=(2, 1),
+            crop_size=4,
+        )
+
+        self.assertTrue(
+            torch.allclose(patch, full[:, 2:6, 3, 1:5], atol=1e-6, rtol=1e-6)
+        )
 
     def test_anchor_patch_has_finite_latent_gradient(self):
         latent = torch.randn(1, 4, 4, 4, requires_grad=True)
@@ -269,6 +347,24 @@ class ScaleOptimizeTest(unittest.TestCase):
         )
 
         self.assertGreater(float(refined.mean()), 0.0)
+
+    def test_global_fraction_plane_covers_the_full_cross_section(self):
+        latent = torch.zeros(1, 1, 4, 4, 4, requires_grad=True)
+
+        with patch("torch.randint", return_value=torch.tensor(0)):
+            probabilities = _decode_global_fraction_plane(
+                latent,
+                TinyVAE(),
+                step=0,
+                num_phases=2,
+                tile_overlap=0,
+                decode_batch_size=None,
+            )
+        probabilities[:, 1].sum().backward()
+
+        self.assertEqual(probabilities.shape, torch.Size([1, 2, 4, 4]))
+        self.assertTrue((latent.grad[:, :, 0] != 0).all())
+        self.assertTrue((latent.grad[:, :, 1:] == 0).all())
 
     def test_sds_samples_all_axes_in_one_balanced_batch(self):
         model = RecordingNoise()
