@@ -1,58 +1,14 @@
-models:
-  vae_run_dir: run/20260715-114554-625954
-  diffusion_run_dir: run/20260715-115950-207780
-  gan_run_dir: run/20260715-130322-825640
+model:
+  run_dir: run/20260715-185426-491588
 
-progress: true
-phase_fractions: null
-segment_anchors: false
-
-prior:
-  weight: 1.0
-  anchor_strength: 0.25
-  t_min: 10
-  t_max: 200
-
-targets:
-  segment: false
-  slice_fraction_weight: 0.0
-  global_fraction_weight: 5.0
-  tpc_weight: 0.0
-  surface_area_weight: 0.0
-  diffusivity_weight: 0.0
-  diffusivity_grid_size: null
-  low_phase_conductivity: 0.0
-
-joint:
-  steps: 700
-  batch_size: 1
-  # Use null to decode each axis in one batch on a large-memory GPU.
-  decode_batch_size: 16
-  learning_rate: 0.0003
-  axis_weight: 1.0
-  axis_mass_weight: 0.25
-  continuity_weight: 0.05
-  anchor_weight: 2.0
-  residual_scale: 2.0
-  preservation_weight: 1.0
-
-critic:
-  weight: 0.1
-
-scale:
-  overlap: 0.25
-  steps: 500
+generation:
+  num_phases: 3
+  volume_size: 64
+  phase_fractions: [0.5654, 0.1434, 0.2912]
+  segment_anchors: false
+  harmonization_steps: 10
+  ddim_steps: 100
+  guidance_scale: 1.0
+  tile_overlap: 0.25
   batch_size: 8
-  # Use null to decode each stage in one batch on a large-memory GPU.
-  decode_batch_size: 16
-  learning_rate: 0.003
-  anchor_weight: 2.0
-  continuity_weight: 0.05
-  preservation_weight: 1.0
-  residual_scale: 2.0
-
-refine:
-  enabled: true
-  batch_size: 16
-  strength: 0.15
-  anchor_strength: 0.05
+  progress: true

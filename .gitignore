@@ -4,12 +4,11 @@ __pycache__/
 .worktrees/
 .obsidian/
 
-AGENTS.md
-bat/
 docs/
 run/
-fake/
-data/
+/data/
 script/
-scripts/
 tests/script/
+
+AGENTS.md
+*.bat

@@ -12,7 +12,7 @@ from simul.gen_data import (
     generate_sphere_geometry,
     generate_sphere_volume,
 )
-from src.pipeline.data import PatchDataset
+from src.data import PatchDataset
 
 
 class SphereDataGeneratorTest(unittest.TestCase):
