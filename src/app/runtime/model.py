@@ -2,7 +2,7 @@ import argparse
 
 import torch
 
-from src.modeling.latent_gan import ImageCritic, LatentGenerator
+from src.modeling.gan import ImageCritic, LatentGenerator
 from src.modeling.diffusion import DDPMProcess, TimeUNet
 from src.modeling.vae import PatchVAE
 
@@ -42,7 +42,6 @@ def build_critic(args: argparse.Namespace) -> ImageCritic:
         num_phases=args.num_phases,
         image_size=args.size,
         base_ch=args.critic_ch,
-        normalization=getattr(args, "critic_normalization", "global"),
     )
 
 

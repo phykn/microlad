@@ -12,7 +12,7 @@ from src.app.api.prepare import (
     uses_descriptor_targets,
 )
 from src.modeling.diffusion import DDPMProcess, DiffusionSampler, TimeUNet
-from src.modeling.latent_gan import ImageCritic
+from src.modeling.gan import ImageCritic
 from src.modeling.phases.quantization import quantize_phase
 from src.modeling.vae import PatchVAE, get_downsample_factor
 from src.pipeline.predict.guidance.conditioning.images import prepare_volume_anchors

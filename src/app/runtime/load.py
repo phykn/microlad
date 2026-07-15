@@ -17,7 +17,7 @@ from src.app.runtime.run import (
     require_values,
 )
 from src.modeling.diffusion import TimeUNet
-from src.modeling.latent_gan import ImageCritic, LatentGenerator
+from src.modeling.gan import ImageCritic, LatentGenerator
 from src.modeling.vae import PatchVAE
 
 

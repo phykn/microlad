@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from src.modeling.latent_gan import critic_loss, gradient_penalty, guidance_loss
+from src.modeling.gan import critic_loss, gradient_penalty, guidance_loss
 from src.modeling.phases.representation import phase_target_indices
 from src.pipeline.predict.reconstruction.volume import decode_volume_probs
 from src.pipeline.train.misc.distributed import is_main_process, unwrap_model
@@ -93,17 +93,39 @@ class GANTrainer:
                 )
                 batch_size = int(images.shape[0])
                 latent_dtype = next(self.critic.parameters()).dtype
+                noise = torch.randn(
+                    batch_size,
+                    int(unwrap_model(self.generator).noise_ch),
+                    device=self.device,
+                    dtype=latent_dtype,
+                )
+                generator_latent = self.generator(noise)
+                generator_probabilities = self.vae.decode_probs(generator_latent)
+                generator_categorical = _hard_categorical(generator_probabilities)
                 lmpdd_probabilities = self._next_fake_consensus_slices(
                     count=batch_size,
                 )
 
             self.critic_optimizer.zero_grad(set_to_none=True)
             real_scores = self.critic(real_probabilities)
-            fake_scores = self.critic(lmpdd_probabilities)
-            penalty = gradient_penalty(
-                self.critic,
-                real_probabilities,
-                lmpdd_probabilities,
+            fake_scores = torch.cat(
+                (
+                    self.critic(generator_categorical),
+                    self.critic(lmpdd_probabilities),
+                ),
+                dim=0,
+            )
+            penalty = 0.5 * (
+                gradient_penalty(
+                    self.critic,
+                    real_probabilities,
+                    generator_categorical,
+                )
+                + gradient_penalty(
+                    self.critic,
+                    real_probabilities,
+                    lmpdd_probabilities,
+                )
             )
             loss = critic_loss(
                 real_scores,
@@ -268,8 +290,12 @@ def _categorical_probabilities(
 
 
 def _straight_through_categorical(probabilities: torch.Tensor) -> torch.Tensor:
-    hard = F.one_hot(
+    hard = _hard_categorical(probabilities)
+    return hard + (probabilities - probabilities.detach())
+
+
+def _hard_categorical(probabilities: torch.Tensor) -> torch.Tensor:
+    return F.one_hot(
         probabilities.argmax(dim=1),
         num_classes=int(probabilities.shape[1]),
     ).movedim(-1, 1).to(probabilities.dtype)
-    return hard + probabilities - probabilities.detach()

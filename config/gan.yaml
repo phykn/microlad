@@ -8,7 +8,6 @@ model:
   noise_ch: 128
   generator_ch: 64
   critic_ch: 64
-  critic_normalization: boundary
 
 loss:
   gp_weight: 10.0
@@ -17,7 +16,7 @@ optimization:
   generator_lr: 1.0e-4
   critic_lr: 1.0e-4
   betas: [0.0, 0.9]
-  clip_grad_norm: 1.0
+  clip_grad_norm: null
 
 training:
   steps: 10000
@@ -25,5 +24,5 @@ training:
   save_every: 1000
 
 output:
-  vae_run_dir: run/20260715-105659-281211
+  vae_run_dir: run/20260715-114554-625954
   run_root: run

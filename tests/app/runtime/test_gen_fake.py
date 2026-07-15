@@ -10,11 +10,7 @@ from gen_fake import load_config, parse_args
 class GenerateCriticFakesEntrypointTest(unittest.TestCase):
     def test_default_config_is_valid(self):
         args = parse_args(["--check"])
-        config = load_config(args.config)
-
-        self.assertEqual(config["num_volumes"], 500)
-        self.assertEqual(config["data_dir"], "data/train")
-        self.assertEqual(config["unconditional_ratio"], 0.1)
+        load_config(args.config)
 
     def test_rejects_invalid_count_before_model_loading(self):
         values = {

@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from src.modeling.latent_gan import (
+from src.modeling.gan import (
     ImageCritic,
     guidance_loss,
     morphology_feature_loss,

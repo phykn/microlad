@@ -5,7 +5,6 @@ import torch.nn.functional as F
 
 MIN_IMAGE_SIZE = 16
 GLOBAL_FEATURE_SIZE = 4
-NORMALIZATION_MODES = ("global", "phase", "boundary")
 
 
 class ImageCritic(nn.Module):
@@ -17,7 +16,6 @@ class ImageCritic(nn.Module):
         image_size: int,
         *,
         base_ch: int = 64,
-        normalization: str = "global",
     ) -> None:
         super().__init__()
         if num_phases <= 0:
@@ -26,14 +24,9 @@ class ImageCritic(nn.Module):
             raise ValueError(f"image_size must be at least {MIN_IMAGE_SIZE}.")
         if base_ch <= 0:
             raise ValueError("base_ch must be positive.")
-        if normalization not in NORMALIZATION_MODES:
-            raise ValueError(
-                f"normalization must be one of {NORMALIZATION_MODES}."
-            )
 
         self.num_phases = num_phases
         self.image_size = image_size
-        self.normalization = normalization
         channels = (num_phases, base_ch, base_ch * 2, base_ch * 4)
         layers = []
         for source, target in zip(channels, channels[1:]):
@@ -92,37 +85,10 @@ class ImageCritic(nn.Module):
                 f"image size {self.image_size}x{self.image_size}."
             )
 
-        values = self.normalize_morphology(probabilities)
+        values = probabilities
         features = []
         for layer in self.features:
             values = layer(values)
             if isinstance(layer, nn.LeakyReLU):
                 features.append(values)
         return tuple(features)
-
-    def normalize_morphology(self, probabilities: torch.Tensor) -> torch.Tensor:
-        """Remove phase mass and contrast before morphology discrimination."""
-        if self.normalization == "boundary":
-            local_mean = F.avg_pool2d(
-                probabilities,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-                count_include_pad=False,
-            )
-            return probabilities - local_mean
-
-        centered = probabilities - probabilities.mean(
-            dim=(-2, -1),
-            keepdim=True,
-        )
-        scale_dims = (
-            (1, 2, 3)
-            if self.normalization == "global"
-            else (-2, -1)
-        )
-        scale = centered.square().mean(
-            dim=scale_dims,
-            keepdim=True,
-        )
-        return centered * torch.rsqrt(scale + 1e-6)

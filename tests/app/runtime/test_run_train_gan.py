@@ -71,7 +71,6 @@ def write_config(path: Path, source: Path, run_root: Path) -> None:
                 "  noise_ch: 8",
                 "  generator_ch: 8",
                 "  critic_ch: 4",
-                "  critic_normalization: boundary",
                 "loss:",
                 "  gp_weight: 10.0",
                 "optimization:",
@@ -111,7 +110,6 @@ class RunTrainGANTest(unittest.TestCase):
         self.assertEqual(args.latent_ch, 2)
         self.assertEqual(args.num_phases, 2)
         self.assertFalse(args.segment)
-        self.assertEqual(args.critic_normalization, "boundary")
 
     def test_saved_gan_models_load_frozen(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -156,7 +154,6 @@ class RunTrainGANTest(unittest.TestCase):
         self.assertFalse(loaded_generator.training)
         self.assertFalse(loaded_critic.training)
         self.assertEqual(loaded_critic.num_phases, 2)
-        self.assertEqual(loaded_critic.normalization, "global")
         self.assertIsNotNone(predictor.critic)
         self.assertTrue(
             all(not parameter.requires_grad for parameter in loaded_critic.parameters())
