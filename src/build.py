@@ -1,17 +1,29 @@
 import argparse
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import torch
-from torch.utils.data import default_collate
+from torch.utils.data import DataLoader, Sampler
 
 from .data import PatchDataset
 from .diffusion import DDPMProcess, DiffusionLoss
+from .misc import require_int
 from .model import MPDDUNet
 from .train import MPDDTrainer
 
 
 _IMAGE_EXTENSIONS = {".bmp", ".jpg", ".jpeg", ".png", ".tif", ".tiff"}
+
+
+class _RandomSampler(Sampler[int]):
+    def __init__(self, size: int) -> None:
+        if size <= 0:
+            raise ValueError("dataset must not be empty.")
+        self.size = size
+
+    def __iter__(self) -> Iterator[int]:
+        while True:
+            yield int(torch.randint(self.size, ()).item())
 
 
 def build_dataset(args: argparse.Namespace) -> PatchDataset:
@@ -40,19 +52,23 @@ def build_loader(
     dataset: torch.utils.data.Dataset,
     args: argparse.Namespace,
     device: torch.device,
-) -> Iterator:
+) -> DataLoader:
+    workers = getattr(args, "num_workers", 0)
+    require_int("batch_size", args.batch_size)
+    require_int("num_workers", workers)
     if args.batch_size <= 0:
         raise ValueError("batch_size must be positive.")
+    if workers < 0:
+        raise ValueError("num_workers must be non-negative.")
 
-    while True:
-        indices = torch.randint(0, len(dataset), (args.batch_size,)).tolist()
-        batch = default_collate([dataset[index] for index in indices])
-        if device.type == "cuda":
-            if isinstance(batch, torch.Tensor):
-                batch = batch.pin_memory()
-            else:
-                batch = [item.pin_memory() for item in batch]
-        yield batch
+    return DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        sampler=_RandomSampler(len(dataset)),
+        num_workers=workers,
+        pin_memory=device.type == "cuda",
+        persistent_workers=workers > 0,
+    )
 
 
 def build_model(args: argparse.Namespace) -> MPDDUNet:
@@ -89,7 +105,7 @@ def build_optimizer(
 
 def build_trainer(
     model: torch.nn.Module,
-    loader: Iterator,
+    loader: Iterable,
     optimizer: torch.optim.Optimizer,
     args: argparse.Namespace,
     device: torch.device,

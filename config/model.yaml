@@ -6,6 +6,7 @@ data:
   segment: false
   augment: true
   batch_size: 4
+  num_workers: 4
 
 model:
   base_ch: 64

@@ -36,14 +36,15 @@ class BuildTest(unittest.TestCase):
                 segment=False,
                 augment=False,
                 batch_size=2,
+                num_workers=0,
             )
 
             dataset = build_dataset(args)
-            images, fractions = next(
-                build_loader(dataset, args, device=torch.device("cpu"))
-            )
+            loader = build_loader(dataset, args, device=torch.device("cpu"))
+            images, fractions = next(iter(loader))
 
         self.assertIsInstance(dataset, PatchDataset)
+        self.assertEqual(loader.num_workers, 0)
         self.assertEqual(images.shape, torch.Size([2, 1, 2, 2]))
         self.assertTrue(torch.equal(fractions, torch.full((2, 2), 0.5)))
 
