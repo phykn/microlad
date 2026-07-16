@@ -5,25 +5,45 @@ import torch
 from src.diffusion import DDPMProcess
 from src.model import encode_labels
 from src.predict import ImageMPDDSampler
-from src.predict.sampler import get_anchor_weight
 
 
 class RecordingDenoiser(torch.nn.Module):
-    def __init__(self, num_phases: int) -> None:
+    def __init__(
+        self,
+        num_phases: int,
+        *,
+        num_axis_conditions: int = 0,
+        anchor_conditioning: bool = False,
+    ) -> None:
         super().__init__()
         self.num_phases = num_phases
+        self.num_axis_conditions = num_axis_conditions
+        self.anchor_conditioning = anchor_conditioning
         self.conditions = []
+        self.axis_conditions = []
 
-    def forward(self, x, t, phase_fractions=None):
+    def forward(
+        self,
+        x,
+        t,
+        phase_fractions=None,
+        axis_condition=None,
+        *,
+        anchor_image=None,
+        anchor_mask=None,
+    ):
         self.conditions.append(
             None if phase_fractions is None else phase_fractions.detach().clone()
+        )
+        self.axis_conditions.append(
+            None if axis_condition is None else axis_condition.detach().clone()
         )
         return torch.zeros_like(x)
 
 
 class ImageMPDDSamplerTest(unittest.TestCase):
     def test_sampling_forwards_fraction_condition_with_soft_anchor(self):
-        model = RecordingDenoiser(num_phases=2)
+        model = RecordingDenoiser(num_phases=2, anchor_conditioning=True)
         sampler = ImageMPDDSampler(
             model,
             DDPMProcess(timesteps=3, beta_start=0.01, beta_end=0.02),
@@ -77,8 +97,82 @@ class ImageMPDDSamplerTest(unittest.TestCase):
 
         self.assertEqual(sample.shape, torch.Size([2, 12, 12, 12]))
 
+    def test_ddpm_forwards_axis_sequence_without_fraction_condition(self):
+        model = RecordingDenoiser(num_phases=2, num_axis_conditions=3)
+        sampler = ImageMPDDSampler(
+            model,
+            DDPMProcess(timesteps=4, beta_start=0.01, beta_end=0.02),
+            image_size=8,
+            num_phases=2,
+            device="cpu",
+        )
+
+        sampler.sample(
+            8,
+            harmonization_steps=1,
+            batch_size=8,
+            progress=False,
+        )
+
+        self.assertTrue(all(condition is None for condition in model.conditions))
+        self.assertEqual(
+            [int(axis.unique().item()) for axis in model.axis_conditions],
+            [0, 1, 2, 0],
+        )
+        self.assertTrue(
+            all(axis.dtype == torch.long for axis in model.axis_conditions)
+        )
+
+    def test_ddim_forwards_axis_sequence(self):
+        model = RecordingDenoiser(num_phases=2, num_axis_conditions=3)
+        sampler = ImageMPDDSampler(
+            model,
+            DDPMProcess(timesteps=6, beta_start=0.01, beta_end=0.02),
+            image_size=8,
+            num_phases=2,
+            device="cpu",
+        )
+
+        sampler.sample(
+            8,
+            phase_fractions=(0.4, 0.6),
+            harmonization_steps=1,
+            batch_size=8,
+            ddim_steps=3,
+            progress=False,
+        )
+
+        self.assertEqual(
+            [int(axis.unique().item()) for axis in model.axis_conditions],
+            [0, 1, 2],
+        )
+
+    def test_tiled_harmonization_keeps_each_axis_condition(self):
+        model = RecordingDenoiser(num_phases=2, num_axis_conditions=3)
+        sampler = ImageMPDDSampler(
+            model,
+            DDPMProcess(timesteps=3, beta_start=0.01, beta_end=0.02),
+            image_size=8,
+            num_phases=2,
+            device="cpu",
+        )
+
+        sampler.sample(
+            12,
+            harmonization_steps=2,
+            tile_overlap=4,
+            batch_size=6,
+            progress=False,
+        )
+
+        recorded = [int(axis.unique().item()) for axis in model.axis_conditions]
+        self.assertEqual(recorded, [0] * 16 + [1] * 16 + [2] * 8)
+        self.assertTrue(
+            all(axis.shape == torch.Size([6]) for axis in model.axis_conditions)
+        )
+
     def test_ddim_harmonization_uses_soft_anchor_after_skipped_steps(self):
-        model = RecordingDenoiser(num_phases=2)
+        model = RecordingDenoiser(num_phases=2, anchor_conditioning=True)
         sampler = ImageMPDDSampler(
             model,
             DDPMProcess(timesteps=6, beta_start=0.01, beta_end=0.02),
@@ -104,71 +198,6 @@ class ImageMPDDSamplerTest(unittest.TestCase):
 
         self.assertFalse(torch.equal(sample[:, 5], anchor[:, 5]))
         self.assertEqual(len(model.conditions), 7)
-
-    def test_anchor_guidance_releases_before_clean_denoising(self):
-        ddpm = DDPMProcess(timesteps=100, beta_start=0.01, beta_end=0.02)
-
-        early = get_anchor_weight(
-            ddpm,
-            99,
-            device=torch.device("cpu"),
-            dtype=torch.float32,
-        )
-        late = get_anchor_weight(
-            ddpm,
-            29,
-            device=torch.device("cpu"),
-            dtype=torch.float32,
-        )
-        clean = get_anchor_weight(
-            ddpm,
-            -1,
-            device=torch.device("cpu"),
-            dtype=torch.float32,
-        )
-
-        self.assertEqual(float(early), 1.0)
-        self.assertEqual(float(late), 0.0)
-        self.assertEqual(float(clean), 0.0)
-
-    def test_anchor_injection_reuses_the_supplied_noise_trajectory(self):
-        ddpm = DDPMProcess(timesteps=100, beta_start=0.01, beta_end=0.02)
-        sampler = ImageMPDDSampler(
-            RecordingDenoiser(num_phases=2),
-            ddpm,
-            image_size=8,
-            num_phases=2,
-            device="cpu",
-        )
-        volume = torch.zeros(2, 8, 8, 8)
-        anchor = torch.ones_like(volume)
-        mask = torch.zeros(1, 8, 8, 8, dtype=torch.bool)
-        mask[:, 3] = True
-        noise = torch.full_like(anchor, 0.25)
-
-        first = sampler._inject_anchor(
-            volume,
-            anchor,
-            mask,
-            noise,
-            step=99,
-        )
-        torch.manual_seed(123)
-        second = sampler._inject_anchor(
-            volume,
-            anchor,
-            mask,
-            noise,
-            step=99,
-        )
-        expected = ddpm.add_noise(
-            anchor,
-            torch.full((2,), 99, dtype=torch.long),
-            noise=noise,
-        )
-
-        self.assertTrue(torch.equal(first, second))
-        self.assertTrue(torch.equal(first[:, 3], expected[:, 3]))
 
     def test_tiled_ddim_scale_up_returns_requested_volume_shape(self):
         sampler = ImageMPDDSampler(

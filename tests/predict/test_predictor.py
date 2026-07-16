@@ -8,7 +8,20 @@ from src.diffusion import DDPMProcess
 
 
 class ZeroDenoiser(torch.nn.Module):
-    def forward(self, x, t, phase_fractions=None):
+    def __init__(self) -> None:
+        super().__init__()
+        self.anchor_conditioning = True
+
+    def forward(
+        self,
+        x,
+        t,
+        phase_fractions=None,
+        axis_condition=None,
+        *,
+        anchor_image=None,
+        anchor_mask=None,
+    ):
         return torch.zeros_like(x)
 
 
@@ -33,7 +46,6 @@ class MPDDOptionsTest(unittest.TestCase):
         self.assertEqual(options.guidance_scale, 2.0)
         with self.assertRaisesRegex(ValueError, "phase_fractions"):
             MPDDOptions(num_phases=2, guidance_scale=2.0)
-
 
 class MPDDPredictorTest(unittest.TestCase):
     def _predictor(self, model=None):

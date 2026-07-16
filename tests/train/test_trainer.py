@@ -6,6 +6,7 @@ from pathlib import Path
 import torch
 
 from src.diffusion import DDPMProcess, DiffusionLoss
+from src.model import MPDDUNet
 from src.train import MPDDTrainer
 from src.train.distributed import unwrap
 
@@ -16,10 +17,18 @@ class TinyImageDenoiser(torch.nn.Module):
         self.conv = torch.nn.Conv2d(2, 2, 1)
         self.seen_image = None
         self.seen_phase_fractions = None
+        self.seen_axis_condition = None
 
-    def forward(self, image, timestep, phase_fractions=None):
+    def forward(
+        self,
+        image,
+        timestep,
+        phase_fractions=None,
+        axis_condition=None,
+    ):
         self.seen_image = image.detach().clone()
         self.seen_phase_fractions = phase_fractions
+        self.seen_axis_condition = axis_condition
         return self.conv(image)
 
 
@@ -96,6 +105,54 @@ class MPDDTrainerTest(unittest.TestCase):
             trainer.close()
 
         self.assertTrue(torch.equal(model.seen_phase_fractions, torch.zeros((2, 2))))
+
+    def test_condition_dropout_preserves_axis_condition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model = TinyImageDenoiser()
+            trainer = self._make_trainer(
+                model,
+                tmp,
+                loader=[self._axis_batch()],
+                condition_dropout=1.0,
+            )
+
+            trainer.train_step()
+            trainer.close()
+
+        self.assertTrue(torch.equal(model.seen_phase_fractions, torch.zeros((2, 2))))
+        self.assertTrue(torch.equal(model.seen_axis_condition, torch.tensor([0, 2])))
+
+    def test_axis_conditioned_mpdd_completes_real_training_step(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model = MPDDUNet(
+                num_phases=2,
+                image_size=8,
+                base_ch=4,
+                time_dim=8,
+                num_axis_conditions=3,
+            )
+            images = torch.randint(0, 2, (3, 1, 8, 8), dtype=torch.float32)
+            fractions = torch.tensor([[0.5, 0.5]]).expand(3, -1)
+            axis_condition = torch.tensor([0, 1, 2])
+            trainer = MPDDTrainer(
+                model=model,
+                loader=[(images, fractions, axis_condition)],
+                loss=DiffusionLoss(
+                    DDPMProcess(timesteps=2, beta_start=0.01, beta_end=0.02)
+                ),
+                optimizer=torch.optim.AdamW(model.parameters(), lr=1e-3),
+                num_phases=2,
+                steps=1,
+                device="cpu",
+                run_root=tmp,
+            )
+
+            stats = trainer.train_step()
+            trainer.close()
+
+        self.assertEqual(trainer.step, 1)
+        self.assertTrue({"axis_0", "axis_1", "axis_2"}.issubset(stats))
+        self.assertTrue(torch.all(model.axis_emb.weight.grad.abs().sum(dim=1) > 0))
 
     def test_checkpoint_uses_ema_and_unwrapped_parameter_names(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -287,6 +344,13 @@ class MPDDTrainerTest(unittest.TestCase):
         )
         fractions = torch.tensor([[0.5, 0.5], [0.5, 0.5]])
         return images, fractions
+
+    @classmethod
+    def _axis_batch(
+        cls,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        images, fractions = cls._batch()
+        return images, fractions, torch.tensor([0, 2])
 
 
 if __name__ == "__main__":

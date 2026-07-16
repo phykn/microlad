@@ -13,9 +13,13 @@ def predict_tiles(
     overlap: int,
     batch_size: int,
     fractions: torch.Tensor | None,
+    axis_condition: int | None = None,
     guidance: float = 1.0,
+    anchor_image: torch.Tensor | None = None,
+    anchor_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     _, _, height, width = planes.shape
+    _validate_anchor_tiles(anchor_image, anchor_mask, planes)
     output = torch.zeros_like(planes)
     weights = torch.zeros(
         (1, 1, height, width),
@@ -52,12 +56,40 @@ def predict_tiles(
                 col : col + tile_size,
             ]
             condition = _expand_fractions(fractions, patch.shape[0])
+            axes = _expand_axis_condition(
+                axis_condition,
+                patch.shape[0],
+                device=patch.device,
+            )
+            anchor_patch = (
+                None
+                if anchor_image is None
+                else anchor_image[
+                    start:stop,
+                    :,
+                    row : row + tile_size,
+                    col : col + tile_size,
+                ]
+            )
+            mask_patch = (
+                None
+                if anchor_mask is None
+                else anchor_mask[
+                    start:stop,
+                    :,
+                    row : row + tile_size,
+                    col : col + tile_size,
+                ]
+            )
             noise = guide_noise(
                 model,
                 patch,
                 steps[start:stop],
                 condition=condition,
+                axis_condition=axes,
                 guidance=guidance,
+                anchor_image=anchor_patch,
+                anchor_mask=mask_patch,
             )
             if noise.shape != patch.shape:
                 raise ValueError("model output must have the same shape as its input.")
@@ -79,18 +111,108 @@ def guide_noise(
     steps: torch.Tensor,
     *,
     condition: torch.Tensor | None,
+    axis_condition: torch.Tensor | None = None,
     guidance: float,
+    anchor_image: torch.Tensor | None = None,
+    anchor_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if (anchor_image is None) != (anchor_mask is None):
+        raise ValueError("anchor_image and anchor_mask must be provided together.")
+    return _guide_fraction_noise(
+        model,
+        patch,
+        steps,
+        condition=condition,
+        axis_condition=axis_condition,
+        guidance=guidance,
+        anchor_image=anchor_image,
+        anchor_mask=anchor_mask,
+    )
+
+
+def _guide_fraction_noise(
+    model: torch.nn.Module,
+    patch: torch.Tensor,
+    steps: torch.Tensor,
+    *,
+    condition: torch.Tensor | None,
+    axis_condition: torch.Tensor | None,
+    guidance: float,
+    anchor_image: torch.Tensor | None,
+    anchor_mask: torch.Tensor | None,
 ) -> torch.Tensor:
     if condition is None:
-        return model(patch, steps)
+        return _call_model(
+            model,
+            patch,
+            steps,
+            condition=None,
+            axis_condition=axis_condition,
+            anchor_image=anchor_image,
+            anchor_mask=anchor_mask,
+        )
     if guidance == 1.0:
-        return model(patch, steps, condition)
+        return _call_model(
+            model,
+            patch,
+            steps,
+            condition=condition,
+            axis_condition=axis_condition,
+            anchor_image=anchor_image,
+            anchor_mask=anchor_mask,
+        )
 
     model_input = torch.cat([patch, patch], dim=0)
     model_steps = torch.cat([steps, steps], dim=0)
     model_cond = torch.cat([torch.zeros_like(condition), condition], dim=0)
-    null, guided = model(model_input, model_steps, model_cond).chunk(2, dim=0)
+    model_anchor = (
+        None
+        if anchor_image is None
+        else torch.cat([anchor_image, anchor_image], dim=0)
+    )
+    model_mask = (
+        None if anchor_mask is None else torch.cat([anchor_mask, anchor_mask], dim=0)
+    )
+    model_axis = (
+        None
+        if axis_condition is None
+        else torch.cat([axis_condition, axis_condition], dim=0)
+    )
+    prediction = _call_model(
+        model,
+        model_input,
+        model_steps,
+        condition=model_cond,
+        axis_condition=model_axis,
+        anchor_image=model_anchor,
+        anchor_mask=model_mask,
+    )
+    null, guided = prediction.chunk(2, dim=0)
     return null + guidance * (guided - null)
+
+
+def _call_model(
+    model: torch.nn.Module,
+    image: torch.Tensor,
+    steps: torch.Tensor,
+    *,
+    condition: torch.Tensor | None,
+    axis_condition: torch.Tensor | None,
+    anchor_image: torch.Tensor | None,
+    anchor_mask: torch.Tensor | None,
+) -> torch.Tensor:
+    if anchor_image is not None and anchor_mask is not None:
+        return model(
+            image,
+            steps,
+            condition,
+            axis_condition,
+            anchor_image=anchor_image,
+            anchor_mask=anchor_mask,
+        )
+    if axis_condition is None:
+        return model(image, steps) if condition is None else model(image, steps, condition)
+    return model(image, steps, condition, axis_condition)
 
 
 def _expand_fractions(
@@ -98,3 +220,34 @@ def _expand_fractions(
     batch_size: int,
 ) -> torch.Tensor | None:
     return None if fractions is None else fractions[None].expand(batch_size, -1)
+
+
+def _expand_axis_condition(
+    axis_condition: int | None,
+    batch_size: int,
+    *,
+    device: torch.device,
+) -> torch.Tensor | None:
+    if axis_condition is None:
+        return None
+    return torch.full(
+        (batch_size,),
+        axis_condition,
+        dtype=torch.long,
+        device=device,
+    )
+
+
+def _validate_anchor_tiles(
+    anchor_image: torch.Tensor | None,
+    anchor_mask: torch.Tensor | None,
+    planes: torch.Tensor,
+) -> None:
+    if (anchor_image is None) != (anchor_mask is None):
+        raise ValueError("anchor_image and anchor_mask must be provided together.")
+    if anchor_image is None or anchor_mask is None:
+        return
+    if anchor_image.shape != planes.shape:
+        raise ValueError("anchor_image must have the same shape as planes.")
+    if anchor_mask.shape != (planes.shape[0], 1, *planes.shape[-2:]):
+        raise ValueError("anchor_mask must have shape [B, 1, H, W].")

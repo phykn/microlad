@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from ..model import encode_labels
 from ..misc import require_int
+from .anchor import sample_anchor_condition
 from .distributed import is_main, unwrap
 
 
@@ -34,6 +35,7 @@ class MPDDTrainer:
         clip_grad_norm: float | None = 1.0,
         ema_decay: float = 0.999,
         condition_dropout: float = 0.1,
+        anchor_empty_probability: float = 0.2,
         warmup_steps: int = 0,
     ) -> None:
         require_int("num_phases", num_phases)
@@ -59,6 +61,15 @@ class MPDDTrainer:
             )
         if not 0.0 <= condition_dropout <= 1.0:
             raise ValueError("condition_dropout must be between zero and one.")
+        if (
+            not isinstance(anchor_empty_probability, (int, float))
+            or isinstance(anchor_empty_probability, bool)
+            or not math.isfinite(anchor_empty_probability)
+            or not 0.0 <= anchor_empty_probability <= 1.0
+        ):
+            raise ValueError(
+                "anchor_empty_probability must be between zero and one."
+            )
         if warmup_steps < 0:
             raise ValueError("warmup_steps must be non-negative.")
 
@@ -78,6 +89,7 @@ class MPDDTrainer:
         self.clip_grad_norm = clip_grad_norm
         self.ema_decay = float(ema_decay)
         self.condition_dropout = float(condition_dropout)
+        self.anchor_empty_probability = float(anchor_empty_probability)
         self.warmup_steps = warmup_steps
         self.base_lrs = [group["lr"] for group in optimizer.param_groups]
         self.step = 0
@@ -88,11 +100,20 @@ class MPDDTrainer:
 
     def train_step(self) -> dict[str, float]:
         self.model.train()
-        image, fractions = self._next()
+        image, fractions, axis_condition = self._next()
         clean = encode_labels(
             image.to(self.device),
             self.num_phases,
         )
+        anchor_image = None
+        anchor_mask = None
+        if bool(getattr(unwrap(self.model), "anchor_conditioning", False)):
+            anchor_image, anchor_mask = sample_anchor_condition(
+                clean,
+                empty_probability=self.anchor_empty_probability,
+            )
+        if axis_condition is not None:
+            axis_condition = axis_condition.to(self.device)
         if fractions is not None:
             fractions = fractions.to(self.device)
             drop = (
@@ -103,13 +124,29 @@ class MPDDTrainer:
             fractions[drop] = 0.0
 
         self.optimizer.zero_grad(set_to_none=True)
-        if fractions is None:
+        if anchor_image is not None and anchor_mask is not None:
+            loss, parts = self.loss(
+                self.model,
+                clean,
+                fractions=fractions,
+                axis_condition=axis_condition,
+                anchor_image=anchor_image,
+                anchor_mask=anchor_mask,
+            )
+        elif fractions is None and axis_condition is None:
             loss, parts = self.loss(self.model, clean)
+        elif axis_condition is None:
+            loss, parts = self.loss(
+                self.model,
+                clean,
+                fractions=fractions,
+            )
         else:
             loss, parts = self.loss(
                 self.model,
                 clean,
                 fractions=fractions,
+                axis_condition=axis_condition,
             )
         loss.backward()
         grads = [
@@ -198,7 +235,9 @@ class MPDDTrainer:
         _write(ckpt, step_dir / "model.pt")
         _write(ckpt, self.last_weight_dir / "model.pt")
 
-    def _next(self) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def _next(
+        self,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         try:
             batch = next(self.iterator)
         except StopIteration:
@@ -212,7 +251,7 @@ class MPDDTrainer:
                 ) from exc
 
         if isinstance(batch, torch.Tensor):
-            return batch, None
+            return batch, None, None
         if (
             isinstance(batch, (tuple, list))
             and batch
@@ -224,7 +263,13 @@ class MPDDTrainer:
                 torch.Tensor,
             ):
                 raise TypeError("phase fractions must be a tensor.")
-            return batch[0], fractions
+            axis_condition = batch[2] if len(batch) > 2 else None
+            if axis_condition is not None and not isinstance(
+                axis_condition,
+                torch.Tensor,
+            ):
+                raise TypeError("axis condition must be a tensor.")
+            return batch[0], fractions, axis_condition
         raise TypeError(
             "batch must be a tensor or a tuple/list whose first item is a tensor."
         )

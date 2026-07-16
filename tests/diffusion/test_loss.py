@@ -26,6 +26,18 @@ class BadShapeModel(torch.nn.Module):
         return x[:, :1]
 
 
+class AxisRecordingModel(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_fractions = None
+        self.seen_axis_condition = None
+
+    def forward(self, x, t, fractions, axis_condition):
+        self.seen_fractions = fractions
+        self.seen_axis_condition = axis_condition
+        return torch.zeros_like(x)
+
+
 class DiffusionLossTest(unittest.TestCase):
     def test_compute_loss_is_zero_when_model_predicts_exact_noise(self):
         ddpm = DDPMProcess(timesteps=4)
@@ -106,6 +118,37 @@ class DiffusionLossTest(unittest.TestCase):
             compute_loss(ZeroNoiseModel(), ddpm, clean, t=t, noise=noise[:, :1])
         with self.assertRaisesRegex(ValueError, "model output"):
             compute_loss(BadShapeModel(), ddpm, clean, t=t, noise=noise)
+
+    def test_compute_loss_forwards_axis_and_reports_per_axis_losses(self):
+        ddpm = DDPMProcess(timesteps=4)
+        model = AxisRecordingModel()
+        clean = torch.zeros(3, 2, 4, 4)
+        noise = torch.stack(
+            [
+                torch.zeros(2, 4, 4),
+                torch.ones(2, 4, 4),
+                torch.full((2, 4, 4), 2.0),
+            ]
+        )
+        fractions = torch.tensor([[0.5, 0.5]]).expand(3, -1)
+        axis_condition = torch.tensor([0, 1, 2])
+
+        loss, parts = compute_loss(
+            model,
+            ddpm,
+            clean,
+            fractions=fractions,
+            t=torch.tensor([0, 1, 2]),
+            noise=noise,
+            axis_condition=axis_condition,
+        )
+
+        self.assertIs(model.seen_fractions, fractions)
+        self.assertIs(model.seen_axis_condition, axis_condition)
+        self.assertTrue(torch.allclose(loss, torch.tensor(5.0 / 3.0)))
+        self.assertTrue(torch.allclose(parts["axis_0"], torch.tensor(0.0)))
+        self.assertTrue(torch.allclose(parts["axis_1"], torch.tensor(1.0)))
+        self.assertTrue(torch.allclose(parts["axis_2"], torch.tensor(4.0)))
 
 
 if __name__ == "__main__":

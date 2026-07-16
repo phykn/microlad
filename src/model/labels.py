@@ -20,8 +20,12 @@ def encode_labels(labels: torch.Tensor, num_phases: int) -> torch.Tensor:
     if labels.min().item() < 0 or labels.max().item() >= num_phases:
         raise ValueError(f"labels must contain values from 0 to {num_phases - 1}.")
 
-    encoded = F.one_hot(
-        labels[:, 0].to(torch.long),
-        num_classes=num_phases,
-    ).movedim(-1, 1)
+    encoded = (
+        F.one_hot(
+            labels[:, 0].to(torch.long),
+            num_classes=num_phases,
+        )
+        .movedim(-1, 1)
+        .contiguous()
+    )
     return encoded.to(dtype=torch.float32).mul_(2.0).sub_(1.0)

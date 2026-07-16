@@ -1,14 +1,19 @@
 data:
-  data_dir: data/train
+  # Paths inside the manifest are relative to the manifest itself.
+  axis_manifest: ../data/generated/manifest.json
+  axis_sampling: balanced
   crop_size: 128
   size: 64
   num_phases: 3
   segment: false
-  augment: true
+  augment: false
   batch_size: 4
   num_workers: 4
 
 model:
+  num_axis_conditions: 3
+  anchor_conditioning: true
+  anchor_release_step: 0
   base_ch: 64
   time_dim: 128
 
@@ -28,6 +33,11 @@ training:
   save_every: 1000
   ema_decay: 0.999
   condition_dropout: 0.1
+  anchor_empty_probability: 0.2
+  anchor_loss_weight: 0.25
+  # Optional direct phase-label supervision. Keep disabled until a full joint
+  # training run clears the DDIM100 x H=10 3D quality gate.
+  anchor_phase_loss_weight: 0.0
 
 output:
   run_root: run

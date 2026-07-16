@@ -34,6 +34,10 @@ class ImageMPDDSampler:
         self.ddpm = ddpm
         self.image_size = int(image_size)
         self.num_phases = int(num_phases)
+        self.num_axis_conditions = int(getattr(model, "num_axis_conditions", 0))
+        self.anchor_conditioning = bool(
+            getattr(model, "anchor_conditioning", False)
+        )
 
     @torch.no_grad()
     def sample(
@@ -69,6 +73,12 @@ class ImageMPDDSampler:
             raise ValueError("guidance_scale must be non-negative.")
         if not isinstance(progress, bool):
             raise ValueError("progress must be a boolean.")
+        if (anchor_image is None) != (anchor_mask is None):
+            raise ValueError("anchor_image and anchor_mask must be provided together.")
+        if anchor_image is not None and not self.anchor_conditioning:
+            raise ValueError(
+                "anchors require a checkpoint trained with anchor_conditioning."
+            )
 
         ddim = None if ddim_steps is None else DDIMProcess(self.ddpm, ddim_steps)
         shape = (self.num_phases, volume_size, volume_size, volume_size)
@@ -84,7 +94,6 @@ class ImageMPDDSampler:
             shape=shape,
             dtype=volume.dtype,
         )
-        anchor_noise = None if anchor_image is None else torch.randn_like(anchor_image)
         overlap = 0 if volume_size == self.image_size else tile_overlap
 
         self.model.eval()
@@ -108,6 +117,15 @@ class ImageMPDDSampler:
                 dtype=torch.long,
                 device=self.device,
             )
+            plane_anchor = None
+            plane_mask = None
+            if (
+                anchor_image is not None
+                and anchor_mask is not None
+                and self.anchor_conditioning
+            ):
+                plane_anchor = slice_volume(anchor_image, axis)
+                plane_mask = slice_volume(anchor_mask, axis)
             for repeat in range(harmonization_steps):
                 noise = predict_tiles(
                     self.model,
@@ -117,7 +135,12 @@ class ImageMPDDSampler:
                     overlap=overlap,
                     batch_size=batch_size,
                     fractions=fractions,
+                    axis_condition=(
+                        axis if self.num_axis_conditions > 0 else None
+                    ),
                     guidance=guidance_scale,
+                    anchor_image=plane_anchor,
+                    anchor_mask=plane_mask,
                 )
                 planes = (
                     self.ddpm.sample_step(
@@ -134,18 +157,6 @@ class ImageMPDDSampler:
                     )
                 )
                 volume = merge_planes(planes, axis)
-                if (
-                    anchor_image is not None
-                    and anchor_mask is not None
-                    and anchor_noise is not None
-                ):
-                    volume = self._inject_anchor(
-                        volume,
-                        anchor_image,
-                        anchor_mask,
-                        anchor_noise,
-                        step=prev_step,
-                    )
                 if repeat + 1 >= harmonization_steps or step == 0:
                     break
                 planes = slice_volume(volume, axis)
@@ -206,47 +217,3 @@ class ImageMPDDSampler:
         if mask.shape != torch.Size((1, *shape[1:])):
             raise ValueError("anchor_mask must have shape [1, D, H, W].")
         return image, mask
-
-    def _inject_anchor(
-        self,
-        volume: torch.Tensor,
-        anchor_image: torch.Tensor,
-        anchor_mask: torch.Tensor,
-        anchor_noise: torch.Tensor,
-        *,
-        step: int,
-    ) -> torch.Tensor:
-        strength = get_anchor_weight(
-            self.ddpm,
-            step,
-            device=volume.device,
-            dtype=volume.dtype,
-        )
-        if not bool(strength.item()):
-            return volume
-        timesteps = torch.full(
-            (anchor_image.shape[0],),
-            step,
-            dtype=torch.long,
-            device=self.device,
-        )
-        noisy = self.ddpm.add_noise(
-            anchor_image,
-            timesteps,
-            noise=anchor_noise,
-        )
-        weight = anchor_mask.to(dtype=volume.dtype) * strength
-        return torch.lerp(volume, noisy, weight)
-
-
-def get_anchor_weight(
-    ddpm: DDPMProcess,
-    step: int,
-    *,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> torch.Tensor:
-    # Releasing the anchor lets the model harmonize its neighborhood near the end.
-    release = max(round(ddpm.num_timesteps * 0.3), 1)
-    value = float(step >= release)
-    return torch.tensor(value, device=device, dtype=dtype)

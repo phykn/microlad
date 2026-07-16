@@ -1,4 +1,6 @@
 model:
+  # This retained checkpoint predates integrated anchor conditioning. Point to
+  # a newly trained run before supplying anchors.
   run_dir: run/20260716-065602-122839
 
 generation:
@@ -7,7 +9,7 @@ generation:
   harmonization_steps: 10
   ddim_steps: 100
   guidance_scale: 1.0
-  batch_size: 8
+  batch_size: 64
   progress: true
 
 scale:

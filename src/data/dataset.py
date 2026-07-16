@@ -81,3 +81,65 @@ class PatchDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
                 f"to {self.num_phases - 1}."
             )
         return labels
+
+
+class AxisPatchDataset(
+    Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]
+):
+    """Attach a categorical plane condition to each patch image."""
+
+    def __init__(
+        self,
+        image_paths: Sequence[str | Path],
+        axis_conditions: Sequence[int],
+        *,
+        crop_size: int,
+        image_size: int,
+        num_phases: int,
+        segment: bool = False,
+        augment: bool = False,
+    ) -> None:
+        self.patch_dataset = PatchDataset(
+            image_paths,
+            crop_size=crop_size,
+            image_size=image_size,
+            num_phases=num_phases,
+            segment=segment,
+            augment=augment,
+        )
+        self.axis_conditions = tuple(axis_conditions)
+
+        if len(self.axis_conditions) != len(self.patch_dataset):
+            raise ValueError(
+                "axis_conditions must contain one condition per image path."
+            )
+
+        condition_indices: dict[int, list[int]] = {0: [], 1: [], 2: []}
+        for index, condition in enumerate(self.axis_conditions):
+            require_int("axis condition", condition)
+            if condition not in condition_indices:
+                raise ValueError("axis condition must be one of 0, 1, or 2.")
+            condition_indices[condition].append(index)
+
+        self.condition_indices = {
+            condition: tuple(indices)
+            for condition, indices in condition_indices.items()
+        }
+
+    @property
+    def paths(self) -> tuple[Path, ...]:
+        return self.patch_dataset.paths
+
+    def __len__(self) -> int:
+        return len(self.patch_dataset)
+
+    def __getitem__(
+        self,
+        index: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        image, fractions = self.patch_dataset[index]
+        condition = torch.tensor(
+            self.axis_conditions[index],
+            dtype=torch.long,
+        )
+        return image, fractions, condition

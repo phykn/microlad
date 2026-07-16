@@ -5,6 +5,7 @@ import torch
 from ..diffusion import DDPMProcess
 from ..misc import load_config
 from ..model import MPDDUNet
+from ..model.factory import build_mpdd_model
 from .predictor import MPDDPredictor
 
 
@@ -19,20 +20,11 @@ def load_predictor(
     _require_keys(
         cfg,
         "model config",
-        "size",
-        "num_phases",
-        "base_ch",
-        "time_dim",
         "timesteps",
         "beta_start",
         "beta_end",
     )
-    model = MPDDUNet(
-        num_phases=cfg["num_phases"],
-        image_size=cfg["size"],
-        base_ch=cfg["base_ch"],
-        time_dim=cfg["time_dim"],
-    ).to(device)
+    model = build_mpdd_model(cfg).to(device)
     model = _load_model(
         model,
         _find_checkpoint(run_dir),
@@ -47,8 +39,8 @@ def load_predictor(
     return MPDDPredictor(
         model=model,
         ddpm=ddpm,
-        image_size=cfg["size"],
-        num_phases=cfg["num_phases"],
+        image_size=model.image_size,
+        num_phases=model.num_phases,
         device=device,
     )
 
@@ -89,7 +81,7 @@ def _load_model(
                 (ckpt[key] for key in ("model", "mpdd", "unet") if key in ckpt),
                 ckpt,
             )
-        model.load_state_dict(state)
+        model.load_state_dict(state, strict=True)
     except Exception as exc:
         raise ValueError(
             f"MPDD checkpoint could not be loaded for model: {path}"

@@ -24,6 +24,75 @@ class RunTrainTest(unittest.TestCase):
         self.assertEqual(args.size, 8)
         self.assertEqual(args.steps, 2)
 
+    def test_parse_args_resolves_axis_manifest_from_config_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "model.yaml"
+            config.write_text(
+                "data:\n"
+                "  axis_manifest: data/manifest.json\n"
+                "  axis_sampling: balanced\n"
+                "model:\n"
+                "  num_axis_conditions: 3\n",
+                encoding="utf-8",
+            )
+            with patch.object(script, "DEFAULT_CONFIG", str(config)):
+                args = script.parse_args([])
+
+        self.assertEqual(
+            args.axis_manifest,
+            (Path(tmp) / "data" / "manifest.json").resolve(),
+        )
+
+    def test_parse_args_rejects_axis_manifest_and_other_sources_together(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "model.yaml"
+            config.write_text(
+                "data:\n"
+                "  data_dir: data/train\n"
+                "  axis_manifest: data/manifest.json\n",
+                encoding="utf-8",
+            )
+            with patch.object(script, "DEFAULT_CONFIG", str(config)):
+                with self.assertRaises(SystemExit):
+                    script.parse_args([])
+
+    def test_parse_args_rejects_removed_axis_data_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "model.yaml"
+            config.write_text(
+                "data:\n  axis_data: []\n",
+                encoding="utf-8",
+            )
+            with patch.object(script, "DEFAULT_CONFIG", str(config)):
+                with self.assertRaises(SystemExit):
+                    script.parse_args([])
+
+    def test_parse_args_rejects_axis_manifest_without_conditional_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "model.yaml"
+            config.write_text(
+                "data:\n"
+                "  axis_manifest: data/manifest.json\n",
+                encoding="utf-8",
+            )
+            with patch.object(script, "DEFAULT_CONFIG", str(config)):
+                with self.assertRaises(SystemExit):
+                    script.parse_args([])
+
+    def test_parse_args_rejects_conditional_model_without_axis_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "model.yaml"
+            config.write_text(
+                "data:\n"
+                "  data_dir: data/train\n"
+                "model:\n"
+                "  num_axis_conditions: 3\n",
+                encoding="utf-8",
+            )
+            with patch.object(script, "DEFAULT_CONFIG", str(config)):
+                with self.assertRaises(SystemExit):
+                    script.parse_args([])
+
     def test_main_trains_saves_config_and_cleans_up(self):
         args = argparse.Namespace(steps=2)
         trainer = Mock()
