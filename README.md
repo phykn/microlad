@@ -43,6 +43,33 @@ volume, stats = predictor.predict(options)
 `notebooks/` cover data inspection, model checks, 2D diffusion, 3D sampling,
 anchors, and scale-up.
 
+## Generated examples
+
+### Soft anchor continuity
+
+A labeled center slice guides the denoising trajectory without being copied
+into the final volume. The neighboring slices remain generated, allowing phase
+boundaries and particles to evolve through the anchor plane.
+
+![Anchor input, generated anchor plane, and neighboring slices](docs/assets/anchor-neighborhood.png)
+
+### Three-dimensional structure
+
+Orthogonal center slices and phase surfaces from the same generated 64³
+volume. The background phase is omitted from the surface rendering; phase 1 is
+blue and phase 2 is gold.
+
+![Orthogonal slices and 3D phase surfaces](docs/assets/generated-volume.png)
+
+### Tiled scale-up
+
+A 112³ volume generated with overlapping 64 × 64 denoising tiles. Dashed
+guides mark the 16-pixel overlap bounds in the center plane and its enlarged
+overlap region, making hard stitching artifacts visible if they occur. The
+sample uses 100 DDIM steps and ten harmonization passes.
+
+![Scaled volume slices and enlarged tile-overlap junctions](docs/assets/scale-up.png)
+
 ## Method
 
 The core reconstruction procedure follows Micro3Diff: dimensionality expansion

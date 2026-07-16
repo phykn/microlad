@@ -4,7 +4,9 @@ __pycache__/
 .worktrees/
 .obsidian/
 
-docs/
+docs/*
+!docs/assets/
+!docs/assets/*.png
 run/
 /data/
 script/

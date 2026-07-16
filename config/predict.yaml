@@ -2,7 +2,7 @@ model:
   run_dir: run/20260716-065602-122839
 
 generation:
-  phase_fractions: [0.5654, 0.1434, 0.2912]
+  phase_fractions: null
   segment_anchors: false
   harmonization_steps: 10
   ddim_steps: 100
