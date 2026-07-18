@@ -1,17 +1,20 @@
 # Anchored and scalable multi-plane denoising diffusion for 2D-to-3D microstructure reconstruction
 
-Microlad implements an image-space, categorical variant of the
-[Micro3Diff framework](https://doi.org/10.1038/s41524-024-01280-z). A 2D
-diffusion model is trained on labeled microstructure slices from three spatial
-axes. During generation, the same axis-conditioned denoiser alternates between
-orthogonal planes of one shared 3D noise volume. Harmonized re-noising and
-denoising encourage the evolving volume to remain compatible with the learned
-2D slice distributions. No 3D training volumes or VAE are required.
+Microlad is an end-to-end categorical image-space diffusion pipeline for
+2D-to-3D microstructure reconstruction. It learns directly from labeled 2D
+slices along three spatial axes and generates a categorical 3D volume in the
+same representation, without an intermediate latent autoencoder or 3D
+reconstruction network.
 
-The implementation extends multi-plane diffusion with phase-fraction
+The method extends the
+[Micro3Diff framework](https://doi.org/10.1038/s41524-024-01280-z). During
+generation, one axis-conditioned denoiser alternates between orthogonal planes
+of a shared 3D noise volume. Harmonized re-noising and denoising keep the
+evolving volume compatible with the learned axis-wise slice distributions.
+
+Beyond the base multi-plane process, Microlad supports phase-fraction
 conditioning, learned soft slice anchors, DDIM sampling, and overlapping-tile
-scale-up. These mechanisms guide generation without claiming that 2D
-observations uniquely determine the underlying 3D structure.
+scale-up.
 
 ## Quick start
 
@@ -80,11 +83,6 @@ region. The example uses 100 DDIM steps and ten harmonization passes.
 
 ## Method
 
-The core reconstruction procedure follows Micro3Diff: dimensionality expansion
-changes the reverse diffusion process while training remains two-dimensional.
-Axis conditioning, soft anchors, and tiled scale-up are extensions implemented
-in this repository.
-
 ### Problem
 
 Let each training slice be a categorical field observed along axis
@@ -101,9 +99,6 @@ V \in \{0, \ldots, K-1\}^{D \times H \times W}
 ```
 
 whose slices resemble the corresponding axis-wise training distributions.
-This is not recovery of a unique original object. Multiple 3D structures can
-share similar 2D slice statistics, so the result is one compatible sample
-rather than a deterministic reconstruction.
 
 ### Image-space categorical diffusion
 
@@ -134,9 +129,8 @@ the largest channel value is selected at every pixel or voxel:
 \hat{y} = \arg\max_k x^{(k)}.
 ```
 
-Working directly in image space lets the denoiser observe phase boundaries and
-particle geometry at the target resolution. It also keeps training inputs,
-diffusion states, and categorical outputs in one representation.
+Direct image-space diffusion exposes phase boundaries and particle geometry at
+the target resolution.
 
 ### Axis conditioning
 
@@ -179,10 +173,6 @@ S_a^{-1}
 where `t' = t - 1` for DDPM and may skip steps for DDIM. The axis rotates over
 successive reverse steps. Because all axes update the same tensor, changes made
 from one view become input to later views.
-
-This is alternating refinement with learned 2D slice priors. It encourages
-compatibility across views, but does not identify or guarantee the true 3D
-joint distribution.
 
 ### Harmonization and DDIM
 
@@ -237,9 +227,8 @@ weight around anchored regions. At inference, anchor features condition every
 reverse step, but the final labels are still produced by the denoiser rather
 than copied from the input.
 
-Anchors are therefore soft guidance, not exact constraints. Multiple slices
-can be combined; duplicate planes and conflicting intersections are rejected
-before sampling.
+Multiple anchor slices can be combined; duplicate planes and conflicting
+intersections are rejected before sampling.
 
 ### Tiled scale-up
 
@@ -267,18 +256,8 @@ longer than one tile are not explicitly modeled by overlap alone.
    physical properties.
 3. Axis conditioning represents directional slice statistics, but does not
    guarantee a globally consistent anisotropic 3D structure.
-4. Phase fractions and anchors are soft conditions rather than exact
-   constraints.
-5. Tiled scale-up preserves local behavior more directly than long-range
-   structure.
-6. Final argmax conversion is discontinuous and can change boundaries when
+4. Final argmax conversion is discontinuous and can change boundaries when
    channel scores are close.
-
-The working hypothesis is that, when important microstructure information is
-well represented by axis-wise 2D slice statistics, alternating one
-axis-conditioned image-space denoiser over a shared 3D diffusion state can
-produce compatible categorical volumes. This hypothesis must be evaluated
-across datasets rather than inferred from one visually successful example.
 
 Useful 2D checks include phase fractions, particle-size distributions,
 circularity, interface length, and two-point correlations. Useful 3D checks
