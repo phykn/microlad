@@ -1,8 +1,10 @@
 from collections.abc import Sequence
 
 import torch
+from tqdm import tqdm
 
-from ..diffusion import DDPMProcess
+from ..diffusion import DDIMProcess, DDPMProcess
+from ..misc import require_int
 from ..model import encode_labels
 from .anchor import (
     AnchorSlice,
@@ -10,6 +12,7 @@ from .anchor import (
     prepare_anchors,
 )
 from .options import MPDDOptions
+from .noise import guide_noise
 from .sampler import ImageMPDDSampler
 
 
@@ -33,6 +36,89 @@ class MPDDPredictor:
             num_phases=self.num_phases,
             device=self.device,
         )
+
+    @torch.no_grad()
+    def predict_images(
+        self,
+        axis: int,
+        count: int,
+        *,
+        phase_fractions: Sequence[float] | None = None,
+        ddim_steps: int | None = None,
+        guidance_scale: float = 1.0,
+        progress: bool = True,
+    ) -> torch.Tensor:
+        require_int("axis", axis)
+        require_int("count", count)
+        if axis not in (0, 1, 2):
+            raise ValueError("axis must be 0, 1, or 2.")
+        if count <= 0:
+            raise ValueError("count must be positive.")
+
+        opts = MPDDOptions(
+            num_phases=self.num_phases,
+            phase_fractions=phase_fractions,
+            ddim_steps=ddim_steps,
+            guidance_scale=guidance_scale,
+            progress=progress,
+        )
+        x = torch.randn(
+            count,
+            self.num_phases,
+            self.image_size,
+            self.image_size,
+            device=self.device,
+        )
+        cond = (
+            None
+            if opts.phase_fractions is None
+            else torch.tensor(
+                opts.phase_fractions,
+                device=self.device,
+                dtype=x.dtype,
+            ).expand(count, -1)
+        )
+        axes = torch.full(
+            (count,),
+            axis,
+            dtype=torch.long,
+            device=self.device,
+        )
+        ddpm = self.sampler.ddpm
+        ddim = None if opts.ddim_steps is None else DDIMProcess(ddpm, opts.ddim_steps)
+        schedule = (
+            [(step, step - 1) for step in range(ddpm.num_timesteps - 1, -1, -1)]
+            if ddim is None
+            else ddim.schedule
+        )
+        self.sampler.model.eval()
+        bar = tqdm(
+            schedule,
+            total=len(schedule),
+            desc=f"axis {axis}",
+            disable=not opts.progress,
+        )
+        for step, prev in bar:
+            steps = torch.full(
+                (count,),
+                step,
+                dtype=torch.long,
+                device=self.device,
+            )
+            noise = guide_noise(
+                self.sampler.model,
+                x,
+                steps,
+                condition=cond,
+                axis_condition=axes,
+                guidance=opts.guidance_scale,
+            )
+            x = (
+                ddpm.sample_step(x, steps, noise)
+                if ddim is None
+                else ddim.step(x, noise, step=step, prev_step=prev)
+            )
+        return x.argmax(dim=1).to(torch.uint8).cpu()
 
     @torch.no_grad()
     def predict(

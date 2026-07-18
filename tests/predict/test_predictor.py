@@ -24,6 +24,16 @@ class ZeroDenoiser(torch.nn.Module):
         return torch.zeros_like(x)
 
 
+class AxisDenoiser(ZeroDenoiser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.axes = []
+
+    def forward(self, x, t, phase_fractions=None, axis_condition=None, **kwargs):
+        self.axes.append(axis_condition.detach().cpu())
+        return torch.zeros_like(x)
+
+
 class MPDDOptionsTest(unittest.TestCase):
     def test_normalizes_fraction_sequence(self):
         options = MPDDOptions(num_phases=2, phase_fractions=[0.25, 0.75])
@@ -85,6 +95,27 @@ class MPDDPredictorTest(unittest.TestCase):
 
         self.assertTrue(torch.equal(volume, without_condition))
         self.assertEqual(stats["anchor_voxels"], 64)
+
+    def test_predict_images_generates_axis_conditioned_2d_labels(self):
+        model = AxisDenoiser()
+        images = self._predictor(model).predict_images(
+            2,
+            3,
+            ddim_steps=1,
+            progress=False,
+        )
+
+        self.assertEqual(images.shape, torch.Size([3, 8, 8]))
+        self.assertEqual(images.dtype, torch.uint8)
+        self.assertTrue(torch.equal(model.axes[0], torch.tensor([2, 2, 2])))
+
+    def test_predict_images_validates_axis_and_count(self):
+        pred = self._predictor()
+
+        with self.assertRaisesRegex(ValueError, "axis"):
+            pred.predict_images(3, 1, progress=False)
+        with self.assertRaisesRegex(ValueError, "count"):
+            pred.predict_images(0, 0, progress=False)
 
     def test_predict_reports_ddim_sampling(self):
         options = MPDDOptions(
