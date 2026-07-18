@@ -172,10 +172,10 @@ This enables classifier-free guidance:
 
 ```math
 \hat{\epsilon} =
-\epsilon_\theta(x_t,t,\varnothing,a)
+\epsilon_\theta(x_t,t,\varnothing,a,A)
 + s\left[
-\epsilon_\theta(x_t,t,c,a)
-- \epsilon_\theta(x_t,t,\varnothing,a)
+\epsilon_\theta(x_t,t,c,a,A)
+- \epsilon_\theta(x_t,t,\varnothing,a,A)
 \right].
 ```
 
