@@ -26,8 +26,8 @@ optimization:
   clip_grad_norm: 1.0
 
 training:
-  ckpt: null
-  steps: 200000
+  ckpt: ../run/20260718-124524-421219/weight/mpdd/last/model.pt
+  steps: 100000
   warmup_steps: 10000
   save_every: 1000
   ema_decay: 0.999
@@ -36,4 +36,3 @@ training:
 
 output:
   run_root: run
-

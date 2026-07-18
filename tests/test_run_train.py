@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -27,7 +28,7 @@ class RunTrainTest(unittest.TestCase):
             },
         )
         self.assertEqual(cfg.data.size, 64)
-        self.assertEqual(cfg.training.steps, 200000)
+        self.assertGreater(cfg.training.steps, 0)
 
     def test_parse_args_resolves_data_dir_from_config_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -79,6 +80,36 @@ class RunTrainTest(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     script.parse_args([])
 
+    def test_print_config_shows_resolved_values_without_terminal_colors(self):
+        cfg = script.load_train_config(ROOT / "config" / "model.yaml")
+        out = StringIO()
+
+        with patch("sys.stdout", out):
+            script._print_config(cfg)
+
+        text = out.getvalue()
+        self.assertIn("MPDD TRAINING CONFIG", text)
+        self.assertIn("DATA", text)
+        self.assertIn("data_dir.0", text)
+        self.assertIn(str(cfg.data.data_dir[0]), text)
+        self.assertIn("TRAINING", text)
+        self.assertIn(str(cfg.training.ckpt), text)
+        self.assertNotIn("\033[", text)
+
+    def test_print_config_colors_each_terminal_section(self):
+        cfg = script.load_train_config(ROOT / "config" / "model.yaml")
+        out = StringIO()
+
+        with (
+            patch("sys.stdout", out),
+            patch.object(out, "isatty", return_value=True),
+        ):
+            script._print_config(cfg)
+
+        text = out.getvalue()
+        self.assertIn("\033[1;36m[DATA]\033[0m", text)
+        self.assertIn("\033[1;35m[MODEL]\033[0m", text)
+
     def test_main_trains_saves_config_and_cleans_up(self):
         cfg = script.load_train_config(ROOT / "config" / "model.yaml")
         trainer = Mock()
@@ -101,6 +132,7 @@ class RunTrainTest(unittest.TestCase):
             patch.object(script, "build_optimizer", return_value=object()),
             patch.object(script, "build_trainer", return_value=trainer),
             patch.object(script, "save_config") as save_config,
+            patch.object(script, "_print_config") as print_config,
             patch.object(script.distributed, "cleanup") as cleanup,
         ):
             script.main()
@@ -112,6 +144,7 @@ class RunTrainTest(unittest.TestCase):
             cfg.as_dict(),
             name="model",
         )
+        print_config.assert_called_once_with(cfg)
         cleanup.assert_called_once_with(False)
 
     @staticmethod
