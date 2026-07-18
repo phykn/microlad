@@ -11,14 +11,9 @@ class RecordingDenoiser(torch.nn.Module):
     def __init__(
         self,
         num_phases: int,
-        *,
-        num_axis_conditions: int = 0,
-        anchor_conditioning: bool = False,
     ) -> None:
         super().__init__()
         self.num_phases = num_phases
-        self.num_axis_conditions = num_axis_conditions
-        self.anchor_conditioning = anchor_conditioning
         self.conditions = []
         self.axis_conditions = []
 
@@ -43,7 +38,7 @@ class RecordingDenoiser(torch.nn.Module):
 
 class ImageMPDDSamplerTest(unittest.TestCase):
     def test_sampling_forwards_fraction_condition_with_soft_anchor(self):
-        model = RecordingDenoiser(num_phases=2, anchor_conditioning=True)
+        model = RecordingDenoiser(num_phases=2)
         sampler = ImageMPDDSampler(
             model,
             DDPMProcess(timesteps=3, beta_start=0.01, beta_end=0.02),
@@ -98,7 +93,7 @@ class ImageMPDDSamplerTest(unittest.TestCase):
         self.assertEqual(sample.shape, torch.Size([2, 12, 12, 12]))
 
     def test_ddpm_forwards_axis_sequence_without_fraction_condition(self):
-        model = RecordingDenoiser(num_phases=2, num_axis_conditions=3)
+        model = RecordingDenoiser(num_phases=2)
         sampler = ImageMPDDSampler(
             model,
             DDPMProcess(timesteps=4, beta_start=0.01, beta_end=0.02),
@@ -124,7 +119,7 @@ class ImageMPDDSamplerTest(unittest.TestCase):
         )
 
     def test_ddim_forwards_axis_sequence(self):
-        model = RecordingDenoiser(num_phases=2, num_axis_conditions=3)
+        model = RecordingDenoiser(num_phases=2)
         sampler = ImageMPDDSampler(
             model,
             DDPMProcess(timesteps=6, beta_start=0.01, beta_end=0.02),
@@ -148,7 +143,7 @@ class ImageMPDDSamplerTest(unittest.TestCase):
         )
 
     def test_tiled_harmonization_keeps_each_axis_condition(self):
-        model = RecordingDenoiser(num_phases=2, num_axis_conditions=3)
+        model = RecordingDenoiser(num_phases=2)
         sampler = ImageMPDDSampler(
             model,
             DDPMProcess(timesteps=3, beta_start=0.01, beta_end=0.02),
@@ -172,7 +167,7 @@ class ImageMPDDSamplerTest(unittest.TestCase):
         )
 
     def test_ddim_harmonization_uses_soft_anchor_after_skipped_steps(self):
-        model = RecordingDenoiser(num_phases=2, anchor_conditioning=True)
+        model = RecordingDenoiser(num_phases=2)
         sampler = ImageMPDDSampler(
             model,
             DDPMProcess(timesteps=6, beta_start=0.01, beta_end=0.02),

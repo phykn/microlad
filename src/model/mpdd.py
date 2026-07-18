@@ -71,9 +71,6 @@ class MPDDUNet(nn.Module):
         image_size: int = 64,
         base_ch: int = 64,
         time_dim: int = 128,
-        num_axis_conditions: int = 0,
-        anchor_conditioning: bool = False,
-        anchor_release_step: int = 0,
     ) -> None:
         super().__init__()
         if num_phases < 2:
@@ -84,30 +81,10 @@ class MPDDUNet(nn.Module):
             raise ValueError("base_ch must be positive.")
         if time_dim <= 0:
             raise ValueError("time_dim must be positive.")
-        if not isinstance(num_axis_conditions, int) or isinstance(
-            num_axis_conditions,
-            bool,
-        ):
-            raise TypeError("num_axis_conditions must be an integer.")
-        if num_axis_conditions not in (0, 3):
-            raise ValueError("num_axis_conditions must be either 0 or 3.")
-        if not isinstance(anchor_conditioning, bool):
-            raise TypeError("anchor_conditioning must be a boolean.")
-        if not isinstance(anchor_release_step, int) or isinstance(
-            anchor_release_step,
-            bool,
-        ):
-            raise TypeError("anchor_release_step must be an integer.")
-        if anchor_release_step < 0:
-            raise ValueError("anchor_release_step must be non-negative.")
-
         self.num_phases = int(num_phases)
         self.image_size = int(image_size)
         self.base_ch = int(base_ch)
         self.time_dim = int(time_dim)
-        self.num_axis_conditions = num_axis_conditions
-        self.anchor_conditioning = anchor_conditioning
-        self.anchor_release_step = anchor_release_step
 
         self.time_emb = TimeEmbedding(time_dim)
         self.fraction_emb = nn.Sequential(
@@ -116,14 +93,12 @@ class MPDDUNet(nn.Module):
             nn.Linear(time_dim, time_dim),
         )
         self.null_fraction_emb = nn.Parameter(torch.zeros(time_dim))
-        if num_axis_conditions == 3:
-            self.axis_emb = nn.Embedding(num_axis_conditions, time_dim)
-        if anchor_conditioning:
-            self.anchor_encoder = _AnchorEncoder(
-                num_phases,
-                base_ch,
-                time_dim,
-            )
+        self.axis_emb = nn.Embedding(3, time_dim)
+        self.anchor_encoder = _AnchorEncoder(
+            num_phases,
+            base_ch,
+            time_dim,
+        )
 
         self.enc1 = TimeResStack(num_phases, base_ch, time_dim)
         self.down1 = nn.Conv2d(base_ch, base_ch * 2, 4, stride=2, padding=1)
@@ -186,13 +161,9 @@ class MPDDUNet(nn.Module):
             raise ValueError("timesteps must have shape [B].")
 
         emb = self.time_emb(t) + self._embed_fractions(x, fractions)
-        if self.num_axis_conditions == 3:
-            emb = emb + self._embed_axis(x, axis_condition)
-        elif axis_condition is not None:
-            raise ValueError("axis_condition requires num_axis_conditions to be 3.")
+        emb = emb + self._embed_axis(x, axis_condition)
         anchor_features = self._build_anchor_features(
             x,
-            t,
             emb,
             anchor_image=anchor_image,
             anchor_mask=anchor_mask,
@@ -217,18 +188,11 @@ class MPDDUNet(nn.Module):
     def _build_anchor_features(
         self,
         x: torch.Tensor,
-        t: torch.Tensor,
         embedding: torch.Tensor,
         *,
         anchor_image: torch.Tensor | None,
         anchor_mask: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None:
-        if not self.anchor_conditioning:
-            if anchor_image is not None or anchor_mask is not None:
-                raise ValueError(
-                    "anchor inputs require anchor_conditioning to be enabled."
-                )
-            return None
         if (anchor_image is None) != (anchor_mask is None):
             raise ValueError("anchor_image and anchor_mask must be provided together.")
         if anchor_image is None or anchor_mask is None:
@@ -247,7 +211,6 @@ class MPDDUNet(nn.Module):
         if bool(((mask < 0.0) | (mask > 1.0)).any().item()):
             raise ValueError("anchor_mask values must be between zero and one.")
         active = mask.flatten(start_dim=1).any(dim=1)
-        active = active & (t >= self.anchor_release_step)
         if not bool(active.any().item()):
             return None
         selected = active.nonzero(as_tuple=False).flatten()
@@ -296,9 +259,7 @@ class MPDDUNet(nn.Module):
         axis_condition: torch.Tensor | None,
     ) -> torch.Tensor:
         if axis_condition is None:
-            raise ValueError(
-                "axis_condition is required when num_axis_conditions is 3."
-            )
+            raise ValueError("axis_condition is required.")
         if not isinstance(axis_condition, torch.Tensor):
             raise TypeError("axis_condition must be a tensor.")
         if axis_condition.shape != (x.shape[0],):

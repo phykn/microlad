@@ -35,9 +35,10 @@ class MPDDUNetTest(unittest.TestCase):
             torch.randn(2, 3, 8, 8),
             torch.tensor([0, 1]),
             torch.tensor([[0.2, 0.3, 0.5], [0.4, 0.1, 0.5]]),
+            torch.tensor([0, 1]),
         )
 
-        self.assertEqual(len(attention), 3)
+        self.assertEqual(len(attention), 4)
         self.assertEqual(output.shape, torch.Size([2, 3, 8, 8]))
 
     def test_rejects_non_normalized_fraction_condition(self):
@@ -48,6 +49,7 @@ class MPDDUNetTest(unittest.TestCase):
                 torch.randn(1, 2, 8, 8),
                 torch.tensor([0]),
                 torch.tensor([[0.2, 0.2]]),
+                torch.tensor([0]),
             )
 
     def test_axis_conditioning_gives_all_embedding_rows_gradients(self):
@@ -56,7 +58,6 @@ class MPDDUNetTest(unittest.TestCase):
             image_size=8,
             base_ch=4,
             time_dim=8,
-            num_axis_conditions=3,
         )
 
         image = torch.randn(1, 2, 8, 8).expand(3, -1, -1, -1).clone()
@@ -74,13 +75,26 @@ class MPDDUNetTest(unittest.TestCase):
         self.assertIsNotNone(model.axis_emb.weight.grad)
         self.assertTrue(torch.all(model.axis_emb.weight.grad.abs().sum(dim=1) > 0))
 
+    def test_null_fraction_embedding_is_trainable(self):
+        model = MPDDUNet(num_phases=2, image_size=8, base_ch=4, time_dim=8)
+
+        output = model(
+            torch.randn(2, 2, 8, 8),
+            torch.tensor([0, 1]),
+            torch.zeros(2, 2),
+            torch.tensor([0, 1]),
+        )
+        output.square().mean().backward()
+
+        self.assertIsNotNone(model.null_fraction_emb.grad)
+        self.assertTrue(model.null_fraction_emb.grad.abs().sum() > 0)
+
     def test_axis_conditioning_validates_shape_dtype_and_range(self):
         model = MPDDUNet(
             num_phases=2,
             image_size=8,
             base_ch=4,
             time_dim=8,
-            num_axis_conditions=3,
         )
         image = torch.randn(2, 2, 8, 8)
         timestep = torch.tensor([0, 1])
@@ -93,32 +107,6 @@ class MPDDUNetTest(unittest.TestCase):
             model(image, timestep, axis_condition=torch.tensor([0.0, 1.0]))
         with self.assertRaisesRegex(ValueError, "range"):
             model(image, timestep, axis_condition=torch.tensor([0, 3]))
-
-    def test_legacy_model_has_no_axis_state_and_strict_loads(self):
-        model = MPDDUNet(num_phases=2, image_size=8, base_ch=4, time_dim=8)
-        state = model.state_dict()
-        restored = MPDDUNet(num_phases=2, image_size=8, base_ch=4, time_dim=8)
-
-        restored.load_state_dict(state, strict=True)
-
-        self.assertFalse(any(name.startswith("axis_emb.") for name in state))
-        with self.assertRaisesRegex(ValueError, "num_axis_conditions"):
-            restored(
-                torch.randn(1, 2, 8, 8),
-                torch.tensor([0]),
-                axis_condition=torch.tensor([0]),
-            )
-
-    def test_num_axis_conditions_only_accepts_legacy_or_three_axes(self):
-        with self.assertRaisesRegex(ValueError, "either 0 or 3"):
-            MPDDUNet(
-                num_phases=2,
-                image_size=8,
-                base_ch=4,
-                time_dim=8,
-                num_axis_conditions=2,
-            )
-
 
 if __name__ == "__main__":
     unittest.main()

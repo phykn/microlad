@@ -28,6 +28,21 @@ class ConfigTest(unittest.TestCase):
 
         self.assertEqual(config, {"size": 8, "base_ch": 4})
 
+    def test_load_config_preserves_nested_data_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.yaml"
+            path.write_text(
+                "data:\n  data_dir:\n    0: train/0\n    1: train/1\n    2: train/2\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(path)
+
+        self.assertEqual(
+            config["data_dir"],
+            {0: "train/0", 1: "train/1", 2: "train/2"},
+        )
+
     def test_load_config_rejects_duplicate_leaf_names(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.yaml"

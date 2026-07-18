@@ -2,10 +2,10 @@ from pathlib import Path
 
 import torch
 
+from ..build import build_model
 from ..diffusion import DDPMProcess
 from ..misc import load_config
 from ..model import MPDDUNet
-from ..model.factory import build_mpdd_model
 from .predictor import MPDDPredictor
 
 
@@ -24,7 +24,7 @@ def load_predictor(
         "beta_start",
         "beta_end",
     )
-    model = build_mpdd_model(cfg).to(device)
+    model = build_model(cfg).to(device)
     model = _load_model(
         model,
         _find_checkpoint(run_dir),

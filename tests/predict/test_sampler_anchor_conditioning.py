@@ -9,10 +9,8 @@ from src.predict.volume import slice_volume
 
 
 class RecordingAnchorDenoiser(torch.nn.Module):
-    def __init__(self, *, num_axis_conditions: int = 3) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.num_axis_conditions = num_axis_conditions
-        self.anchor_conditioning = True
         self.calls: list[dict[str, torch.Tensor | None]] = []
 
     def forward(
@@ -50,11 +48,6 @@ class RecordingAnchorDenoiser(torch.nn.Module):
         if phase_fractions is None:
             return torch.zeros_like(image)
         return torch.ones_like(image) * phase_fractions[:, :1, None, None]
-
-
-class LegacyDenoiser(torch.nn.Module):
-    def forward(self, image, steps, phase_fractions=None, axis_condition=None):
-        return torch.zeros_like(image)
 
 
 class AnchorConditioningNoiseTest(unittest.TestCase):
@@ -201,27 +194,6 @@ class AnchorConditioningSamplerTest(unittest.TestCase):
                     call["axis"],
                     torch.full((size,), axis, dtype=torch.long),
                 )
-            )
-
-    def test_legacy_sampler_rejects_anchor_inputs(self):
-        size = 3
-        sampler = ImageMPDDSampler(
-            LegacyDenoiser(),
-            DDPMProcess(timesteps=3, beta_start=0.01, beta_end=0.02),
-            image_size=size,
-            num_phases=2,
-            device="cpu",
-        )
-        anchor, mask = self._anchor(size)
-
-        with self.assertRaisesRegex(ValueError, "anchor_conditioning"):
-            sampler.sample(
-                size,
-                anchor_image=anchor,
-                anchor_mask=mask,
-                harmonization_steps=1,
-                batch_size=size,
-                progress=False,
             )
 
 if __name__ == "__main__":

@@ -34,10 +34,6 @@ class ImageMPDDSampler:
         self.ddpm = ddpm
         self.image_size = int(image_size)
         self.num_phases = int(num_phases)
-        self.num_axis_conditions = int(getattr(model, "num_axis_conditions", 0))
-        self.anchor_conditioning = bool(
-            getattr(model, "anchor_conditioning", False)
-        )
 
     @torch.no_grad()
     def sample(
@@ -75,10 +71,6 @@ class ImageMPDDSampler:
             raise ValueError("progress must be a boolean.")
         if (anchor_image is None) != (anchor_mask is None):
             raise ValueError("anchor_image and anchor_mask must be provided together.")
-        if anchor_image is not None and not self.anchor_conditioning:
-            raise ValueError(
-                "anchors require a checkpoint trained with anchor_conditioning."
-            )
 
         ddim = None if ddim_steps is None else DDIMProcess(self.ddpm, ddim_steps)
         shape = (self.num_phases, volume_size, volume_size, volume_size)
@@ -122,7 +114,6 @@ class ImageMPDDSampler:
             if (
                 anchor_image is not None
                 and anchor_mask is not None
-                and self.anchor_conditioning
             ):
                 plane_anchor = slice_volume(anchor_image, axis)
                 plane_mask = slice_volume(anchor_mask, axis)
@@ -135,9 +126,7 @@ class ImageMPDDSampler:
                     overlap=overlap,
                     batch_size=batch_size,
                     fractions=fractions,
-                    axis_condition=(
-                        axis if self.num_axis_conditions > 0 else None
-                    ),
+                    axis_condition=axis,
                     guidance=guidance_scale,
                     anchor_image=plane_anchor,
                     anchor_mask=plane_mask,

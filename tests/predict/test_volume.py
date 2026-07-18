@@ -15,13 +15,13 @@ class VolumeTest(unittest.TestCase):
         )
         tagged = (100 * z + 10 * y + x).unsqueeze(0)
 
-        xy = slice_volume(tagged, 0)
-        xz = slice_volume(tagged, 1)
-        yz = slice_volume(tagged, 2)
+        axis_0 = slice_volume(tagged, 0)
+        axis_1 = slice_volume(tagged, 1)
+        axis_2 = slice_volume(tagged, 2)
 
-        self.assertTrue(torch.equal(xy[1, 0], tagged[0, 1, :, :]))
-        self.assertTrue(torch.equal(xz[2, 0], tagged[0, :, 2, :]))
-        self.assertTrue(torch.equal(yz[3, 0], tagged[0, :, :, 3]))
+        self.assertTrue(torch.equal(axis_0[1, 0], tagged[0, 1, :, :]))
+        self.assertTrue(torch.equal(axis_1[2, 0], tagged[0, :, 2, :]))
+        self.assertTrue(torch.equal(axis_2[3, 0], tagged[0, :, :, 3]))
 
     def test_plane_conversion_round_trips_every_axis(self):
         volume = torch.arange(2 * 3 * 3 * 3).reshape(2, 3, 3, 3)

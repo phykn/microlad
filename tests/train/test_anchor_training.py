@@ -14,9 +14,6 @@ def test_mpdd_and_internal_anchor_encoder_train_and_checkpoint_together() -> Non
         image_size=8,
         base_ch=4,
         time_dim=8,
-        num_axis_conditions=3,
-        anchor_conditioning=True,
-        anchor_release_step=0,
     )
     images = torch.randint(0, 2, (3, 1, 8, 8), dtype=torch.float32)
     fractions = torch.tensor([[0.5, 0.5]]).expand(3, -1)

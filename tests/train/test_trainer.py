@@ -25,6 +25,9 @@ class TinyImageDenoiser(torch.nn.Module):
         timestep,
         phase_fractions=None,
         axis_condition=None,
+        *,
+        anchor_image=None,
+        anchor_mask=None,
     ):
         self.seen_image = image.detach().clone()
         self.seen_phase_fractions = phase_fractions
@@ -46,14 +49,38 @@ class BigGradientDenoiser(torch.nn.Module):
         super().__init__()
         self.weight = torch.nn.Parameter(torch.tensor(100.0))
 
-    def forward(self, image, timestep, phase_fractions=None):
+    def forward(
+        self,
+        image,
+        timestep,
+        phase_fractions=None,
+        axis_condition=None,
+        *,
+        anchor_image=None,
+        anchor_mask=None,
+    ):
         return torch.ones_like(image) * self.weight
 
 
 class BigGradientLoss(torch.nn.Module):
-    def forward(self, model, image, fractions=None):
+    def forward(
+        self,
+        model,
+        image,
+        fractions=None,
+        axis_condition=None,
+        anchor_image=None,
+        anchor_mask=None,
+    ):
         timestep = torch.zeros(image.shape[0], dtype=torch.long)
-        prediction = model(image, timestep, fractions)
+        prediction = model(
+            image,
+            timestep,
+            fractions,
+            axis_condition,
+            anchor_image=anchor_image,
+            anchor_mask=anchor_mask,
+        )
         loss = prediction.square().mean()
         return loss, {"noise": loss.detach()}
 
@@ -64,9 +91,24 @@ class RecordingLoss(torch.nn.Module):
         self.loss = loss
         self.seen_image = None
 
-    def forward(self, model, image, fractions=None):
+    def forward(
+        self,
+        model,
+        image,
+        fractions=None,
+        axis_condition=None,
+        anchor_image=None,
+        anchor_mask=None,
+    ):
         self.seen_image = image.detach().clone()
-        return self.loss(model, image, fractions=fractions)
+        return self.loss(
+            model,
+            image,
+            fractions=fractions,
+            axis_condition=axis_condition,
+            anchor_image=anchor_image,
+            anchor_mask=anchor_mask,
+        )
 
 
 class MPDDTrainerTest(unittest.TestCase):
@@ -129,7 +171,6 @@ class MPDDTrainerTest(unittest.TestCase):
                 image_size=8,
                 base_ch=4,
                 time_dim=8,
-                num_axis_conditions=3,
             )
             images = torch.randint(0, 2, (3, 1, 8, 8), dtype=torch.float32)
             fractions = torch.tensor([[0.5, 0.5]]).expand(3, -1)

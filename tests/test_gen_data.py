@@ -7,32 +7,31 @@ import gen_data as script
 
 
 class GenerateDataTest(unittest.TestCase):
-    def test_parse_args_preserves_generator_and_export_sections(self):
+    def test_parse_args_preserves_output_and_geometry(self):
         with tempfile.TemporaryDirectory() as tmp:
-            config = Path(tmp) / "simul.yaml"
-            config.write_text(
+            path = Path(tmp) / "simul.yaml"
+            path.write_text(
                 "output:\n"
                 "  data_dir: generated\n"
                 "  count: 2\n"
+                "  axes: [0, 1, 2]\n"
                 "geometry:\n"
-                "  mode: dry\n"
                 "  size: 32\n"
-                "  shape: aligned_ellipsoid\n"
-                "export:\n"
-                "  planes: [xy, xz, yz]\n",
+                "  big_elongation: 2.0\n",
                 encoding="utf-8",
             )
-            with patch.object(script, "DEFAULT_CONFIG", str(config)):
+            with patch.object(script, "DEFAULT_CONFIG", str(path)):
                 args = script.parse_args([])
 
         self.assertEqual(
             args.output,
-            {"data_dir": (Path(tmp) / "generated").resolve(), "count": 2},
+            {
+                "data_dir": (Path(tmp) / "generated").resolve(),
+                "count": 2,
+                "axes": [0, 1, 2],
+            },
         )
-        self.assertEqual(args.geometry["mode"], "dry")
-        self.assertEqual(args.geometry["shape"], "aligned_ellipsoid")
-        self.assertNotIn("seed", args.geometry)
-        self.assertEqual(args.export["planes"], ["xy", "xz", "yz"])
+        self.assertEqual(args.geometry["big_elongation"], 2.0)
 
     def test_main_forwards_nested_sections_to_simulation_facade(self):
         data_dir = Path("generated").resolve()
@@ -40,16 +39,19 @@ class GenerateDataTest(unittest.TestCase):
             "Args",
             (),
             {
-                "output": {"data_dir": data_dir, "count": 3},
-                "geometry": {"mode": "dry", "size": 32},
-                "export": {"planes": ["xy", "xz", "yz"]},
+                "output": {
+                    "data_dir": data_dir,
+                    "count": 3,
+                    "axes": [0, 1, 2],
+                },
+                "geometry": {"size": 32},
             },
         )()
-        volumes = [data_dir / "gt" / "volume_000.tif"]
-        planes = {
-            "xy": [data_dir / "train" / "xy" / "slice_z_000.png"],
-            "xz": [data_dir / "train" / "xz" / "slice_y_000.png"],
-            "yz": [data_dir / "train" / "yz" / "slice_x_000.png"],
+        vols = [data_dir / "gt" / "volume_000.tif"]
+        slices = {
+            0: [data_dir / "train" / "0" / "slice_0_000.png"],
+            1: [data_dir / "train" / "1" / "slice_1_000.png"],
+            2: [data_dir / "train" / "2" / "slice_2_000.png"],
         }
 
         with (
@@ -57,7 +59,7 @@ class GenerateDataTest(unittest.TestCase):
             patch.object(
                 script,
                 "save_simulation",
-                return_value=(volumes, planes),
+                return_value=(vols, slices),
             ) as save,
             patch("builtins.print"),
         ):
@@ -67,7 +69,7 @@ class GenerateDataTest(unittest.TestCase):
             data_dir,
             count=3,
             geometry=args.geometry,
-            export=args.export,
+            axes=args.output["axes"],
         )
 
 

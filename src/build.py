@@ -1,35 +1,25 @@
 import argparse
-from collections.abc import Iterable, Iterator
-from pathlib import Path
-
+from collections.abc import Iterable, Iterator, Mapping
+from typing import Any
 import torch
 from torch.utils.data import DataLoader, Sampler
 
-from .data import AxisPatchDataset, PatchDataset, load_axis_manifest
-from .data.manifest import AXIS_PLANES, IMAGE_EXTENSIONS
+from .data import AxisPatchDataset, load_axis_images
+from .data.axes import AXES
 from .diffusion import DDPMProcess, DiffusionLoss
 from .misc import require_int
 from .model import MPDDUNet
-from .model.factory import build_mpdd_model
 from .train import MPDDTrainer
 
 
-class _RandomSampler(Sampler[int]):
-    def __init__(self, size: int) -> None:
-        if size <= 0:
-            raise ValueError("dataset must not be empty.")
-        self.size = size
-
-    def __iter__(self) -> Iterator[int]:
-        while True:
-            yield int(torch.randint(self.size, ()).item())
+_MODEL_KEYS = ("size", "num_phases", "base_ch", "time_dim")
 
 
 class _AxisBalancedSampler(Sampler[int]):
     def __init__(self, dataset: AxisPatchDataset) -> None:
         self.condition_indices = tuple(
             dataset.condition_indices[condition]
-            for condition in range(len(AXIS_PLANES))
+            for condition in AXES
         )
         if any(not indices for indices in self.condition_indices):
             raise ValueError(
@@ -46,45 +36,17 @@ class _AxisBalancedSampler(Sampler[int]):
 
 def build_dataset(
     args: argparse.Namespace,
-) -> PatchDataset | AxisPatchDataset:
-    if hasattr(args, "axis_data"):
-        raise ValueError(
-            "axis_data is no longer supported; use axis_manifest instead."
-        )
-    axis_manifest = getattr(args, "axis_manifest", None)
+) -> AxisPatchDataset:
     paths = getattr(args, "image_paths", None)
     data_dir = getattr(args, "data_dir", None)
-
-    if axis_manifest is not None:
-        if data_dir is not None or paths is not None:
-            raise ValueError(
-                "axis_manifest is mutually exclusive with data_dir and image_paths."
-            )
-        if getattr(args, "axis_sampling", "balanced") != "balanced":
-            raise ValueError("axis_sampling must be 'balanced'.")
-        paths, conditions = load_axis_manifest(axis_manifest)
-        return AxisPatchDataset(
-            paths,
-            conditions,
-            crop_size=args.crop_size,
-            image_size=args.size,
-            num_phases=args.num_phases,
-            segment=args.segment,
-            augment=args.augment,
+    if data_dir is None or paths is not None:
+        raise ValueError(
+            "training requires axis data_dir values and does not support image_paths."
         )
-
-    if paths is None:
-        root = Path(args.data_dir)
-        paths = sorted(
-            path
-            for path in root.iterdir()
-            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
-        )
-    elif isinstance(paths, (str, Path)):
-        paths = [paths]
-
-    return PatchDataset(
+    paths, conditions = load_axis_images(data_dir)
+    return AxisPatchDataset(
         paths,
+        conditions,
         crop_size=args.crop_size,
         image_size=args.size,
         num_phases=args.num_phases,
@@ -106,12 +68,9 @@ def build_loader(
     if workers < 0:
         raise ValueError("num_workers must be non-negative.")
 
-    if isinstance(dataset, AxisPatchDataset):
-        if getattr(args, "axis_sampling", "balanced") != "balanced":
-            raise ValueError("axis_sampling must be 'balanced'.")
-        sampler: Sampler[int] = _AxisBalancedSampler(dataset)
-    else:
-        sampler = _RandomSampler(len(dataset))
+    if not isinstance(dataset, AxisPatchDataset):
+        raise TypeError("dataset must be an AxisPatchDataset.")
+    sampler: Sampler[int] = _AxisBalancedSampler(dataset)
 
     return DataLoader(
         dataset,
@@ -123,8 +82,21 @@ def build_loader(
     )
 
 
-def build_model(args: argparse.Namespace) -> MPDDUNet:
-    return build_mpdd_model(vars(args))
+def build_model(
+    cfg: argparse.Namespace | Mapping[str, Any],
+    *,
+    label: str = "model config",
+) -> MPDDUNet:
+    vals = vars(cfg) if isinstance(cfg, argparse.Namespace) else cfg
+    miss = [key for key in _MODEL_KEYS if key not in vals]
+    if miss:
+        raise ValueError(f"{label} is missing required value: {', '.join(miss)}")
+    return MPDDUNet(
+        num_phases=vals["num_phases"],
+        image_size=vals["size"],
+        base_ch=vals["base_ch"],
+        time_dim=vals["time_dim"],
+    )
 
 
 def build_diffusion(
@@ -163,11 +135,6 @@ def build_trainer(
         loss=DiffusionLoss(
             build_diffusion(args, device=device),
             anchor_loss_weight=getattr(args, "anchor_loss_weight", 0.0),
-            anchor_phase_loss_weight=getattr(
-                args,
-                "anchor_phase_loss_weight",
-                0.0,
-            ),
         ),
         optimizer=optimizer,
         num_phases=args.num_phases,

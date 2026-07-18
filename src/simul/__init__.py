@@ -1,23 +1,18 @@
-from .data import save_data, save_simulation
-from .dry import (
-    DryGeometry,
-    DryParticle,
+from .data import save_simulation
+from .geometry import (
+    Geometry,
     PackingReport,
-    make_dry_geometry,
-    make_dry_volume,
+    Particle,
+    make_geometry,
+    make_volume,
 )
-from .sphere import Sphere, make_geometry, make_volume
 
 
 __all__ = [
-    "DryGeometry",
-    "DryParticle",
+    "Geometry",
     "PackingReport",
-    "Sphere",
-    "make_dry_geometry",
-    "make_dry_volume",
+    "Particle",
     "make_geometry",
     "make_volume",
-    "save_data",
     "save_simulation",
 ]

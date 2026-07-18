@@ -1,21 +1,14 @@
 output:
-  # Relative paths are resolved from this config file.
   data_dir: ../data/generated
-  # One volume is enough for a smoke run; increase this for final training data.
-  count: 1
+  count: 25
+  axes: [0, 1, 2]
 
 geometry:
-  mode: dry
   size: 128
-  big_radius: 20
-  small_radius: 6
-  big_fraction: 0.20
-  small_fraction: 0.24
-  # Use aligned_ellipsoid here for a clean one-axis anisotropy fixture.
-  shape: sphere
-  elongation: 2.0
-  alignment_axis: z
 
-export:
-  planes: [xy, xz, yz]
-  trim: 0
+  big_elongation: 1.0
+  big_radius: 14
+  big_fraction: 0.4
+
+  small_radius: 7
+  small_fraction: 0.2

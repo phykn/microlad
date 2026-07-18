@@ -14,79 +14,83 @@ class RunTrainTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "model.yaml"
             config.write_text(
-                "data:\n  data_dir: data/train\n  size: 8\ntraining:\n  steps: 2\n",
-                encoding="utf-8",
-            )
-            with patch.object(script, "DEFAULT_CONFIG", str(config)):
-                args = script.parse_args([])
-
-        self.assertEqual(args.data_dir, "data/train")
-        self.assertEqual(args.size, 8)
-        self.assertEqual(args.steps, 2)
-
-    def test_parse_args_resolves_axis_manifest_from_config_directory(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            config = Path(tmp) / "model.yaml"
-            config.write_text(
                 "data:\n"
-                "  axis_manifest: data/manifest.json\n"
-                "  axis_sampling: balanced\n"
-                "model:\n"
-                "  num_axis_conditions: 3\n",
+                "  data_dir:\n"
+                "    0: data/train/0\n"
+                "    1: data/train/1\n"
+                "    2: data/train/2\n"
+                "  size: 8\n"
+                "training:\n"
+                "  steps: 2\n",
                 encoding="utf-8",
             )
             with patch.object(script, "DEFAULT_CONFIG", str(config)):
                 args = script.parse_args([])
 
         self.assertEqual(
-            args.axis_manifest,
-            (Path(tmp) / "data" / "manifest.json").resolve(),
+            args.data_dir,
+            {
+                axis: (Path(tmp) / "data" / "train" / str(axis)).resolve()
+                for axis in range(3)
+            },
+        )
+        self.assertEqual(args.size, 8)
+        self.assertEqual(args.steps, 2)
+
+    def test_parse_args_resolves_data_dir_from_config_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "model.yaml"
+            config.write_text(
+                "data:\n"
+                "  data_dir:\n"
+                "    0: data/train/0\n"
+                "    1: data/train/1\n"
+                "    2: data/train/2\n"
+                "model:\n"
+                "  base_ch: 4\n",
+                encoding="utf-8",
+            )
+            with patch.object(script, "DEFAULT_CONFIG", str(config)):
+                args = script.parse_args([])
+
+        self.assertEqual(
+            args.data_dir,
+            {
+                axis: (Path(tmp) / "data" / "train" / str(axis)).resolve()
+                for axis in range(3)
+            },
         )
 
-    def test_parse_args_rejects_axis_manifest_and_other_sources_together(self):
+    def test_parse_args_rejects_data_dir_and_image_paths_together(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "model.yaml"
             config.write_text(
                 "data:\n"
                 "  data_dir: data/train\n"
-                "  axis_manifest: data/manifest.json\n",
+                "  image_paths: [phase.png]\n",
                 encoding="utf-8",
             )
             with patch.object(script, "DEFAULT_CONFIG", str(config)):
                 with self.assertRaises(SystemExit):
                     script.parse_args([])
 
-    def test_parse_args_rejects_removed_axis_data_contract(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            config = Path(tmp) / "model.yaml"
-            config.write_text(
-                "data:\n  axis_data: []\n",
-                encoding="utf-8",
-            )
-            with patch.object(script, "DEFAULT_CONFIG", str(config)):
-                with self.assertRaises(SystemExit):
-                    script.parse_args([])
-
-    def test_parse_args_rejects_axis_manifest_without_conditional_model(self):
+    def test_parse_args_rejects_axis_conditioned_image_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "model.yaml"
             config.write_text(
                 "data:\n"
-                "  axis_manifest: data/manifest.json\n",
+                "  image_paths: [phase.png]\n",
                 encoding="utf-8",
             )
             with patch.object(script, "DEFAULT_CONFIG", str(config)):
                 with self.assertRaises(SystemExit):
                     script.parse_args([])
 
-    def test_parse_args_rejects_conditional_model_without_axis_manifest(self):
+    def test_parse_args_rejects_single_directory_for_axis_conditioning(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "model.yaml"
             config.write_text(
-                "data:\n"
-                "  data_dir: data/train\n"
-                "model:\n"
-                "  num_axis_conditions: 3\n",
+                "data:\n  data_dir: data/train\n",
                 encoding="utf-8",
             )
             with patch.object(script, "DEFAULT_CONFIG", str(config)):

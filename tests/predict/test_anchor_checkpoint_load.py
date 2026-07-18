@@ -15,9 +15,6 @@ def test_anchor_conditioned_checkpoint_round_trips_as_one_model(
         "model": {
             "base_ch": 4,
             "time_dim": 8,
-            "num_axis_conditions": 3,
-            "anchor_conditioning": True,
-            "anchor_release_step": 3,
         },
         "diffusion": {
             "timesteps": 4,
@@ -36,16 +33,10 @@ def test_anchor_conditioned_checkpoint_round_trips_as_one_model(
         image_size=8,
         base_ch=4,
         time_dim=8,
-        num_axis_conditions=3,
-        anchor_conditioning=True,
-        anchor_release_step=3,
     )
     torch.save({"model": model.state_dict()}, checkpoint)
 
     predictor = load_predictor(tmp_path, device="cpu")
     restored = predictor.sampler.model
 
-    assert restored.anchor_conditioning is True
-    assert restored.anchor_release_step == 3
-    assert restored.num_axis_conditions == 3
     assert any(name.startswith("anchor_encoder.") for name in restored.state_dict())

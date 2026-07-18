@@ -49,7 +49,7 @@ def _flatten_config(config: dict) -> dict:
 
     def visit(values: dict) -> None:
         for key, value in values.items():
-            if isinstance(value, dict):
+            if isinstance(value, dict) and key != "data_dir":
                 visit(value)
             elif key in defaults:
                 raise ValueError(f"Duplicate config key: {key}")
@@ -66,7 +66,7 @@ def _encode_yaml(value):
     if isinstance(value, (list, tuple)):
         return [_encode_yaml(item) for item in value]
     if isinstance(value, dict):
-        return {str(key): _encode_yaml(item) for key, item in value.items()}
+        return {key: _encode_yaml(item) for key, item in value.items()}
     return value
 
 

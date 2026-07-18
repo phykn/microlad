@@ -29,28 +29,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    output = dict(args.output)
+    cfg = dict(args.output)
     try:
-        data_dir = output.pop("data_dir")
-        count = output.pop("count")
+        data_dir = cfg.pop("data_dir")
+        count = cfg.pop("count")
+        axes = cfg.pop("axes")
     except KeyError as exc:
         raise ValueError(f"output is missing: {exc.args[0]}.") from exc
-    if output:
-        names = ", ".join(sorted(output))
+    if cfg:
+        names = ", ".join(sorted(cfg))
         raise ValueError(f"unknown output settings: {names}.")
 
-    volumes, planes = save_simulation(
+    vols, slices = save_simulation(
         data_dir,
         count=count,
         geometry=args.geometry,
-        export=getattr(args, "export", None),
+        axes=axes,
     )
-    print(f"volumes={len(volumes)} dir={volumes[0].parent}")
-    print(f"manifest={Path(data_dir) / 'manifest.json'}")
+    print(f"volumes={len(vols)} dir={vols[0].parent}")
     print(
         "slices="
-        f"{sum(len(paths) for paths in planes.values())} "
-        f"dirs={','.join(str(paths[0].parent) for paths in planes.values())}"
+        f"{sum(len(paths) for paths in slices.values())} "
+        f"dirs={','.join(str(paths[0].parent) for paths in slices.values())}"
     )
 
 

@@ -105,13 +105,10 @@ class MPDDTrainer:
             image.to(self.device),
             self.num_phases,
         )
-        anchor_image = None
-        anchor_mask = None
-        if bool(getattr(unwrap(self.model), "anchor_conditioning", False)):
-            anchor_image, anchor_mask = sample_anchor_condition(
-                clean,
-                empty_probability=self.anchor_empty_probability,
-            )
+        anchor_image, anchor_mask = sample_anchor_condition(
+            clean,
+            empty_probability=self.anchor_empty_probability,
+        )
         if axis_condition is not None:
             axis_condition = axis_condition.to(self.device)
         if fractions is not None:
@@ -124,30 +121,14 @@ class MPDDTrainer:
             fractions[drop] = 0.0
 
         self.optimizer.zero_grad(set_to_none=True)
-        if anchor_image is not None and anchor_mask is not None:
-            loss, parts = self.loss(
-                self.model,
-                clean,
-                fractions=fractions,
-                axis_condition=axis_condition,
-                anchor_image=anchor_image,
-                anchor_mask=anchor_mask,
-            )
-        elif fractions is None and axis_condition is None:
-            loss, parts = self.loss(self.model, clean)
-        elif axis_condition is None:
-            loss, parts = self.loss(
-                self.model,
-                clean,
-                fractions=fractions,
-            )
-        else:
-            loss, parts = self.loss(
-                self.model,
-                clean,
-                fractions=fractions,
-                axis_condition=axis_condition,
-            )
+        loss, parts = self.loss(
+            self.model,
+            clean,
+            fractions=fractions,
+            axis_condition=axis_condition,
+            anchor_image=anchor_image,
+            anchor_mask=anchor_mask,
+        )
         loss.backward()
         grads = [
             param.grad for param in self.model.parameters() if param.grad is not None

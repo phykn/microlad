@@ -1,6 +1,4 @@
 model:
-  # This retained checkpoint predates integrated anchor conditioning. Point to
-  # a newly trained run before supplying anchors.
   run_dir: run/20260716-065602-122839
 
 generation:

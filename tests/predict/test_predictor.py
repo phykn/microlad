@@ -10,7 +10,6 @@ from src.diffusion import DDPMProcess
 class ZeroDenoiser(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
-        self.anchor_conditioning = True
 
     def forward(
         self,
