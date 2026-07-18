@@ -4,7 +4,7 @@ import torch
 
 from ..build import build_model
 from ..diffusion import DDPMProcess
-from ..misc import load_config
+from ..misc import load_mapping
 from ..model import MPDDUNet
 from .predictor import MPDDPredictor
 
@@ -47,7 +47,11 @@ def load_predictor(
 
 def _load_config(run_dir: str | Path) -> dict:
     path = _require_file(Path(run_dir) / "model.yaml", "model config")
-    return load_config(path, label="model config")
+    vals = load_mapping(path, label="model config")
+    sections = ("data", "model", "diffusion")
+    if not all(isinstance(vals.get(name), dict) for name in sections):
+        raise ValueError("model config must preserve data, model, and diffusion sections.")
+    return {**vals["data"], **vals["model"], **vals["diffusion"]}
 
 
 def _find_checkpoint(run_dir: str | Path) -> Path:

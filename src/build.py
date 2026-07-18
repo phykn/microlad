@@ -1,4 +1,3 @@
-import argparse
 from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 import torch
@@ -10,6 +9,12 @@ from .diffusion import DDPMProcess, DiffusionLoss
 from .misc import require_int
 from .model import MPDDUNet
 from .train import MPDDTrainer
+from .train.config import (
+    DataConfig,
+    DiffusionConfig,
+    OptimizationConfig,
+    TrainConfig,
+)
 
 
 _MODEL_KEYS = ("size", "num_phases", "base_ch", "time_dim")
@@ -35,35 +40,29 @@ class _AxisBalancedSampler(Sampler[int]):
 
 
 def build_dataset(
-    args: argparse.Namespace,
+    cfg: DataConfig,
 ) -> AxisPatchDataset:
-    paths = getattr(args, "image_paths", None)
-    data_dir = getattr(args, "data_dir", None)
-    if data_dir is None or paths is not None:
-        raise ValueError(
-            "training requires axis data_dir values and does not support image_paths."
-        )
-    paths, conditions = load_axis_images(data_dir)
+    paths, conditions = load_axis_images(cfg.data_dir)
     return AxisPatchDataset(
         paths,
         conditions,
-        crop_size=args.crop_size,
-        image_size=args.size,
-        num_phases=args.num_phases,
-        segment=args.segment,
-        augment=args.augment,
+        crop_size=cfg.crop_size,
+        image_size=cfg.size,
+        num_phases=cfg.num_phases,
+        segment=cfg.segment,
+        augment=cfg.augment,
     )
 
 
 def build_loader(
     dataset: torch.utils.data.Dataset,
-    args: argparse.Namespace,
+    cfg: DataConfig,
     device: torch.device,
 ) -> DataLoader:
-    workers = getattr(args, "num_workers", 0)
-    require_int("batch_size", args.batch_size)
+    workers = cfg.num_workers
+    require_int("batch_size", cfg.batch_size)
     require_int("num_workers", workers)
-    if args.batch_size <= 0:
+    if cfg.batch_size <= 0:
         raise ValueError("batch_size must be positive.")
     if workers < 0:
         raise ValueError("num_workers must be non-negative.")
@@ -74,7 +73,7 @@ def build_loader(
 
     return DataLoader(
         dataset,
-        batch_size=args.batch_size,
+        batch_size=cfg.batch_size,
         sampler=sampler,
         num_workers=workers,
         pin_memory=device.type == "cuda",
@@ -83,11 +82,19 @@ def build_loader(
 
 
 def build_model(
-    cfg: argparse.Namespace | Mapping[str, Any],
+    cfg: TrainConfig | Mapping[str, Any],
     *,
     label: str = "model config",
 ) -> MPDDUNet:
-    vals = vars(cfg) if isinstance(cfg, argparse.Namespace) else cfg
+    if isinstance(cfg, TrainConfig):
+        vals = {
+            "size": cfg.data.size,
+            "num_phases": cfg.data.num_phases,
+            "base_ch": cfg.model.base_ch,
+            "time_dim": cfg.model.time_dim,
+        }
+    else:
+        vals = cfg
     miss = [key for key in _MODEL_KEYS if key not in vals]
     if miss:
         raise ValueError(f"{label} is missing required value: {', '.join(miss)}")
@@ -100,25 +107,25 @@ def build_model(
 
 
 def build_diffusion(
-    args: argparse.Namespace,
+    cfg: DiffusionConfig,
     device: torch.device,
 ) -> DDPMProcess:
     return DDPMProcess(
-        timesteps=args.timesteps,
-        beta_start=args.beta_start,
-        beta_end=args.beta_end,
+        timesteps=cfg.timesteps,
+        beta_start=cfg.beta_start,
+        beta_end=cfg.beta_end,
         device=device,
     )
 
 
 def build_optimizer(
     model: torch.nn.Module,
-    args: argparse.Namespace,
+    cfg: OptimizationConfig,
 ) -> torch.optim.Optimizer:
     return torch.optim.AdamW(
         model.parameters(),
-        lr=args.lr,
-        weight_decay=args.weight_decay,
+        lr=cfg.lr,
+        weight_decay=cfg.weight_decay,
     )
 
 
@@ -126,29 +133,25 @@ def build_trainer(
     model: torch.nn.Module,
     loader: Iterable,
     optimizer: torch.optim.Optimizer,
-    args: argparse.Namespace,
+    cfg: TrainConfig,
     device: torch.device,
 ) -> MPDDTrainer:
     return MPDDTrainer(
         model=model,
         loader=loader,
         loss=DiffusionLoss(
-            build_diffusion(args, device=device),
-            anchor_loss_weight=getattr(args, "anchor_loss_weight", 0.0),
+            build_diffusion(cfg.diffusion, device=device),
+            anchor_weight=cfg.training.anchor_weight,
         ),
         optimizer=optimizer,
-        num_phases=args.num_phases,
-        steps=args.steps,
+        num_phases=cfg.data.num_phases,
+        steps=cfg.training.steps,
         device=device,
-        run_root=args.run_root,
-        save_every=args.save_every,
-        clip_grad_norm=args.clip_grad_norm,
-        ema_decay=args.ema_decay,
-        condition_dropout=getattr(args, "condition_dropout", 0.1),
-        anchor_empty_probability=getattr(
-            args,
-            "anchor_empty_probability",
-            0.2,
-        ),
-        warmup_steps=getattr(args, "warmup_steps", 0),
+        run_root=cfg.output.run_root,
+        ckpt=cfg.training.ckpt,
+        save_every=cfg.training.save_every,
+        clip_grad_norm=cfg.optimization.clip_grad_norm,
+        ema_decay=cfg.training.ema_decay,
+        frac_dropout=cfg.training.frac_dropout,
+        warmup_steps=cfg.training.warmup_steps,
     )

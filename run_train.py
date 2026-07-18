@@ -1,5 +1,4 @@
 import argparse
-from collections.abc import Mapping
 import os
 from pathlib import Path
 
@@ -10,60 +9,49 @@ from src.build import (
     build_optimizer,
     build_trainer,
 )
-from src.misc import load_config, save_config
-from src.train import distributed
+from src.misc import save_config
+from src.train import TrainConfig, distributed, load_train_config
 
 
 DEFAULT_CONFIG = Path(__file__).resolve().parent / "config" / "model.yaml"
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> TrainConfig:
     parser = argparse.ArgumentParser()
     parser.parse_args(argv)
-    config_path = Path(DEFAULT_CONFIG).resolve()
-    args = argparse.Namespace(**load_config(config_path))
-    data_dir = getattr(args, "data_dir", None)
-    image_paths = getattr(args, "image_paths", None)
-    if not isinstance(data_dir, Mapping):
-        parser.error("data.data_dir must define axes 0, 1, and 2")
-    if image_paths is not None:
-        parser.error("data.image_paths is not supported")
-    if set(data_dir) != {0, 1, 2}:
-        parser.error("data.data_dir must contain exactly axes 0, 1, and 2")
-    dirs = {}
-    for axis, value in data_dir.items():
-        path = Path(value)
-        if not path.is_absolute():
-            path = config_path.parent / path
-        dirs[axis] = path.resolve()
-    args.data_dir = dirs
-    return args
+    try:
+        return load_train_config(DEFAULT_CONFIG)
+    except ValueError as exc:
+        parser.error(str(exc))
 
 
 def main() -> None:
-    args = parse_args()
+    cfg = parse_args()
     device, local_rank, enabled = distributed.setup()
     trainer = None
     try:
         rank = int(os.environ.get("RANK", "0"))
-        dataset = build_dataset(args)
-        loader = build_loader(dataset, args, device=device)
+        dataset = build_dataset(cfg.data)
+        loader = build_loader(dataset, cfg.data, device=device)
         model = distributed.wrap(
-            build_model(args).to(device),
+            build_model(cfg).to(device),
             local_rank=local_rank,
             enabled=enabled,
         )
-        optimizer = build_optimizer(model, args)
+        optimizer = build_optimizer(model, cfg.optimization)
         trainer = build_trainer(
             model=model,
             loader=loader,
             optimizer=optimizer,
-            args=args,
+            cfg=cfg,
             device=device,
         )
         if rank == 0:
-            save_config(trainer.run_dir, args, name="model")
-            print(f"Training MPDD steps={args.steps} save_dir={trainer.run_dir}")
+            save_config(trainer.run_dir, cfg.as_dict(), name="model")
+            print(
+                f"Training MPDD steps={cfg.training.steps} "
+                f"save_dir={trainer.run_dir}"
+            )
         trainer.train()
     finally:
         try:

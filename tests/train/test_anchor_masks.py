@@ -1,9 +1,7 @@
-import math
-
 import pytest
 import torch
 
-from src.train.anchor import sample_anchor_condition
+from src.train.anchor import _merge_multiple, sample_anchor_condition
 
 
 def test_sample_anchor_condition_returns_clean_and_boolean_mask() -> None:
@@ -43,72 +41,73 @@ def test_sample_anchor_condition_covers_training_mask_shapes() -> None:
     coverage = masks.sum(dim=(1, 2))
 
     assert (coverage == 0).any()
-    assert (coverage == height * width).any()
 
     occupied_rows = masks.any(dim=2).sum(dim=1)
     occupied_columns = masks.any(dim=1).sum(dim=1)
-    has_single_full_line = ((occupied_rows == 1) & (coverage == width)) | (
-        (occupied_columns == 1) & (coverage == height)
-    )
-    assert has_single_full_line.any()
+    has_segment = ((occupied_rows == 1) | (occupied_columns == 1)) & (coverage > 0)
+    assert has_segment.any()
 
-    has_partial_segment = (
-        (occupied_rows == 1) & (coverage < width) & (coverage > 0)
-    ) | ((occupied_columns == 1) & (coverage < height) & (coverage > 0))
-    assert has_partial_segment.any()
-
-    rectangular = []
+    crops = []
+    compounds = []
     for mask in masks:
         positions = mask.nonzero()
         if positions.numel() == 0:
-            rectangular.append(False)
+            crops.append(False)
+            compounds.append(False)
             continue
         top, left = positions.amin(dim=0)
         bottom, right = positions.amax(dim=0)
         box = mask[top : bottom + 1, left : right + 1]
-        rectangular.append(
+        square = bool(box.all()) and bottom - top == right - left
+        line = bottom == top or right == left
+        crops.append(square and not line)
+        compounds.append(not square and not line)
+    assert any(crops)
+    assert any(compounds)
+
+
+def test_sample_anchor_condition_uses_equal_category_probability() -> None:
+    clean = torch.zeros(8192, 1, 8, 8)
+
+    _, masks = sample_anchor_condition(
+        clean,
+        generator=torch.Generator().manual_seed(3),
+    )
+
+    empty = (~masks.any(dim=(1, 2, 3))).float().mean()
+    assert empty == pytest.approx(0.25, abs=0.02)
+
+    area = masks[:, 0].sum(dim=(1, 2))
+    lo = 2
+    filled_squares = []
+    for mask in masks[:, 0]:
+        pos = mask.nonzero()
+        if pos.numel() == 0:
+            filled_squares.append(False)
+            continue
+        top, left = pos.amin(dim=0)
+        bottom, right = pos.amax(dim=0)
+        box = mask[top : bottom + 1, left : right + 1]
+        filled_squares.append(
             bool(box.all())
-            and bottom > top
-            and right > left
-            and int(mask.sum()) < height * width
+            and bottom - top == right - left
+            and lo <= int(bottom - top + 1) <= 8
         )
-    assert any(rectangular)
-
-    has_cross = (
-        (masks.all(dim=2).sum(dim=1) == 1)
-        & (masks.all(dim=1).sum(dim=1) == 1)
-        & (coverage == height + width - 1)
-    )
-    assert has_cross.any()
-
-    has_parallel_lines = (
-        (masks.all(dim=2).sum(dim=1) == 2) & (coverage == 2 * width)
-    ) | ((masks.all(dim=1).sum(dim=1) == 2) & (coverage == 2 * height))
-    assert has_parallel_lines.any()
+    assert any(filled_squares)
+    assert int(area.max()) > lo * lo
 
 
-def test_sample_anchor_condition_uses_configured_empty_probability() -> None:
-    clean = torch.zeros(2048, 1, 4, 6)
+def test_multiple_mask_falls_back_when_one_constraint_contains_another() -> None:
+    a = torch.ones(2, 4, 4, dtype=torch.bool)
+    b = torch.zeros_like(a)
+    b[:, 1, 1] = True
+    fallback = torch.zeros_like(a)
+    fallback[:, 0] = True
+    fallback[:, :, 0] = True
 
-    _, no_empty = sample_anchor_condition(
-        clean,
-        empty_probability=0.0,
-        generator=torch.Generator().manual_seed(3),
-    )
-    _, all_empty = sample_anchor_condition(
-        clean,
-        empty_probability=1.0,
-        generator=torch.Generator().manual_seed(3),
-    )
-    _, default = sample_anchor_condition(
-        clean,
-        generator=torch.Generator().manual_seed(3),
-    )
+    mask = _merge_multiple(a, b, fallback)
 
-    assert no_empty.any(dim=(1, 2, 3)).all()
-    assert not all_empty.any()
-    empty_fraction = (~default.any(dim=(1, 2, 3))).float().mean()
-    assert empty_fraction == pytest.approx(0.2, abs=0.025)
+    assert torch.equal(mask, fallback)
 
 
 @pytest.mark.parametrize(
@@ -127,20 +126,6 @@ def test_sample_anchor_condition_validates_clean(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         sample_anchor_condition(clean)
-
-
-@pytest.mark.parametrize(
-    "probability",
-    [-0.1, 1.1, math.inf, math.nan, True, "0.2"],
-)
-def test_sample_anchor_condition_validates_empty_probability(
-    probability: object,
-) -> None:
-    with pytest.raises(ValueError, match="empty_probability"):
-        sample_anchor_condition(
-            torch.zeros(1, 1, 4, 4),
-            empty_probability=probability,  # type: ignore[arg-type]
-        )
 
 
 def test_sample_anchor_condition_validates_argument_types() -> None:

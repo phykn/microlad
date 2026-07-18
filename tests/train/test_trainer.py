@@ -134,13 +134,13 @@ class MPDDTrainerTest(unittest.TestCase):
             {-1.0, 1.0},
         )
 
-    def test_condition_dropout_uses_null_fraction(self):
+    def test_frac_dropout_uses_null_fraction(self):
         with tempfile.TemporaryDirectory() as tmp:
             model = TinyImageDenoiser()
             trainer = self._make_trainer(
                 model,
                 tmp,
-                condition_dropout=1.0,
+                frac_dropout=1.0,
             )
 
             trainer.train_step()
@@ -148,14 +148,14 @@ class MPDDTrainerTest(unittest.TestCase):
 
         self.assertTrue(torch.equal(model.seen_phase_fractions, torch.zeros((2, 2))))
 
-    def test_condition_dropout_preserves_axis_condition(self):
+    def test_frac_dropout_preserves_axis_condition(self):
         with tempfile.TemporaryDirectory() as tmp:
             model = TinyImageDenoiser()
             trainer = self._make_trainer(
                 model,
                 tmp,
                 loader=[self._axis_batch()],
-                condition_dropout=1.0,
+                frac_dropout=1.0,
             )
 
             trainer.train_step()
@@ -219,6 +219,76 @@ class MPDDTrainerTest(unittest.TestCase):
             self.assertTrue(
                 torch.allclose(value, initial[name].lerp(online[name], 0.5))
             )
+
+    def test_loads_checkpoint_weights_as_fresh_training_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = TinyImageDenoiser()
+            path = Path(tmp) / "source.pt"
+            torch.save(
+                {
+                    "step": 99,
+                    "model": source.state_dict(),
+                    "optimizer": {"ignored": True},
+                },
+                path,
+            )
+            trainer = self._make_trainer(
+                TinyImageDenoiser(),
+                tmp,
+                steps=2,
+                ckpt=path,
+            )
+
+            self.assertEqual(trainer.step, 0)
+            self.assertFalse(trainer.optimizer.state)
+            for value, expected in zip(
+                unwrap(trainer.model).state_dict().values(),
+                source.state_dict().values(),
+                strict=True,
+            ):
+                self.assertTrue(torch.equal(value, expected))
+            for value, expected in zip(
+                trainer.ema_model.state_dict().values(),
+                source.state_dict().values(),
+                strict=True,
+            ):
+                self.assertTrue(torch.equal(value, expected))
+
+            trainer.train()
+            checkpoint = torch.load(
+                trainer.last_weight_dir / "model.pt",
+                weights_only=True,
+            )
+            trainer.close()
+
+        self.assertEqual(checkpoint["step"], 2)
+
+    def test_loads_raw_state_dict_for_online_and_ema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = TinyImageDenoiser()
+            path = Path(tmp) / "weights.pt"
+            torch.save(source.state_dict(), path)
+
+            trainer = self._make_trainer(
+                TinyImageDenoiser(),
+                tmp,
+                steps=2,
+                ckpt=path,
+            )
+
+            for value, expected in zip(
+                unwrap(trainer.model).state_dict().values(),
+                source.state_dict().values(),
+                strict=True,
+            ):
+                self.assertTrue(torch.equal(value, expected))
+            for value, expected in zip(
+                trainer.ema_model.state_dict().values(),
+                source.state_dict().values(),
+                strict=True,
+            ):
+                self.assertTrue(torch.equal(value, expected))
+            trainer.close()
 
     def test_restarts_reiterable_loader(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -337,7 +407,7 @@ class MPDDTrainerTest(unittest.TestCase):
                 ("steps", {"steps": 0}),
                 ("save_every", {"save_every": 0}),
                 ("ema_decay", {"ema_decay": 1.0}),
-                ("condition_dropout", {"condition_dropout": 1.1}),
+                ("frac_dropout", {"frac_dropout": 1.1}),
             ):
                 with self.subTest(name=name), self.assertRaisesRegex(ValueError, name):
                     self._make_trainer(TinyImageDenoiser(), tmp, **options)
@@ -352,9 +422,10 @@ class MPDDTrainerTest(unittest.TestCase):
         steps: int = 1,
         save_every: int = 1,
         ema_decay: float = 0.999,
-        condition_dropout: float = 0.1,
+        frac_dropout: float = 0.1,
         warmup_steps: int = 0,
         run_dir: Path | None = None,
+        ckpt: Path | None = None,
     ) -> MPDDTrainer:
         return MPDDTrainer(
             model=model,
@@ -368,14 +439,15 @@ class MPDDTrainerTest(unittest.TestCase):
             device="cpu",
             run_root=run_root,
             run_dir=run_dir,
+            ckpt=ckpt,
             save_every=save_every,
             ema_decay=ema_decay,
-            condition_dropout=condition_dropout,
+            frac_dropout=frac_dropout,
             warmup_steps=warmup_steps,
         )
 
     @staticmethod
-    def _batch() -> tuple[torch.Tensor, torch.Tensor]:
+    def _batch() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         images = torch.tensor(
             [
                 [[[0, 0], [1, 1]]],
@@ -384,13 +456,13 @@ class MPDDTrainerTest(unittest.TestCase):
             dtype=torch.float32,
         )
         fractions = torch.tensor([[0.5, 0.5], [0.5, 0.5]])
-        return images, fractions
+        return images, fractions, torch.tensor([0, 1])
 
     @classmethod
     def _axis_batch(
         cls,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        images, fractions = cls._batch()
+        images, fractions, _ = cls._batch()
         return images, fractions, torch.tensor([0, 2])
 
 

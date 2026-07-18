@@ -13,7 +13,7 @@ def predict_tiles(
     overlap: int,
     batch_size: int,
     fractions: torch.Tensor | None,
-    axis_condition: int | None = None,
+    axis_condition: int,
     guidance: float = 1.0,
     anchor_image: torch.Tensor | None = None,
     anchor_mask: torch.Tensor | None = None,
@@ -111,7 +111,7 @@ def guide_noise(
     steps: torch.Tensor,
     *,
     condition: torch.Tensor | None,
-    axis_condition: torch.Tensor | None = None,
+    axis_condition: torch.Tensor,
     guidance: float,
     anchor_image: torch.Tensor | None = None,
     anchor_mask: torch.Tensor | None = None,
@@ -136,7 +136,7 @@ def _guide_fraction_noise(
     steps: torch.Tensor,
     *,
     condition: torch.Tensor | None,
-    axis_condition: torch.Tensor | None,
+    axis_condition: torch.Tensor,
     guidance: float,
     anchor_image: torch.Tensor | None,
     anchor_mask: torch.Tensor | None,
@@ -173,11 +173,7 @@ def _guide_fraction_noise(
     model_mask = (
         None if anchor_mask is None else torch.cat([anchor_mask, anchor_mask], dim=0)
     )
-    model_axis = (
-        None
-        if axis_condition is None
-        else torch.cat([axis_condition, axis_condition], dim=0)
-    )
+    model_axis = torch.cat([axis_condition, axis_condition], dim=0)
     prediction = _call_model(
         model,
         model_input,
@@ -197,22 +193,18 @@ def _call_model(
     steps: torch.Tensor,
     *,
     condition: torch.Tensor | None,
-    axis_condition: torch.Tensor | None,
+    axis_condition: torch.Tensor,
     anchor_image: torch.Tensor | None,
     anchor_mask: torch.Tensor | None,
 ) -> torch.Tensor:
-    if anchor_image is not None and anchor_mask is not None:
-        return model(
-            image,
-            steps,
-            condition,
-            axis_condition,
-            anchor_image=anchor_image,
-            anchor_mask=anchor_mask,
-        )
-    if axis_condition is None:
-        return model(image, steps) if condition is None else model(image, steps, condition)
-    return model(image, steps, condition, axis_condition)
+    return model(
+        image,
+        steps,
+        condition,
+        axis_condition,
+        anchor_image=anchor_image,
+        anchor_mask=anchor_mask,
+    )
 
 
 def _expand_fractions(
@@ -223,13 +215,11 @@ def _expand_fractions(
 
 
 def _expand_axis_condition(
-    axis_condition: int | None,
+    axis_condition: int,
     batch_size: int,
     *,
     device: torch.device,
-) -> torch.Tensor | None:
-    if axis_condition is None:
-        return None
+) -> torch.Tensor:
     return torch.full(
         (batch_size,),
         axis_condition,

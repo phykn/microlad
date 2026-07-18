@@ -11,7 +11,16 @@ class FractionAwareDenoiser(torch.nn.Module):
         self.batch_sizes = []
         self.axis_conditions = []
 
-    def forward(self, x, t, phase_fractions=None, axis_condition=None):
+    def forward(
+        self,
+        x,
+        t,
+        phase_fractions=None,
+        axis_condition=None,
+        *,
+        anchor_image=None,
+        anchor_mask=None,
+    ):
         self.batch_sizes.append(x.shape[0])
         self.axis_conditions.append(
             None if axis_condition is None else axis_condition.detach().clone()
@@ -33,6 +42,7 @@ class NoiseTest(unittest.TestCase):
             patch,
             torch.tensor([3, 3]),
             condition=condition,
+            axis_condition=torch.tensor([0, 0]),
             guidance=2.0,
         )
 

@@ -75,7 +75,7 @@ class AnchorLossTest(unittest.TestCase):
             noise=noise,
             anchor_image=torch.zeros_like(clean),
             anchor_mask=anchor_mask,
-            anchor_loss_weight=2.0,
+            anchor_weight=2.0,
         )
 
         self.assertTrue(torch.allclose(parts["noise"], torch.tensor(5.0)))
@@ -93,7 +93,7 @@ class AnchorLossTest(unittest.TestCase):
             noise=torch.ones_like(clean),
             anchor_image=torch.zeros_like(clean),
             anchor_mask=torch.zeros(2, 1, 8, 8),
-            anchor_loss_weight=3.0,
+            anchor_weight=3.0,
         )
 
         self.assertNotIn("anchor", parts)

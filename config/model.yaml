@@ -26,13 +26,13 @@ optimization:
   clip_grad_norm: 1.0
 
 training:
-  steps: 50000
-  warmup_steps: 1000
+  ckpt: null
+  steps: 200000
+  warmup_steps: 10000
   save_every: 1000
   ema_decay: 0.999
-  condition_dropout: 0.2
-  anchor_empty_probability: 0.2
-  anchor_loss_weight: 0.25
+  frac_dropout: 0.2
+  anchor_weight: 0.25
 
 output:
   run_root: run

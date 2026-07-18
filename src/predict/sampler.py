@@ -5,7 +5,7 @@ from tqdm import tqdm
 
 from ..diffusion import DDIMProcess, DDPMProcess
 from ..misc import require_int, require_number
-from .noise import predict_tiles
+from .noise import guide_noise, predict_tiles
 from .volume import merge_planes, slice_volume
 
 
@@ -34,6 +34,76 @@ class ImageMPDDSampler:
         self.ddpm = ddpm
         self.image_size = int(image_size)
         self.num_phases = int(num_phases)
+
+    @torch.no_grad()
+    def sample_images(
+        self,
+        axis: int,
+        count: int,
+        *,
+        phase_fractions: torch.Tensor | Sequence[float] | None = None,
+        ddim_steps: int | None = None,
+        guidance_scale: float = 1.0,
+        progress: bool = True,
+    ) -> torch.Tensor:
+        require_int("axis", axis)
+        require_int("count", count)
+        require_number("guidance_scale", guidance_scale)
+        if axis not in (0, 1, 2):
+            raise ValueError("axis must be 0, 1, or 2.")
+        if count <= 0:
+            raise ValueError("count must be positive.")
+        if guidance_scale < 0.0:
+            raise ValueError("guidance_scale must be non-negative.")
+        if not isinstance(progress, bool):
+            raise ValueError("progress must be a boolean.")
+
+        shape = (count, self.num_phases, self.image_size, self.image_size)
+        image = torch.randn(shape, device=self.device)
+        fractions = self._get_fractions(
+            phase_fractions,
+            dtype=image.dtype,
+        )
+        if fractions is None and guidance_scale != 1.0:
+            raise ValueError(
+                "phase_fractions are required when guidance_scale is not one."
+            )
+        condition = (
+            None if fractions is None else fractions[None].expand(count, -1)
+        )
+        axes = torch.full(
+            (count,),
+            axis,
+            dtype=torch.long,
+            device=self.device,
+        )
+        ddim, schedule = self._get_schedule(ddim_steps)
+        self.model.eval()
+        bar = tqdm(
+            schedule,
+            total=len(schedule),
+            desc=f"axis {axis}",
+            disable=not progress,
+        )
+        for step, prev in bar:
+            steps = torch.full(
+                (count,),
+                step,
+                dtype=torch.long,
+                device=self.device,
+            )
+            noise = guide_noise(
+                self.model,
+                image,
+                steps,
+                condition=condition,
+                axis_condition=axes,
+                guidance=guidance_scale,
+            )
+            image = self._step(image, steps, noise, step, prev, ddim)
+        if not torch.isfinite(image).all():
+            raise ValueError("image sampling produced non-finite values.")
+        return image
 
     @torch.no_grad()
     def sample(
@@ -72,7 +142,7 @@ class ImageMPDDSampler:
         if (anchor_image is None) != (anchor_mask is None):
             raise ValueError("anchor_image and anchor_mask must be provided together.")
 
-        ddim = None if ddim_steps is None else DDIMProcess(self.ddpm, ddim_steps)
+        ddim, schedule = self._get_schedule(ddim_steps)
         shape = (self.num_phases, volume_size, volume_size, volume_size)
         volume = torch.randn(shape, device=self.device)
         fractions = self._get_fractions(phase_fractions, dtype=volume.dtype)
@@ -89,11 +159,6 @@ class ImageMPDDSampler:
         overlap = 0 if volume_size == self.image_size else tile_overlap
 
         self.model.eval()
-        schedule = (
-            [(step, step - 1) for step in range(self.ddpm.num_timesteps - 1, -1, -1)]
-            if ddim is None
-            else ddim.schedule
-        )
         bar = tqdm(
             schedule,
             total=len(schedule),
@@ -131,19 +196,13 @@ class ImageMPDDSampler:
                     anchor_image=plane_anchor,
                     anchor_mask=plane_mask,
                 )
-                planes = (
-                    self.ddpm.sample_step(
-                        planes,
-                        steps,
-                        noise,
-                    )
-                    if ddim is None
-                    else ddim.step(
-                        planes,
-                        noise,
-                        step=step,
-                        prev_step=prev_step,
-                    )
+                planes = self._step(
+                    planes,
+                    steps,
+                    noise,
+                    step,
+                    prev_step,
+                    ddim,
                 )
                 volume = merge_planes(planes, axis)
                 if repeat + 1 >= harmonization_steps or step == 0:
@@ -161,6 +220,36 @@ class ImageMPDDSampler:
         if not torch.isfinite(volume).all():
             raise ValueError("MPDD sampling produced non-finite values.")
         return volume
+
+    def _get_schedule(
+        self,
+        ddim_steps: int | None,
+    ) -> tuple[DDIMProcess | None, list[tuple[int, int]]]:
+        if ddim_steps is not None:
+            require_int("ddim_steps", ddim_steps)
+        ddim = None if ddim_steps is None else DDIMProcess(self.ddpm, ddim_steps)
+        schedule = (
+            [
+                (step, step - 1)
+                for step in range(self.ddpm.num_timesteps - 1, -1, -1)
+            ]
+            if ddim is None
+            else ddim.schedule
+        )
+        return ddim, schedule
+
+    def _step(
+        self,
+        image: torch.Tensor,
+        steps: torch.Tensor,
+        noise: torch.Tensor,
+        step: int,
+        prev: int,
+        ddim: DDIMProcess | None,
+    ) -> torch.Tensor:
+        if ddim is None:
+            return self.ddpm.sample_step(image, steps, noise)
+        return ddim.step(image, noise, step=step, prev_step=prev)
 
     def _get_fractions(
         self,

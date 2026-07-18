@@ -120,12 +120,13 @@ This axis-aware formulation represents anisotropy observed in the 2D training da
 ### Soft slice anchors
 
 An anchor consists of a labeled image and a binary spatial mask.
-During training, masks are sampled as empty regions, lines, segments, rectangles, full images, or multiple lines.
+During training, masks are sampled with equal probability as empty regions, square crops, line segments, or unions of multiple constraints.
+Crop side lengths range from 25% to 100% of the image side.
 The clean anchor and mask are passed through a dedicated multi-scale encoder.
 Its local features are added to matching U-Net encoder levels near the supported region.
 
 The anchor encoder is always part of the model, while empty masks train the unanchored path.
-`anchor_loss_weight` can place additional noise-prediction weight around anchored regions.
+`anchor_weight` can place additional noise-prediction weight around anchored regions.
 At inference, anchor features condition every reverse step, but the final labels are still produced by the denoiser rather than copied from the input.
 
 Multiple anchor slices can be combined; duplicate planes and conflicting intersections are rejected before sampling.
@@ -216,6 +217,8 @@ Intensity images can instead be segmented by enabling `segment`.
 Axis datasets are sampled with equal probability, independent of their image counts.
 
 Checkpoints are written to `run/<timestamp>/weight/mpdd/`.
+Set `training.ckpt` to a `.pt` checkpoint to initialize both the online and EMA model weights.
+Training then starts at step 0 with a fresh optimizer and a new run directory.
 A volume can be generated from a trained run as follows:
 
 ```python

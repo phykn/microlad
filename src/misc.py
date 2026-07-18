@@ -1,18 +1,10 @@
-import argparse
+from collections.abc import Mapping
 import math
 from numbers import Real
 from pathlib import Path
 
 import torch
 import yaml
-
-
-def load_config(
-    config_path: str | Path,
-    *,
-    label: str = "config file",
-) -> dict:
-    return _flatten_config(load_mapping(config_path, label=label))
 
 
 def load_mapping(
@@ -23,14 +15,18 @@ def load_mapping(
     return _load_mapping(config_path, label=label)
 
 
-def save_config(run_dir: str | Path, args: argparse.Namespace, name: str) -> None:
+def save_config(
+    run_dir: str | Path,
+    config: Mapping,
+    name: str,
+) -> None:
     if not name:
         raise ValueError("config name is required.")
     path = Path(run_dir)
     path.mkdir(parents=True, exist_ok=True)
-    config = {key: _encode_yaml(value) for key, value in vars(args).items()}
+    data = {key: _encode_yaml(value) for key, value in config.items()}
     with open(path / f"{name}.yaml", "w", encoding="utf-8") as file:
-        yaml.safe_dump(config, file, sort_keys=False)
+        yaml.safe_dump(data, file, sort_keys=False)
 
 
 def _load_mapping(config_path: str | Path, *, label: str) -> dict:
@@ -42,22 +38,6 @@ def _load_mapping(config_path: str | Path, *, label: str) -> dict:
     if not isinstance(config, dict):
         raise ValueError(f"{label} must contain a mapping.")
     return config
-
-
-def _flatten_config(config: dict) -> dict:
-    defaults = {}
-
-    def visit(values: dict) -> None:
-        for key, value in values.items():
-            if isinstance(value, dict) and key != "data_dir":
-                visit(value)
-            elif key in defaults:
-                raise ValueError(f"Duplicate config key: {key}")
-            else:
-                defaults[key] = value
-
-    visit(config)
-    return defaults
 
 
 def _encode_yaml(value):

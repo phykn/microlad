@@ -27,14 +27,13 @@ def test_mpdd_and_internal_anchor_encoder_train_and_checkpoint_together() -> Non
             loader=[(images, fractions, axes)],
             loss=DiffusionLoss(
                 DDPMProcess(timesteps=2, beta_start=0.01, beta_end=0.02),
-                anchor_loss_weight=0.25,
+                anchor_weight=0.25,
             ),
             optimizer=torch.optim.AdamW(model.parameters(), lr=1e-3),
             num_phases=2,
             steps=2,
             device="cpu",
             run_root=tmp,
-            anchor_empty_probability=0.0,
             ema_decay=0.0,
         )
 

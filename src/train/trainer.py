@@ -31,11 +31,11 @@ class MPDDTrainer:
         device: str | torch.device,
         run_root: str | Path = "run",
         run_dir: str | Path | None = None,
+        ckpt: str | Path | None = None,
         save_every: int = 1,
         clip_grad_norm: float | None = 1.0,
         ema_decay: float = 0.999,
-        condition_dropout: float = 0.1,
-        anchor_empty_probability: float = 0.2,
+        frac_dropout: float = 0.1,
         warmup_steps: int = 0,
     ) -> None:
         require_int("num_phases", num_phases)
@@ -59,17 +59,8 @@ class MPDDTrainer:
             raise ValueError(
                 "ema_decay must be between zero inclusive and one exclusive."
             )
-        if not 0.0 <= condition_dropout <= 1.0:
-            raise ValueError("condition_dropout must be between zero and one.")
-        if (
-            not isinstance(anchor_empty_probability, (int, float))
-            or isinstance(anchor_empty_probability, bool)
-            or not math.isfinite(anchor_empty_probability)
-            or not 0.0 <= anchor_empty_probability <= 1.0
-        ):
-            raise ValueError(
-                "anchor_empty_probability must be between zero and one."
-            )
+        if not 0.0 <= frac_dropout <= 1.0:
+            raise ValueError("frac_dropout must be between zero and one.")
         if warmup_steps < 0:
             raise ValueError("warmup_steps must be non-negative.")
 
@@ -88,14 +79,15 @@ class MPDDTrainer:
         self.save_every = save_every
         self.clip_grad_norm = clip_grad_norm
         self.ema_decay = float(ema_decay)
-        self.condition_dropout = float(condition_dropout)
-        self.anchor_empty_probability = float(anchor_empty_probability)
+        self.frac_dropout = float(frac_dropout)
         self.warmup_steps = warmup_steps
         self.base_lrs = [group["lr"] for group in optimizer.param_groups]
         self.step = 0
         self.is_main = is_main()
 
         self._setup_run(run_root, run_dir)
+        if ckpt is not None:
+            self._load(ckpt)
         self._save()
 
     def train_step(self) -> dict[str, float]:
@@ -105,20 +97,15 @@ class MPDDTrainer:
             image.to(self.device),
             self.num_phases,
         )
-        anchor_image, anchor_mask = sample_anchor_condition(
-            clean,
-            empty_probability=self.anchor_empty_probability,
+        anchor_image, anchor_mask = sample_anchor_condition(clean)
+        axis_condition = axis_condition.to(self.device)
+        fractions = fractions.to(self.device)
+        drop = (
+            torch.rand(fractions.shape[0], device=self.device)
+            < self.frac_dropout
         )
-        if axis_condition is not None:
-            axis_condition = axis_condition.to(self.device)
-        if fractions is not None:
-            fractions = fractions.to(self.device)
-            drop = (
-                torch.rand(fractions.shape[0], device=self.device)
-                < self.condition_dropout
-            )
-            fractions = fractions.clone()
-            fractions[drop] = 0.0
+        fractions = fractions.clone()
+        fractions[drop] = 0.0
 
         self.optimizer.zero_grad(set_to_none=True)
         loss, parts = self.loss(
@@ -216,9 +203,26 @@ class MPDDTrainer:
         _write(ckpt, step_dir / "model.pt")
         _write(ckpt, self.last_weight_dir / "model.pt")
 
+    def _load(self, path: str | Path) -> None:
+        path = Path(path)
+        if not path.is_file():
+            raise FileNotFoundError(f"training checkpoint is required: {path}")
+        try:
+            ckpt = torch.load(path, map_location=self.device, weights_only=True)
+            if not isinstance(ckpt, dict):
+                raise TypeError("checkpoint must contain a state dictionary.")
+            state = next(
+                (ckpt[key] for key in ("model", "mpdd", "unet") if key in ckpt),
+                ckpt,
+            )
+            unwrap(self.model).load_state_dict(state, strict=True)
+            self.ema_model.load_state_dict(state, strict=True)
+        except Exception as exc:
+            raise ValueError(f"training checkpoint could not be loaded: {path}") from exc
+
     def _next(
         self,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         try:
             batch = next(self.iterator)
         except StopIteration:
@@ -231,28 +235,14 @@ class MPDDTrainer:
                     "use a re-iterable loader or an infinite iterator."
                 ) from exc
 
-        if isinstance(batch, torch.Tensor):
-            return batch, None, None
         if (
             isinstance(batch, (tuple, list))
-            and batch
-            and isinstance(batch[0], torch.Tensor)
+            and len(batch) == 3
+            and all(isinstance(value, torch.Tensor) for value in batch)
         ):
-            fractions = batch[1] if len(batch) > 1 else None
-            if fractions is not None and not isinstance(
-                fractions,
-                torch.Tensor,
-            ):
-                raise TypeError("phase fractions must be a tensor.")
-            axis_condition = batch[2] if len(batch) > 2 else None
-            if axis_condition is not None and not isinstance(
-                axis_condition,
-                torch.Tensor,
-            ):
-                raise TypeError("axis condition must be a tensor.")
-            return batch[0], fractions, axis_condition
+            return batch[0], batch[1], batch[2]
         raise TypeError(
-            "batch must be a tensor or a tuple/list whose first item is a tensor."
+            "batch must contain image, phase fractions, and axis condition tensors."
         )
 
     def _warmup(self) -> None:

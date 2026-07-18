@@ -1,4 +1,3 @@
-import argparse
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,12 +13,11 @@ class PredictorLoadTest(unittest.TestCase):
     def test_loads_trained_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
-            args = self._args()
-            source = build_model(args)
+            source = build_model(self._model())
             checkpoint = run_dir / "weight" / "mpdd" / "last" / "model.pt"
             checkpoint.parent.mkdir(parents=True)
             torch.save({"model": source.state_dict()}, checkpoint)
-            save_config(run_dir, args, name="model")
+            save_config(run_dir, self._config(), name="model")
 
             predictor = load_predictor(run_dir, device="cpu")
             volume, _ = predictor.predict(
@@ -49,10 +47,36 @@ class PredictorLoadTest(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, "model config"):
                 load_predictor(tmp, device="cpu")
 
+    def test_loads_structured_run_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            source = build_model(self._model())
+            checkpoint = run_dir / "weight" / "mpdd" / "last" / "model.pt"
+            checkpoint.parent.mkdir(parents=True)
+            torch.save({"model": source.state_dict()}, checkpoint)
+            save_config(
+                run_dir,
+                {
+                    "data": {"size": 8, "num_phases": 2},
+                    "model": {"base_ch": 4, "time_dim": 8},
+                    "diffusion": {
+                        "timesteps": 1,
+                        "beta_start": 0.01,
+                        "beta_end": 0.02,
+                    },
+                },
+                name="model",
+            )
+
+            predictor = load_predictor(run_dir, device="cpu")
+
+        self.assertEqual(predictor.image_size, 8)
+        self.assertEqual(predictor.num_phases, 2)
+
     def test_reports_corrupt_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
-            save_config(run_dir, self._args(), name="model")
+            save_config(run_dir, self._config(), name="model")
             checkpoint = run_dir / "weight" / "mpdd" / "last" / "model.pt"
             checkpoint.parent.mkdir(parents=True)
             checkpoint.write_bytes(b"not a checkpoint")
@@ -61,16 +85,25 @@ class PredictorLoadTest(unittest.TestCase):
                 load_predictor(run_dir, device="cpu")
 
     @staticmethod
-    def _args() -> argparse.Namespace:
-        return argparse.Namespace(
-            size=8,
-            num_phases=2,
-            base_ch=4,
-            time_dim=8,
-            timesteps=1,
-            beta_start=0.01,
-            beta_end=0.02,
-        )
+    def _model() -> dict:
+        return {
+            "size": 8,
+            "num_phases": 2,
+            "base_ch": 4,
+            "time_dim": 8,
+        }
+
+    @staticmethod
+    def _config() -> dict:
+        return {
+            "data": {"size": 8, "num_phases": 2},
+            "model": {"base_ch": 4, "time_dim": 8},
+            "diffusion": {
+                "timesteps": 1,
+                "beta_start": 0.01,
+                "beta_end": 0.02,
+            },
+        }
 
 
 if __name__ == "__main__":

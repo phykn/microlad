@@ -2,8 +2,9 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
-from src.misc import load_config, load_mapping
+from src.misc import load_mapping
 from src.predict import MPDDOptions, load_predict_config
+from src.train import load_train_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,31 +12,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class ConfigFileTest(unittest.TestCase):
     def test_training_config_has_runtime_inputs(self):
-        config = load_config(ROOT / "config" / "model.yaml")
-        required = {
-            "data_dir",
-            "crop_size",
-            "size",
-            "num_phases",
-            "base_ch",
-            "time_dim",
-            "timesteps",
-            "beta_start",
-            "beta_end",
-            "lr",
-            "steps",
-            "run_root",
-        }
+        config = load_train_config(ROOT / "config" / "model.yaml")
 
-        self.assertFalse(required - config.keys())
         self.assertEqual(
-            config["data_dir"],
+            config.data.data_dir,
             {
-                0: "../data/generated/train/0",
-                1: "../data/generated/train/1",
-                2: "../data/generated/train/2",
+                axis: (ROOT / "data" / "generated" / "train" / str(axis)).resolve()
+                for axis in range(3)
             },
         )
+        self.assertEqual(config.model.base_ch, 64)
+        self.assertEqual(config.diffusion.timesteps, 1000)
+        self.assertEqual(config.training.steps, 200000)
+        self.assertEqual(config.output.run_root, "run")
 
     def test_simulation_config_uses_one_geometry_generator(self):
         cfg = load_mapping(ROOT / "config" / "simul.yaml")

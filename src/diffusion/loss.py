@@ -15,7 +15,7 @@ def compute_loss(
     axis_condition: torch.Tensor | None = None,
     anchor_image: torch.Tensor | None = None,
     anchor_mask: torch.Tensor | None = None,
-    anchor_loss_weight: float = 0.0,
+    anchor_weight: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if clean.ndim != 4:
         raise ValueError("clean_image must have shape [B, C, H, W].")
@@ -33,8 +33,8 @@ def compute_loss(
 
     if noise.shape != clean.shape:
         raise ValueError("noise must have the same shape as clean_image.")
-    if anchor_loss_weight < 0.0:
-        raise ValueError("anchor_loss_weight must be non-negative.")
+    if anchor_weight < 0.0:
+        raise ValueError("anchor_weight must be non-negative.")
     _validate_anchor_condition(anchor_image, anchor_mask, clean)
 
     noisy = ddpm.add_noise(clean, t, noise=noise)
@@ -69,7 +69,7 @@ def compute_loss(
         parts["anchor_coverage"] = anchor_mask.to(torch.float32).mean().detach()
     if (
         anchor_mask is not None
-        and anchor_loss_weight > 0.0
+        and anchor_weight > 0.0
     ):
         band = F.max_pool2d(
             anchor_mask.to(dtype=per_pixel.dtype),
@@ -82,7 +82,7 @@ def compute_loss(
         if bool(selected.any().item()):
             region = (per_pixel * band).flatten(start_dim=1).sum(dim=1)
             anchor_loss = (region[selected] / area[selected]).mean()
-            loss = loss + anchor_loss_weight * anchor_loss
+            loss = loss + anchor_weight * anchor_loss
             parts["anchor"] = anchor_loss.detach()
     if axis_condition is not None:
         per_sample = squared_error.flatten(start_dim=1).mean(dim=1)
@@ -114,13 +114,13 @@ class DiffusionLoss(nn.Module):
         self,
         ddpm: DDPMProcess,
         *,
-        anchor_loss_weight: float = 0.0,
+        anchor_weight: float = 0.0,
     ) -> None:
         super().__init__()
-        if anchor_loss_weight < 0.0:
-            raise ValueError("anchor_loss_weight must be non-negative.")
+        if anchor_weight < 0.0:
+            raise ValueError("anchor_weight must be non-negative.")
         self.ddpm = ddpm
-        self.anchor_loss_weight = float(anchor_loss_weight)
+        self.anchor_weight = float(anchor_weight)
 
     def forward(
         self,
@@ -143,7 +143,7 @@ class DiffusionLoss(nn.Module):
             axis_condition=axis_condition,
             anchor_image=anchor_image,
             anchor_mask=anchor_mask,
-            anchor_loss_weight=self.anchor_loss_weight,
+            anchor_weight=self.anchor_weight,
         )
 
 
